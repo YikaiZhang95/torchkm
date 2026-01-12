@@ -3,8 +3,8 @@ import torch
 import os
 import numpy
 import time
-from torchsvm.cvksqsvm import cvksqsvm
-from torchsvm.functions import *
+from torchkm.cvksqsvm import cvksqsvm
+from torchkm.functions import *
 
 class Testcvksqsvm(unittest.TestCase):
     def test_fit_predict(self):
