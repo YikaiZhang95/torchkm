@@ -1,5 +1,5 @@
 # torchkm
-![img](https://release-badges-generator.vercel.app/api/releases.svg?user=YikaiZhang95&repo=torchsvm&gradient=0000ff,8bd1fa)
+![img](https://release-badges-generator.vercel.app/api/releases.svg?user=YikaiZhang95&repo=torchkm&gradient=0000ff,8bd1fa)
 
 This is a PyTorch-based package to solve kernel SVM with GPU.
 
@@ -13,7 +13,7 @@ This is a PyTorch-based package to solve kernel SVM with GPU.
 
 ## Introduction
 
-`torchkm`, a PyTorch-based library that trains kernel SVMs and other large-margin classifiers with exact leave-one-out cross-validation (LOOCV) error computation. Conventional SVM solvers often face scalability and efficiency challenges, especially on large datasets or when multiple cross-validation runs are required. torchsvm computes LOOCV at the same cost as training a single SVM while boosting speed and scalability via CUDA-accelerated matrix operations. Benchmark experiments indicate that TorchKSVM outperforms existing kernel SVM solvers in efficiency and speed. This document shows how to use the `torchsvm` package to fit kernel SVM.
+`torchkm`, a PyTorch-based library that trains kernel SVMs and other large-margin classifiers with exact leave-one-out cross-validation (LOOCV) error computation. Conventional SVM solvers often face scalability and efficiency challenges, especially on large datasets or when multiple cross-validation runs are required. torchkm computes LOOCV at the same cost as training a single SVM while boosting speed and scalability via CUDA-accelerated matrix operations. Benchmark experiments indicate that TorchKSVM outperforms existing kernel SVM solvers in efficiency and speed. This document shows how to use the `torchkm` package to fit kernel SVM.
 
 When dealing with low-dimensional problems or more complex scenarios, such as requiring non-linear decision boundaries or higher accuracy, kernel SVMs can be formulated using the kernel method within a reproducing kernel Hilbert space (RKHS). For consistency, we adopt the same notation introduced in the high-dimensional case in Chapter One.
 
