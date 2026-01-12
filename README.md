@@ -1,4 +1,4 @@
-# torchsvm
+# torchkm
 ![img](https://release-badges-generator.vercel.app/api/releases.svg?user=YikaiZhang95&repo=torchsvm&gradient=0000ff,8bd1fa)
 
 This is a PyTorch-based package to solve kernel SVM with GPU.
@@ -13,7 +13,7 @@ This is a PyTorch-based package to solve kernel SVM with GPU.
 
 ## Introduction
 
-`torchsvm`, a PyTorch-based library that trains kernel SVMs and other large-margin classifiers with exact leave-one-out cross-validation (LOOCV) error computation. Conventional SVM solvers often face scalability and efficiency challenges, especially on large datasets or when multiple cross-validation runs are required. torchsvm computes LOOCV at the same cost as training a single SVM while boosting speed and scalability via CUDA-accelerated matrix operations. Benchmark experiments indicate that TorchKSVM outperforms existing kernel SVM solvers in efficiency and speed. This document shows how to use the `torchsvm` package to fit kernel SVM.
+`torchkm`, a PyTorch-based library that trains kernel SVMs and other large-margin classifiers with exact leave-one-out cross-validation (LOOCV) error computation. Conventional SVM solvers often face scalability and efficiency challenges, especially on large datasets or when multiple cross-validation runs are required. torchsvm computes LOOCV at the same cost as training a single SVM while boosting speed and scalability via CUDA-accelerated matrix operations. Benchmark experiments indicate that TorchKSVM outperforms existing kernel SVM solvers in efficiency and speed. This document shows how to use the `torchsvm` package to fit kernel SVM.
 
 When dealing with low-dimensional problems or more complex scenarios, such as requiring non-linear decision boundaries or higher accuracy, kernel SVMs can be formulated using the kernel method within a reproducing kernel Hilbert space (RKHS). For consistency, we adopt the same notation introduced in the high-dimensional case in Chapter One.
 
@@ -39,7 +39,7 @@ where $\mathbf{K}$ is the kernel matrix.
 You can use `pip` to install this package.
 
 ```sh
-pip install torchsvm
+pip install torchkm
 ```
 
 
@@ -47,8 +47,8 @@ pip install torchsvm
 Import necessary libraries and functions:
 
 ```python
-from torchsvm.cvksvm import cvksvm
-from torchsvm.functions import *
+from torchkm.cvksvm import cvksvm
+from torchkm.functions import *
 import torch
 import numpy
 ```
@@ -90,7 +90,7 @@ Kmat = rbf_kernel(X_train, sig)
 
 ### Basic operation
 
-`torchsvm` mainly provides `cvksvm` to tune kernel SVM fast with GPU acceleration and compute exact leave-one-out cross-validation (LOOCV) errors if needed.
+`torchkm` mainly provides `cvksvm` to tune kernel SVM fast with GPU acceleration and compute exact leave-one-out cross-validation (LOOCV) errors if needed.
 
 ```python
 model = cvksvm(Kmat=Kmat, y=y_train, nlam=nlam, ulam=ulam, nfolds=5, eps=1e-5, maxit=1000, gamma=1e-8, is_exact=0, device='cuda')
@@ -144,7 +144,7 @@ platt.plot_calibration(bc, mp, fp, cnt, label=f"Platt (ECE={ece_platt:.3f}, Brie
 
 ### Real data
 
-`torchsvm` works well with `sklearn` datasets. We need to convert these datasets to `torch.tensor` with $y=1 \text{ or} -1$.
+`torchkm` works well with `sklearn` datasets. We need to convert these datasets to `torch.tensor` with $y=1 \text{ or} -1$.
 
 ```python 
 from sklearn.datasets import make_moons
