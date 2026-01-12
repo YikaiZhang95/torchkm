@@ -7,9 +7,9 @@ with open("requirements.txt") as f:
     required = f.read().splitlines()
 
 setup(
-    name="torchsvm",
-    version="3.0.2",
-    description="""torchsvm, a PyTorch-based library that trains kernel SVMs and other large-margin classifiers 
+    name="torchkm",
+    version="4.0.0",
+    description="""torchkm, a PyTorch-based library that trains kernel SVMs and other large-margin classifiers 
                    with exact leave-one-out cross-validation (LOOCV) error computation. Conventional SVM solvers 
                    often face scalability and efficiency challenges, especially on large datasets or when multiple 
                    cross-validation runs are required. 
@@ -18,7 +18,7 @@ setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     author="Yikai Zhang",
-    packages=find_packages(include=["torchsvm"]),
+    packages=find_packages(include=["torchkm"]),
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
@@ -26,5 +26,5 @@ setup(
     ],
     install_requires=required,
     license="MIT",
-    url="https://github.com/YikaiZhang95/torchsvm",
+    url="https://github.com/YikaiZhang95/torchkm",
 )
