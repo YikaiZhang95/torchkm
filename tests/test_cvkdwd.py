@@ -3,8 +3,8 @@ import torch
 import os
 import numpy
 import time
-from torchsvm.cvkdwd import cvkdwd
-from torchsvm.functions import *
+from torchkm.cvkdwd import cvkdwd
+from torchkm.functions import *
 
 class Testcvkdwd(unittest.TestCase):
     def test_fit_predict(self):
