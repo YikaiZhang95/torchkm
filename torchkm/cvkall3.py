@@ -3,7 +3,7 @@ import os
 import numpy
 import time
 
-from functions import *
+from .functions import *
 
 class cvkall3:
     def __init__(self, Kmat, y, nlam, ulam, foldid, nfolds = 5, eps=1e-5, maxit=1000, gamma=1.0, is_exact=0, delta_len=8, mproj=10, KKTeps=1e-3, KKTeps2=1e-3, device='cuda'):
