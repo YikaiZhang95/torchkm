@@ -8,12 +8,12 @@ with open("requirements.txt") as f:
 
 setup(
     name="torchkm",
-    version="4.0.0",
+    version="4.0.1",
     description="""torchkm, a PyTorch-based library that trains kernel SVMs and other large-margin classifiers 
                    with exact leave-one-out cross-validation (LOOCV) error computation. Conventional SVM solvers 
                    often face scalability and efficiency challenges, especially on large datasets or when multiple 
                    cross-validation runs are required. 
-                   torchsvm computes LOOCV at the same cost as training a single SVM, while further boosting speed 
+                   torchkm computes LOOCV at the same cost as training a single SVM, while further boosting speed 
                    and scalability via CUDA-accelerated matrix operations. """,
     long_description=long_description,
     long_description_content_type="text/markdown",
