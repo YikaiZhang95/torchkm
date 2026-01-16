@@ -169,12 +169,12 @@ It also provides applications for other large-margin classifiers:
 
 1. Kernel logistic regression
    ```python
-    model = cvklogit(Kmat=Kmat, y=y_train, nlam=nlam, ulam=ulam, foldid=foldid, nfolds=nfolds, eps=1e-5, maxit=1000, gamma=1e-8, is_exact=0, device='cuda')
+    model = cvklogit(Kmat=Kmat, y=y_train, nlam=nlam, ulam=ulam, eps=1e-5, maxit=1000, gamma=1e-8, device='cuda')
     model.fit()
     ```
 2. Kernel distance weighted discrimination
     ```python
-    model = cvkdwd(Kmat=Kmat, y=y_train, nlam=nlam, ulam=ulam, foldid=foldid, nfolds=nfolds, eps=1e-5, maxit=1000, gamma=1e-8, is_exact=0, device='cuda')
+    model = cvkdwd(Kmat=Kmat, y=y_train, nlam=nlam, ulam=ulam, eps=1e-5, maxit=1000, gamma=1e-8, device='cuda')
     model.fit()
     ```
 
