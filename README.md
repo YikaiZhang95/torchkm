@@ -10,11 +10,10 @@
 
 ## Table of contents
 
-* [Introduction](#introduction)
-* [Installation](#installation)
-* [Quick start](#quick-start)
-* [Usage](#usage)
-* [Getting help](#getting-help)
+* [Introduction](##introduction)
+* [Installation](##installation)
+* [Quick start](##Quickstart)
+* [Getting help](##Gettinghelp)
 
 ## Introduction
 
