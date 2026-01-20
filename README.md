@@ -8,13 +8,6 @@
 - **GPU acceleration** via PyTorch/CUDA (with safe CPU fallback)
 - A **scikit-learn–compatible wrapper API** for easy integration with sklearn pipelines
 
-## Table of contents
-
-* [Introduction](##introduction)
-* [Installation](##installation)
-* [Quick start](##Quickstart)
-* [Getting help](##Gettinghelp)
-
 ## Introduction
 
 `torchkm`, a PyTorch-based library that trains kernel SVMs and other large-margin classifiers with exact leave-one-out cross-validation (LOOCV) error computation. Conventional SVM solvers often face scalability and efficiency challenges, especially on large datasets or when multiple cross-validation runs are required. torchkm computes LOOCV at the same cost as training a single SVM while boosting speed and scalability via CUDA-accelerated matrix operations. Benchmark experiments indicate that TorchKSVM outperforms existing kernel SVM solvers in efficiency and speed. This document shows how to use the `torchkm` package to fit kernel SVM.
