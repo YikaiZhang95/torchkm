@@ -88,8 +88,8 @@ class cvksvm:
 
     Examples
     --------
-    >>> from torchsvm.cvksvm import cvksvm
-    >>> from torchsvm.functions import *
+    >>> from torchkm.cvksvm import cvksvm
+    >>> from torchkm.functions import *
     >>> import torch
     >>> import numpy
     >>> nn = 1000 # Number of samples
@@ -124,8 +124,10 @@ class cvksvm:
     >>> model.fit()
     """
 
-    def __init__(self, Kmat, y, nlam, ulam, foldid = None, nfolds = 5, eps=1e-5, maxit=1000, gamma=1.0, is_exact=0, delta_len=8, mproj=10, KKTeps=1e-3, KKTeps2=1e-3, device='cuda'):
-        self.device = device
+    def __init__(self, Kmat, y, nlam, ulam, foldid = None, nfolds = 5, eps=1e-5, maxit=1000, gamma=1.0, is_exact=0, delta_len=8, mproj=10, KKTeps=1e-3, KKTeps2=1e-3, device=None):
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = torch.device(device)
         self.nobs = Kmat.shape[0]
 
         # --- Check Kmat ---
