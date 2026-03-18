@@ -1,36 +1,25 @@
-# TorchKM(Coming Soon!)
+# TorchKM: Fast Kernel Machines in PyTorch
+
+![PyPI](https://img.shields.io/pypi/v/torchkm)
+![Python](https://img.shields.io/pypi/pyversions/torchkm)
+![License](https://img.shields.io/github/license/YikaiZhang95/torchkm)
 ![GitHub Release](https://img.shields.io/github/v/release/YikaiZhang95/torchkm)
 
-**TorchKM** is a PyTorch-based library for fast **kernel machines** with a focus on:
+**TorchKM** is a PyTorch-based library for **kernel machines** with a focus on fast **train + tune** workflows.
 
-- **Large-margin classification**: kernel SVM, kernel DWD, kernel logistic regression  
-- **Fast model selection**: pathwise solutions over a grid of regularization values (λ) and efficient cross-validation
-- **GPU acceleration** via PyTorch/CUDA (with safe CPU fallback)
-- A **scikit-learn–compatible wrapper API** for easy integration with sklearn pipelines
+It currently provides:
 
-## Introduction
+- **Kernel classification:** kernel SVM, kernel DWD, and kernel logistic regression
+- **Fast model selection:** pathwise solutions over a grid of regularization values (`λ`)
+- **Exact LOOCV support for kernel SVM**
+- **GPU acceleration** via PyTorch/CUDA, with safe CPU fallback
+- A **scikit-learn–style API** for easy integration into existing Python workflows
 
-`torchkm`, a PyTorch-based library that trains kernel SVMs and other large-margin classifiers with exact leave-one-out cross-validation (LOOCV) error computation. Conventional SVM solvers often face scalability and efficiency challenges, especially on large datasets or when multiple cross-validation runs are required. torchkm computes LOOCV at the same cost as training a single SVM while boosting speed and scalability via CUDA-accelerated matrix operations. Benchmark experiments indicate that TorchKSVM outperforms existing kernel SVM solvers in efficiency and speed. This document shows how to use the `torchkm` package to fit kernel SVM.
+## Why TorchKM?
 
-When dealing with low-dimensional problems or more complex scenarios, such as requiring non-linear decision boundaries or higher accuracy, kernel SVMs can be formulated using the kernel method within a reproducing kernel Hilbert space (RKHS). For consistency, we adopt the same notation introduced in the high-dimensional case in Chapter One.
+Kernel methods are still a strong choice when you want nonlinear decision boundaries, convex training objectives, and competitive performance on tabular or moderate-scale datasets. In practice, the bottleneck is often not training one model — it is training **and tuning many models**.
 
-Given a random sample $\\{y_i, x_i\\}_{i=1}^n$, the kernel SVM can be formulated as a function estimation problem:
-
-![kernel SVM formulation](https://latex.codecogs.com/svg.image?\dpi{130}&space;\min_{f&space;\in&space;\mathcal{H}_K}&space;\left[&space;\frac{1}{n}&space;\sum_{i=1}^n&space;\left(&space;1&space;-&space;y_i&space;f(\mathbf{x}_i)&space;\right)_{+}&space;&plus;&space;\lambda&space;\|f\|_{\mathcal{H}_K}^2&space;\right])
-
-where ![norm](https://latex.codecogs.com/svg.image?\dpi{120}&space;\left\|f\right\|^2_{\mathcal{H}_K}) is the RKHS norm that acts as a regularizer, and $\lambda > 0$ is a tuning parameter.
-
-According to the representer theorem for reproducing kernels (Wahba, 1990), the solution to our problem takes the form:
-
-![f(x) formula](https://latex.codecogs.com/svg.image?\dpi{130}&space;f(\mathbf{x})&space;=&space;\sum_{i=1}^n&space;\alpha_i^{\mathrm{SVM}}&space;K\left(\mathbf{x}_i,&space;\mathbf{x}\right))
-
-The coefficients $\alpha^{SVM}$ are obtained by solving the optimization problem:
-
-![alpha optimization](https://latex.codecogs.com/svg.image?\dpi{130}&space;\boldsymbol{\alpha}^{\mathrm{SVM}}&space;=&space;\arg\min_{\boldsymbol{\alpha}&space;\in&space;\mathbb{R}^n}&space;\left[&space;\frac{1}{n}&space;\sum_{i=1}^n&space;\left(1&space;-&space;y_i&space;\mathbf{K}_i^{\top}&space;\boldsymbol{\alpha}&space;\right)_{+}&space;&plus;&space;\lambda&space;\boldsymbol{\alpha}^\top&space;\mathbf{K}&space;\boldsymbol{\alpha}&space;\right])
-
-where $\mathbf{K}$ is the kernel matrix.
-
-
+TorchKM is built for that workflow.
 ## Installation
 
 ### Minimal install (core solvers)
