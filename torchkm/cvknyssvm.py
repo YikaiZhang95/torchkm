@@ -6,9 +6,55 @@ import time
 from .functions import *
 
 class cvknyssvm:
-    def __init__(self, Xmat, X_test, y, nlam, ulam, foldid, nfolds = 5, eps=1e-5, maxit=1000, gamma=1.0, delta_len=8, KKTeps=1e-3, KKTeps2=1e-3,num_landmarks = 2000, k = 1000, device='cuda'):
+    def __init__(self, Xmat, X_test, y, nlam, ulam, foldid=None, nfolds = 5, eps=1e-5, maxit=1000, gamma=1.0, delta_len=8, KKTeps=1e-3, KKTeps2=1e-3,num_landmarks = 2000, k = 1000, device='cuda'):
         self.device = device
-        self.Xmat = Xmat.double().to(self.device)
+        self.nobs = Xmat.shape[0]
+
+        # --- Check Kmat ---
+        if not isinstance(Xmat, torch.Tensor):
+            raise TypeError("Xmat must be a torch.Tensor")
+        Xmat = Xmat.double().to(self.device)
+        self.Xmat = Xmat
+
+        if not isinstance(y, torch.Tensor):
+            raise TypeError("y must be a torch.Tensor")
+        y = y.double().to(self.device)
+
+        # --- Label check ---
+        unique_labels = torch.unique(y)
+        if unique_labels.numel() > 2:
+            raise ValueError(f"Multi-class detected: labels = {unique_labels.tolist()}. Only -1 and 1 allowed.")
+        if not torch.all((unique_labels == -1) | (unique_labels == 1)):
+            raise ValueError(f"Invalid labels: {unique_labels.tolist()}. Must be only -1 and 1.")
+        self.y = y
+
+        # --- Check ulam ---
+        if not isinstance(ulam, torch.Tensor):
+            raise TypeError("ulam must be a torch.Tensor")
+        ulam = ulam.double().to(self.device)
+
+        # --- Check foldid ---
+        if foldid is not None:
+            if not isinstance(foldid, torch.Tensor):
+                raise TypeError("foldid must be a torch.Tensor")
+            foldid = foldid.to(self.device)
+        else:
+            if nfolds == self.nobs:
+                foldid = torch.arange(self.nobs) # Each row gets its own fold ID
+            else:
+                # Randomly assign fold IDs across the rows
+                # foldid = torch.tensor(np.random.permutation(np.repeat(np.arange(1, nfolds + 1), nn // nfolds + 1)[:nn]))
+                foldid = torch.randperm(self.nobs) % nfolds + 1
+            foldid = foldid.to(self.device) 
+
+        # --- Shape check ---
+        # if Xmat.shape[0] != Xmat.shape[1]:
+        #     raise ValueError("Xmat must be a square matrix")
+        if Xmat.shape[0] != y.shape[0]:
+            raise ValueError("Xmat and y size mismatch")
+
+
+        # self.Xmat = Xmat.double().to(self.device)
         self.X_test = X_test.double().to(self.device)
         self.y = y.double().to(self.device)
         self.nobs = Xmat.shape[0]
@@ -26,6 +72,7 @@ class cvknyssvm:
         self.nmaxit = self.nlam * self.maxit
         self.nfolds = nfolds
         self.foldid = foldid
+        
 
         # Initialize outputs
         self.alpmat = torch.zeros((self.np + 1, self.nlam), dtype=torch.double).to(self.device)
@@ -37,6 +84,10 @@ class cvknyssvm:
         self.Z_test = torch.zeros(X_test.shape[0], dtype=torch.double).to(self.device)
         self.Z_train = torch.zeros(Xmat.shape[0], dtype=torch.double).to(self.device)
         self.indices = torch.zeros(self.num_landmarks, dtype=torch.double)
+        self.landmarks_ = None
+        self.sig_w_ = None
+        self.M_ = None
+        self.k_eff_ = None
 
     def fit(self):
         nobs = self.nobs
@@ -49,6 +100,8 @@ class cvknyssvm:
         nfolds = self.nfolds
 
         torch.manual_seed(0)
+        num_landmarks = min(num_landmarks, nobs)
+
         indices = torch.randperm(nobs)[:num_landmarks]
         Xmat_cpu = Xmat.float().to(device = 'cpu')
         landmarks = Xmat_cpu[indices]
@@ -62,6 +115,12 @@ class cvknyssvm:
         S = S[:k]
 
         M = U * (1.0 / torch.sqrt(S))
+        # store Nyström state for future transform/prediction
+        self.indices = indices.detach().cpu().to(torch.int64)
+        self.landmarks_ = landmarks.detach().cpu()
+        self.sig_w_ = float(sig_w)
+        self.M_ = M.detach().cpu()
+        self.k_eff_ = int(k)
 
         Cmat = kernelMult(Xmat_cpu, landmarks, sig_w)  # Kernel matrix between X and landmarks
         Xmat = torch.mm(Cmat, M).double().to(self.device)
@@ -81,7 +140,6 @@ class cvknyssvm:
         eps2 = 1.0e-5
         # Precompute sum of Xmat along rows
         Xsum = torch.sum(Xmat, dim=0)
-        # Kinv = torch.linalg.inv(Kmat)
         XX = torch.mm(Xmat.T, Xmat)
 
         # Initialize Amat with zeros
@@ -176,11 +234,22 @@ class cvknyssvm:
                 dif_step = oldalpvec - alpvec
                 xa = torch.mv(Xmat, alpvec[1:])
                 aa = torch.dot(alpvec[1:], alpvec[1:])
-                obj_value = self.objfun(alpvec[0], aa, xa, y, al, nobs)
+                if self.device == 'cuda':
+                    xa_cpu = xa.to('cpu')
+                    aa_cpu = aa.to('cpu')
+                    y_cpu = y.to('cpu')
+                    alpvec0_cpu = alpvec[0].to('cpu')
+                else:
+                    xa_cpu = xa
+                    aa_cpu = aa
+                    y_cpu = y
+                    alpvec0_cpu = alpvec[0]
+
+                obj_value = self.objfun(alpvec0_cpu, aa_cpu, xa_cpu, y_cpu, al, nobs)
                 # eps_float64 = np.finfo(np.float64).eps
                 # optimal_intercept = minimize_scalar(self.objfun, args=(aka, ka, y, al, nobs), bracket=(-100.0, 100.0), method="brent")
                 # obj_value_new = self.objfun(optimal_intercept.x, aka, ka, y, al, nobs)
-                golden_s = self.golden_section_search(-100.0, 100.0, nobs, xa, aa, y, al)
+                golden_s = self.golden_section_search(-100.0, 100.0, nobs, xa_cpu, aa_cpu, y_cpu, al)
                 int_new = golden_s[0]
                 obj_value_new = golden_s[1]
                 if obj_value_new < obj_value:
@@ -292,11 +361,21 @@ class cvknyssvm:
 
                     xa = torch.mv(Xmat, looalp[1:])
                     aa = torch.dot(looalp[1:], looalp[1:])
-                    obj_value = self.objfun(looalp[0], aa, xa, y, al, nobs)
+                    if self.device == 'cuda':
+                        xa_cpu = xa.to('cpu')
+                        aa_cpu = aa.to('cpu')
+                        yn_cpu = yn.to('cpu')
+                        looalp0_cpu = looalp[0].to('cpu')
+                    else:
+                        xa_cpu = xa
+                        aa_cpu = aa
+                        yn_cpu = yn
+                        looalp0_cpu = looalp[0]
+                    obj_value = self.objfun(looalp0_cpu, aa_cpu, xa_cpu, yn_cpu, al, nobs)
                     
                     # optimal_intercept = minimize_scalar(self.objfun, args=(aka, ka, yn, al, nobs), bracket=(-100.0, 100.0), method="brent")
                     # obj_value_new = self.objfun(optimal_intercept.x, aka, ka, yn, al, nobs)
-                    golden_s = self.golden_section_search(-100.0, 100.0, nobs, xa, aa, y, al)
+                    golden_s = self.golden_section_search(-100.0, 100.0, nobs, xa_cpu, aa_cpu, yn_cpu, al)
                     int_new = golden_s[0]
                     obj_value_new = golden_s[1]
                     if obj_value_new < obj_value:
@@ -350,6 +429,19 @@ class cvknyssvm:
         self.Z_test = Z_test
         self.Z_train = Xmat
         self.indices = indices
+    
+    def transform(self, X_new):
+        """
+        Transform new raw features into the fitted Nyström feature space.
+        Returns a tensor on self.device with shape (n_new, k_eff).
+        """
+        if self.landmarks_ is None or self.M_ is None or self.sig_w_ is None:
+            raise RuntimeError("Call fit() before transform().")
+
+        X_new_cpu = X_new.float().to(device="cpu")
+        C_new = kernelMult(X_new_cpu, self.landmarks_, self.sig_w_)
+        Z_new = torch.mm(C_new, self.M_)
+        return Z_new.double().to(self.device)
     
     def cv(self, pred, y):
         pred_label = torch.where(pred > 0, 1, -1).to(device = 'cpu')
