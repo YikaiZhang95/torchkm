@@ -54,9 +54,7 @@ from sklearn.datasets import make_circles
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
-from torchkm.sklearn_wrapper import TorchKMSVC
-
-device = "cuda" if torch.cuda.is_available() else "cpu"
+from torchkm.estimators import TorchKMSVC
 
 # Toy nonlinear classification task
 X, y = make_circles(n_samples=1200, factor=0.4, noise=0.08, random_state=0)
@@ -66,58 +64,44 @@ y = np.where(y == 0, -1, 1)   # TorchKM accepts {-1, +1} labels
 Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, random_state=0)
 
 nfolds = 5
-foldid = (np.arange(Xtr.shape[0]) % nfolds) + 1
-ulam = np.logspace(3, -3, num=12)
+Cs = np.logspace(3, -3, num=12)
 
 clf = TorchKMSVC(
     kernel="rbf",
-    nlam=len(ulam),
-    ulam=ulam,
+    nC=len(Cs),
+    Cs=Cs,
     nfolds=nfolds,
-    foldid=foldid,
-    device=device,
+    device='cuda',
     probability=True,
-    maxit=200,
+    max_iter=200,
 )
 
 clf.fit(Xtr, ytr)
 
-print("best lambda:", clf.best_lambda_)
+print("best lambda:", clf.best_C_)
 print("test accuracy:", (clf.predict(Xte) == yte).mean())
 print("first 3 probabilities:\n", clf.predict_proba(Xte[:3]))
 ```
 
-### Low-level solver API
+### Low-rank approximation
 
-Use the low-level API when you want explicit control of the kernel matrix or already have a precomputed kernel.
+Use the `low_rank=True` when you want to handle a large data set.
 
 ```python
-import torch
-from torchkm.cvksvm import cvksvm
-from torchkm.functions import sigest, rbf_kernel
-
-device = "cuda" if torch.cuda.is_available() else "cpu"
-
-X_train = torch.randn(200, 10, dtype=torch.float64)
-y_train = torch.where(torch.rand(200) > 0.5, 1.0, -1.0).to(torch.float64)
-
-sigma = float(sigest(X_train.cpu(), frac=0.5))
-K_train = rbf_kernel(X_train.to(device), sigma)
-
-ulam = torch.logspace(3, -3, steps=10, dtype=torch.float64, device=device)
-foldid = (torch.arange(X_train.shape[0], device=device) % 5 + 1).to(torch.int64)
-
-model = cvksvm(
-    Kmat=K_train,
-    y=y_train.to(device),
-    nlam=len(ulam),
-    ulam=ulam,
+clf = TorchKMSVC(
+    kernel="rbf",
+    low_rank=True,
+    num_landmarks=500,
+    nys_k=250,
+    nC=20,
     nfolds=5,
-    foldid=foldid,
-    device=device,
-    maxit=200,
+    device='cuda',
+    probability=True,
+    platt_device='cuda',
 )
-model.fit()
+
+clf.fit(Xtr, ytr)
+(clf.predict(Xte) == yte).mean()
 ```
 
 ## What TorchKM provides
