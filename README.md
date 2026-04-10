@@ -118,6 +118,7 @@ Common methods:
 - `decision_function(X)`
 - `predict(X)`
 - `predict_proba(X)` (when `probability=True`)
+- `platt_plot(X, y)`
 
 ### Low-level solvers
 
@@ -128,7 +129,6 @@ Common methods:
 ### Utilities
 
 - `rbf_kernel`, `kernelMult`, `sigest`
-- `PlattScalerTorch` for probability calibration
 
 ## Device behavior
 
