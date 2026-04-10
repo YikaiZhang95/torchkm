@@ -188,3 +188,11 @@ pytest tests/test_estimators.py tests/test_cvksvm.py tests/test_cvkdwd.py tests/
 Observed result on the benchmark environment:
 
 - `9 passed`
+
+Benchmark accuracy was also checked directly in the harness on held-out test splits. For every benchmark case, the harness records:
+
+- `accuracy` from `predict(X_test)`
+- `cv_mis_min` from the model-selection path
+- `pred_hash` and `score_hash` so prediction outputs can be compared across runs
+
+In the kept benchmark results, the successful performance changes were accuracy-neutral or only changed accuracy by a very small amount, which is why the optimization work was accepted.

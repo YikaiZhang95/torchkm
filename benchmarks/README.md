@@ -238,6 +238,14 @@ Result:
 
 - `9 passed`
 
+The benchmark harness also checks held-out prediction quality for every run by recording:
+
+- `accuracy` on the test split
+- `cv_mis_min` from the tuning path
+- `pred_hash` and `score_hash` to detect changes in outputs
+
+The retained performance improvements were kept only when these checks stayed stable or changed only minimally.
+
 ## Not Done
 
 This work intentionally did not prioritize:
