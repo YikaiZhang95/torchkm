@@ -99,29 +99,29 @@ class cvknyslogit:
         num_landmarks = min(num_landmarks, nobs)
 
         indices = torch.randperm(nobs)[:num_landmarks]
-        Xmat_cpu = Xmat.float().to(device = 'cpu')
-        landmarks = Xmat_cpu[indices]
+        Xmat_work = Xmat.float()
+        landmarks = Xmat_work[indices]
         
         sig_w = sigest(landmarks)
         W = rbf_kernel(landmarks, sig_w)
 
-        U, S, Vt = torch.linalg.svd(W, full_matrices=False)
-        k = min(k, len(S))  # Set k to min of 1000 or the number of singular values
-        U = U[:, :k]
-        S = S[:k]
+        evals, evecs = torch.linalg.eigh(W)
+        k = min(k, evals.numel())
+        evals = evals[-k:].flip(0).clamp_min(torch.finfo(evals.dtype).eps)
+        evecs = evecs[:, -k:].flip(1)
 
-        M = U * (1.0 / torch.sqrt(S))
+        M = evecs * torch.rsqrt(evals)
         # store Nyström state for future transform/prediction
         self.indices = indices.detach().cpu().to(torch.int64)
-        self.landmarks_ = landmarks.detach().cpu()
+        self.landmarks_ = landmarks.detach()
         self.sig_w_ = float(sig_w)
-        self.M_ = M.detach().cpu()
+        self.M_ = M.detach()
         self.k_eff_ = int(k)
 
-        Cmat = kernelMult(Xmat_cpu, landmarks, sig_w)  # Kernel matrix between X and landmarks
-        Xmat = torch.mm(Cmat, M).double().to(self.device)
+        Cmat = kernelMult(Xmat_work, landmarks, sig_w)  # Kernel matrix between X and landmarks
+        Xmat = torch.mm(Cmat, M).double()
 
-        C_test = kernelMult(X_test.float().to(device = 'cpu'), landmarks, sig_w)  # Kernel matrix between X and landmarks
+        C_test = kernelMult(X_test.float(), landmarks, sig_w)  # Kernel matrix between X and landmarks
         Z_test = torch.mm(C_test, M)  # Transformed training features
         
         np = Xmat.shape[1]
@@ -135,6 +135,8 @@ class cvknyslogit:
         pred = torch.zeros((self.nobs, self.nlam), dtype=torch.double).to(self.device)
         jerr = 0
         eps2 = 1.0e-5
+        one = torch.ones((), dtype=torch.double, device=self.device)
+        dif_step = torch.empty(np + 1, dtype=torch.double, device=self.device)
 
         # Precompute sum of Xmat along rows
         Xsum = torch.sum(Xmat, dim=0)
@@ -171,7 +173,7 @@ class cvknyslogit:
             Aione = torch.mv(Umat, pinv * Umat[0, :])
             gval = cval / (1.0 - cval * Aione[0])
 
-            told = 1.0
+            told = one
     
             # Update alpha
             #alpha loop
@@ -179,17 +181,16 @@ class cvknyslogit:
 
                 zvec = - y / (1.0 + torch.exp(r))
 
-                tnew = 0.5 + 0.5 * torch.sqrt(torch.tensor(1.0, device=self.device) + 4.0 * told * told)
+                tnew = 0.5 + 0.5 * torch.sqrt(one + 4.0 * told * told)
                 mul = 1.0 + (told - 1.0) / tnew
-                told = tnew.item()
+                told = tnew
             
                 # Compute dif vector
                 kz[0] = 4.0 * torch.sum(zvec)
                 kz[1: ] = 4.0 * zvec @ Xmat + cval * alpvec[1:]
                 kz[0] = kz[0] + gval * torch.dot(Aione, kz)
 
-                dif_step = torch.zeros((np + 1), dtype=torch.double, device=self.device)
-                dif_step = - mul * torch.mv(Umat, pinv * (kz @ Umat))
+                dif_step.copy_(-mul * torch.mv(Umat, pinv * (kz @ Umat)))
                 alpvec += dif_step
 
                 # Update residual
@@ -212,22 +213,11 @@ class cvknyslogit:
             aa = torch.dot(alpvec[1:], alpvec[1:])
             # ka = torch.mv(Xmat, alpvec[1:])
             # aka = torch.dot(ka, alpvec[1:])
-            if self.device == 'cuda':
-                xa_cpu = xa.to('cpu')
-                aa_cpu = aa.to('cpu')
-                y_cpu = y.to('cpu')
-                alpvec0_cpu = alpvec[0].to('cpu')
-            else:
-                xa_cpu = xa
-                aa_cpu = aa
-                y_cpu = y
-                alpvec0_cpu = alpvec[0]
-                
-            obj_value = self.objfun(alpvec0_cpu, aa_cpu, xa_cpu, y_cpu, al, nobs)
+            obj_value = self.objfun(alpvec[0], aa, xa, y, al, nobs)
             # eps_float64 = np.finfo(np.float64).eps
             # optimal_intercept = minimize_scalar(self.objfun, args=(aka, ka, y, al, nobs), bracket=(-100.0, 100.0), method="brent")
             # obj_value_new = self.objfun(optimal_intercept.x, aka, ka, y, al, nobs)
-            golden_s = self.golden_section_search(-100.0, 100.0, nobs, xa_cpu, aa_cpu, y_cpu, al)
+            golden_s = self.golden_section_search(-100.0, 100.0, nobs, xa, aa, y, al)
             int_new = golden_s[0]
             obj_value_new = golden_s[1]
             if obj_value_new < obj_value:
@@ -248,6 +238,26 @@ class cvknyslogit:
             # print(f'Single fitting:{time.time() - start}')
             
             ######### cross-validation
+            pred[:, l] = self._cv_batched_lambda(
+                Xmat=Xmat,
+                y=y,
+                alpvec=alpvec,
+                r=r,
+                al=al,
+                cval=cval,
+                nobs=nobs,
+                nfolds=nfolds,
+                eps2=eps2,
+                Umat=Umat,
+                pinv=pinv,
+                Aione=Aione,
+                gval=gval,
+                cvnpass=cvnpass,
+                l=l,
+                one=one,
+            )
+            self.anlam = l
+            continue
             for nf in range(nfolds):
                 # start = time.time()
                 yn = y.clone()
@@ -266,23 +276,22 @@ class cvknyslogit:
                 
 
                 # Compute residual r
-                told = 1.0
+                told = one
 
                 while torch.sum(cvnpass) <= self.nmaxit:
                     # margin = yn * loor
                     zvec = - y / (1 + torch.exp(loor))
 
-                    tnew = 0.5 + 0.5 * torch.sqrt(torch.tensor(1.0, device=self.device) + 4.0 * told * told)
+                    tnew = 0.5 + 0.5 * torch.sqrt(one + 4.0 * told * told)
                     mul = 1.0 + (told - 1.0) / tnew
-                    told = tnew.item()
+                    told = tnew
                 
                     # Compute dif vector
                     kz[0] = 4.0 * torch.sum(zvec)
                     kz[1: ] = 4.0 * zvec @ Xmat + cval * looalp[1:]
                     kz[0] = kz[0] + gval * torch.dot(Aione, kz)
 
-                    dif_step = torch.zeros((np + 1), dtype=torch.double, device=self.device)
-                    dif_step = - mul * torch.mv(Umat, pinv * (kz @ Umat))
+                    dif_step.copy_(-mul * torch.mv(Umat, pinv * (kz @ Umat)))
                     
                     looalp += dif_step
 
@@ -311,22 +320,10 @@ class cvknyslogit:
                 
                 xa = torch.mv(Xmat, looalp[1:])
                 aa = torch.dot(looalp[1:], looalp[1:])
-
-                if self.device == 'cuda':
-                    xa_cpu = xa.to('cpu')
-                    aa_cpu = aa.to('cpu')
-                    yn_cpu = yn.to('cpu')
-                    looalp0_cpu = looalp[0].to('cpu')
-                else:
-                    xa_cpu = xa
-                    aa_cpu = aa
-                    yn_cpu = yn
-                    looalp0_cpu = looalp[0]
-
-                obj_value = self.objfun(looalp0_cpu, aa_cpu, xa_cpu, yn_cpu, al, nobs)
+                obj_value = self.objfun(looalp[0], aa, xa, yn, al, nobs)
                 # optimal_intercept = minimize_scalar(self.objfun, args=(aka, ka, yn, al, nobs), bracket=(-100.0, 100.0), method="brent")
                 # obj_value_new = self.objfun(optimal_intercept.x, aka, ka, yn, al, nobs)
-                golden_s = self.golden_section_search(-100.0, 100.0, nobs, xa_cpu, aa_cpu, yn_cpu, al)
+                golden_s = self.golden_section_search(-100.0, 100.0, nobs, xa, aa, yn, al)
                 int_new = golden_s[0]
                 obj_value_new = golden_s[1]
                 if obj_value_new < obj_value:
@@ -361,6 +358,96 @@ class cvknyslogit:
         self.jerr = jerr
         self.pred = pred
 
+    def _cv_batched_lambda(
+        self,
+        *,
+        Xmat,
+        y,
+        alpvec,
+        r,
+        al,
+        cval,
+        nobs,
+        nfolds,
+        eps2,
+        Umat,
+        pinv,
+        Aione,
+        gval,
+        cvnpass,
+        l,
+        one,
+    ):
+        fold_ids = torch.arange(1, nfolds + 1, device=self.device)
+        fold_masks = self.foldid.unsqueeze(1) == fold_ids.unsqueeze(0)
+        fold_col_index = self.foldid.to(dtype=torch.long) - 1
+        row_index = torch.arange(nobs, device=self.device)
+        np = Xmat.shape[1]
+
+        yn_batch = y.unsqueeze(1).expand(-1, nfolds).clone()
+        yn_batch[fold_masks] = 0.0
+
+        looalp_batch = alpvec.unsqueeze(1).expand(-1, nfolds).clone()
+        loor_batch = r.unsqueeze(1).expand(-1, nfolds).clone()
+        dif_step_batch = torch.zeros((np + 1, nfolds), dtype=torch.double, device=self.device)
+        kz_batch = torch.zeros((np + 1, nfolds), dtype=torch.double, device=self.device)
+        told = torch.ones(nfolds, dtype=torch.double, device=self.device)
+
+        active = torch.ones(nfolds, dtype=torch.bool, device=self.device)
+        while torch.any(active):
+            cols = torch.nonzero(active, as_tuple=False).squeeze(1)
+            yn_iter = yn_batch[:, cols]
+            loor_iter = loor_batch[:, cols]
+            alp_iter = looalp_batch[:, cols]
+            told_iter = told[cols]
+
+            zvec = -yn_iter / (1.0 + torch.exp(loor_iter))
+
+            tnew = 0.5 + 0.5 * torch.sqrt(one + 4.0 * told_iter * told_iter)
+            mul = 1.0 + (told_iter - 1.0) / tnew
+            told[cols] = tnew
+
+            kz_batch[0, cols] = 4.0 * zvec.sum(dim=0)
+            kz_batch[1:, cols] = 4.0 * torch.mm(Xmat.T, zvec) + cval * alp_iter[1:, :]
+            kz_batch[0, cols] = kz_batch[0, cols] + gval * torch.matmul(Aione, kz_batch[:, cols])
+
+            spectral = torch.mm(Umat.T, kz_batch[:, cols])
+            spectral.mul_(pinv.unsqueeze(1))
+            dif_step_batch[:, cols] = -mul.unsqueeze(0) * torch.mm(Umat, spectral)
+            looalp_batch[:, cols] += dif_step_batch[:, cols]
+
+            loor_batch[:, cols] += yn_iter * (
+                dif_step_batch[0, cols].unsqueeze(0) + torch.mm(Xmat, dif_step_batch[1:, cols])
+            )
+
+            cvnpass[l] += cols.numel()
+            if torch.sum(cvnpass) > self.nmaxit:
+                break
+
+            converged = torch.max(dif_step_batch[:, cols] ** 2, dim=0).values < eps2 * (mul ** 2)
+            active[cols[converged]] = False
+
+        for nf in range(nfolds):
+            looalp = looalp_batch[:, nf]
+            loor = loor_batch[:, nf].clone()
+            yn = yn_batch[:, nf]
+            dif_step = dif_step_batch[:, nf].clone()
+
+            xa = torch.mv(Xmat, looalp[1:])
+            aa = torch.dot(looalp[1:], looalp[1:])
+            obj_value = self.objfun(looalp[0], aa, xa, yn, al, nobs)
+            golden_s = self.golden_section_search(-100.0, 100.0, nobs, xa, aa, yn, al)
+            int_new = golden_s[0]
+            obj_value_new = golden_s[1]
+            if obj_value_new < obj_value:
+                dif_step[0] = dif_step[0] + int_new - looalp[0]
+                loor = loor + y * (int_new - looalp[0])
+                looalp[0] = int_new
+            loor_batch[:, nf] = loor
+
+        cv_scores = torch.mm(Xmat, looalp_batch[1:, :]) + looalp_batch[0, :].unsqueeze(0)
+        return cv_scores[row_index, fold_col_index]
+
     def transform(self, X_new):
         """
         Transform new raw features into the fitted Nyström feature space.
@@ -369,10 +456,10 @@ class cvknyslogit:
         if self.landmarks_ is None or self.M_ is None or self.sig_w_ is None:
             raise RuntimeError("Call fit() before transform().")
 
-        X_new_cpu = X_new.float().to(device="cpu")
-        C_new = kernelMult(X_new_cpu, self.landmarks_, self.sig_w_)
+        X_new_dev = X_new.float().to(device=self.device)
+        C_new = kernelMult(X_new_dev, self.landmarks_, self.sig_w_)
         Z_new = torch.mm(C_new, self.M_)
-        return Z_new.double().to(self.device)
+        return Z_new.double()
     
     def cv(self, pred, y):
         pred_label = torch.where(pred > 0, 1, -1).to(device = 'cpu')
@@ -383,13 +470,10 @@ class cvknyslogit:
     
         
     def objfun(self, intcpt, aka, ka, y, lam, nobs):
-        # Initialize xi (hinge loss terms)
-        xi = torch.zeros(nobs, dtype=torch.double)
-
         # Compute f_hat (fh) and the hinge loss xi
         fh = ka + intcpt
         xi_tmp = y * fh
-        xi = torch.log(1 + torch.exp(- xi_tmp))
+        xi = torch.log1p(torch.exp(-xi_tmp))
 
         # Compute the objective value
         objval = lam * aka + torch.sum(xi) / nobs
