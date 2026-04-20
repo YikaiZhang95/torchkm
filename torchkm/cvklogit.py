@@ -47,6 +47,8 @@ class cvklogit:
         pred = torch.zeros((self.nobs, self.nlam), dtype=torch.double).to(self.device)
         jerr = 0
         eps2 = 1.0e-5
+        one = torch.ones((), dtype=torch.double, device=self.device)
+        dif_step = torch.empty(nobs + 1, dtype=torch.double, device=self.device)
 
         # Precompute sum of Kmat along rows
         Ksum = torch.sum(Kmat, dim=1)
@@ -85,7 +87,7 @@ class cvklogit:
             gval = 1.0 / (nobs + 8.0 * nobs * delta * vareps - vvec.sum())
 
             # Compute residual r
-            told = 1.0
+            told = one
             ka = torch.mv(Kmat, alpvec[1:])
             r = y * (alpvec[0] + ka)
             # Update alpha
@@ -96,13 +98,11 @@ class cvklogit:
                 rds = zvec.sum() + 2.0 * nobs * vareps * alpvec[0]
                 hval = rds - torch.dot(vvec, gamvec)
 
-                tnew = 0.5 + 0.5 * torch.sqrt(torch.tensor(1.0, device=self.device) + 4.0 * told * told)
+                tnew = 0.5 + 0.5 * torch.sqrt(one + 4.0 * told * told)
                 mul = 1.0 + (told - 1.0) / tnew
-                told = tnew.item()
+                told = tnew
             
                 # Compute dif vector
-                
-                dif_step = torch.zeros((nobs + 1), dtype=torch.double, device=self.device)
                 dif_step[0] = -4.0 * mul * delta * gval * hval
                 dif_step[1:] = -dif_step[0] * svec - 4.0 * mul * delta * torch.mv(Umat, gamvec @ Umat * lpinv)
                 alpvec += dif_step
@@ -149,6 +149,27 @@ class cvklogit:
             # print(f'Single fitting:{time.time() - start}')
             
             ######### cross-validation
+            pred[:, l] = self._cv_batched_lambda(
+                Kmat=Kmat,
+                y=y,
+                alpvec=alpvec,
+                r=r,
+                al=al,
+                nobs=nobs,
+                nfolds=nfolds,
+                vareps=vareps,
+                eps2=eps2,
+                Umat=Umat,
+                lpinv=lpinv,
+                svec=svec,
+                vvec=vvec,
+                gval=gval,
+                cvnpass=cvnpass,
+                l=l,
+                one=one,
+            )
+            self.anlam = l
+            continue
             for nf in range(nfolds):
                 # start = time.time()
                 yn = y.clone()
@@ -169,8 +190,7 @@ class cvklogit:
                 
 
                 # Compute residual r
-                told = 1.0
-                dif_step = torch.zeros_like(alpvec)
+                told = one
                 ka = torch.mv(Kmat, looalp[1:])
                 loor = yn * (looalp[0] + ka)
 
@@ -180,13 +200,11 @@ class cvklogit:
                     rds = zvec.sum() + 2.0 * nobs * vareps * looalp[0]
                     hval = rds - torch.dot(vvec, gamvec)
 
-                    tnew = 0.5 + 0.5 * torch.sqrt(torch.tensor(1.0, device=self.device) + 4.0 * told * told)
+                    tnew = 0.5 + 0.5 * torch.sqrt(one + 4.0 * told * told)
                     mul = 1.0 + (told - 1.0) / tnew
-                    told = tnew.item()
+                    told = tnew
                 
                     # Compute dif vector
-                    
-                    dif_step = torch.zeros((nobs + 1), dtype=torch.double, device=self.device)
                     dif_step[0] = -4.0 * mul * delta * gval * hval
                     dif_step[1:] = -dif_step[0] * svec - 4.0 * mul * delta * torch.mv(Umat, gamvec @ Umat * lpinv)
                     looalp += dif_step
@@ -252,6 +270,104 @@ class cvklogit:
         self.jerr = jerr
         self.pred = pred
 
+    def _cv_batched_lambda(
+        self,
+        *,
+        Kmat,
+        y,
+        alpvec,
+        r,
+        al,
+        nobs,
+        nfolds,
+        vareps,
+        eps2,
+        Umat,
+        lpinv,
+        svec,
+        vvec,
+        gval,
+        cvnpass,
+        l,
+        one,
+    ):
+        foldid = self.foldid.to(device=self.device, dtype=torch.long)
+        fold_ids = torch.arange(1, nfolds + 1, device=self.device)
+        fold_masks = foldid.unsqueeze(1) == fold_ids.unsqueeze(0)
+        fold_col_index = foldid - 1
+        row_index = torch.arange(nobs, device=self.device)
+
+        yn_batch = y.unsqueeze(1).expand(-1, nfolds).clone()
+        yn_batch[fold_masks] = 0.0
+
+        looalp_batch = alpvec.unsqueeze(1).expand(-1, nfolds).clone()
+        loor_batch = r.unsqueeze(1).expand(-1, nfolds).clone()
+        dif_step_batch = torch.zeros((nobs + 1, nfolds), dtype=torch.double, device=self.device)
+        told = torch.ones(nfolds, dtype=torch.double, device=self.device)
+
+        ka_batch = torch.mm(Kmat, looalp_batch[1:, :])
+        loor_batch = yn_batch * (looalp_batch[0, :].unsqueeze(0) + ka_batch)
+
+        active = torch.ones(nfolds, dtype=torch.bool, device=self.device)
+        while torch.any(active):
+            cols = torch.nonzero(active, as_tuple=False).squeeze(1)
+            yn_iter = yn_batch[:, cols]
+            loor_iter = loor_batch[:, cols]
+            alp_iter = looalp_batch[:, cols]
+            told_iter = told[cols]
+
+            zvec = -yn_iter / (1.0 + torch.exp(loor_iter))
+            gamvec = zvec + 2.0 * float(nobs) * al * alp_iter[1:, :]
+            rds = zvec.sum(dim=0) + 2.0 * nobs * vareps * alp_iter[0, :]
+            hval = rds - torch.matmul(vvec, gamvec)
+
+            tnew = 0.5 + 0.5 * torch.sqrt(one + 4.0 * told_iter * told_iter)
+            mul = 1.0 + (told_iter - 1.0) / tnew
+            told[cols] = tnew
+
+            dif_step_batch[0, cols] = -4.0 * mul * gval * hval
+            spectral = torch.mm(Umat.T, gamvec)
+            spectral.mul_(lpinv.unsqueeze(1))
+            proj_term = torch.mm(Umat, spectral)
+            dif_step_batch[1:, cols] = (
+                -dif_step_batch[0, cols].unsqueeze(0) * svec.unsqueeze(1)
+                - 4.0 * mul.unsqueeze(0) * proj_term
+            )
+            looalp_batch[:, cols] += dif_step_batch[:, cols]
+
+            ka_batch = torch.mm(Kmat, looalp_batch[1:, cols])
+            loor_batch[:, cols] = yn_iter * (looalp_batch[0, cols].unsqueeze(0) + ka_batch)
+
+            cvnpass[l] += cols.numel()
+            if torch.sum(cvnpass) > self.nmaxit:
+                break
+
+            converged = torch.max(dif_step_batch[:, cols] ** 2, dim=0).values < eps2 * (mul ** 2)
+            active[cols[converged]] = False
+
+        for nf in range(nfolds):
+            looalp = looalp_batch[:, nf]
+            loor = loor_batch[:, nf].clone()
+            yn = yn_batch[:, nf]
+            dif_step = dif_step_batch[:, nf].clone()
+
+            ka = torch.mv(Kmat, looalp[1:])
+            aka = torch.dot(ka, looalp[1:])
+            obj_value = self.objfun(looalp[0], aka, ka, yn, al, nobs)
+            golden_s = self.golden_section_search(-100.0, 100.0, nobs, ka, aka, yn, al)
+            int_new = golden_s[0]
+            obj_value_new = golden_s[1]
+            if obj_value_new < obj_value:
+                dif_step[0] = dif_step[0] + int_new - looalp[0]
+                loor = loor + y * (int_new - looalp[0])
+                looalp[0] = int_new
+            loor_batch[:, nf] = loor
+
+        cv_alpha = looalp_batch[1:, :].clone()
+        cv_alpha[fold_masks] = 0.0
+        cv_scores = torch.mm(Kmat, cv_alpha) + looalp_batch[0, :].unsqueeze(0)
+        return cv_scores[row_index, fold_col_index]
+
 
     def cv(self, pred, y):
         pred_label = torch.where(pred > 0, 1, -1).to(device = 'cpu')
@@ -291,13 +407,10 @@ class cvklogit:
         Returns:
         - objval (float): Objective function value.
         """
-        # Initialize xi (hinge loss terms)
-        xi = torch.zeros(nobs, dtype=torch.double)
-
         # Compute f_hat (fh) and the hinge loss xi
         fh = ka + intcpt
         xi_tmp = 1.0 - y * fh
-        xi = torch.log(1 + torch.exp(- xi_tmp))
+        xi = torch.log1p(torch.exp(-xi_tmp))
 
         # Compute the objective value
         objval = lam * aka + torch.sum(xi) / nobs

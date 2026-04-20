@@ -82,7 +82,8 @@ def sigest(x, frac=0.5):
     non_zero_dist = dist[dist != 0]
     
     # Compute quantiles (0.9, 0.5, 0.1)
-    srange = 1.0 / torch.quantile(non_zero_dist, torch.tensor([0.9, 0.5, 0.1]))
+    q = torch.tensor([0.9, 0.5, 0.1], dtype=non_zero_dist.dtype, device=non_zero_dist.device)
+    srange = 1.0 / torch.quantile(non_zero_dist, q)
     
     # Return the mean of the 90th and 10th quantiles
     sigma_estimate = torch.mean(srange[[0, 2]]).item()
@@ -101,11 +102,13 @@ def rbf_kernel(x, sigma):
     - K (torch.Tensor): RBF kernel matrix of shape (n_samples, n_samples).
     """
     # Compute pairwise squared Euclidean distances
-    x_norm = torch.sum(x ** 2, dim=1).view(-1, 1)
-    pairwise_dists = x_norm + x_norm.t() - 2.0 * torch.mm(x, x.t())
+    x_norm = torch.sum(x * x, dim=1, keepdim=True)
+    pairwise_dists = x_norm + x_norm.t()
+    pairwise_dists.addmm_(x, x.t(), beta=1.0, alpha=-2.0)
+    pairwise_dists.clamp_min_(0.0)
 
     # Compute the RBF kernel matrix
-    K = torch.exp(-pairwise_dists * 2 * sigma)
+    K = torch.exp(pairwise_dists.mul_(-2.0 * sigma))
 
     return K
 
@@ -143,13 +146,15 @@ def kernelMult(X, X_new, sigma):
     - K (torch.Tensor): RBF kernel matrix of shape (n_samples_X, n_samples_X_new).
     """
     # Compute squared L2 norms
-    X_norm = torch.sum(X ** 2, dim=1).view(-1, 1)
-    X_new_norm = torch.sum(X_new ** 2, dim=1).view(1, -1)
+    X_norm = torch.sum(X * X, dim=1, keepdim=True)
+    X_new_norm = torch.sum(X_new * X_new, dim=1).view(1, -1)
 
     # Compute pairwise squared Euclidean distances
-    pairwise_dists = X_norm + X_new_norm - 2.0 * torch.mm(X, X_new.t())
+    pairwise_dists = X_norm + X_new_norm
+    pairwise_dists.addmm_(X, X_new.t(), beta=1.0, alpha=-2.0)
+    pairwise_dists.clamp_min_(0.0)
 
     # Compute the RBF kernel matrix
-    K = torch.exp(-pairwise_dists * 2 * sigma)
+    K = torch.exp(pairwise_dists.mul_(-2.0 * sigma))
 
     return K

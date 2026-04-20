@@ -1,0 +1,110 @@
+{
+  "cases": [
+    {
+      "case": {
+        "backend": "svc",
+        "is_exact": 0,
+        "mode": "exact",
+        "size": "stress"
+      },
+      "dataset": {
+        "max_iter": 220,
+        "nC": 8,
+        "n_test": 280,
+        "n_train": 1400,
+        "nfolds": 5,
+        "nm": 8,
+        "num_landmarks": 256,
+        "nys_k": 128,
+        "p": 20
+      },
+      "wrapper_metrics": {
+        "accuracy": 0.925,
+        "best_C": 1000.0,
+        "cv_mis_min": 0.49714285135269165,
+        "fit_seconds": 0.1754595059901476,
+        "peak_memory_mb": 208.32861328125,
+        "pred_hash": "e743bd39381858f9bf9de7142bcb8a78dee54cea842aa99be371b5ee52e9bcbd",
+        "predict_seconds": 0.0848360750824213,
+        "score_hash": "aabc77eccea75582f3b1d4beb1cef90d85f5c452b58f998fd60285262999bab8",
+        "score_mean": 0.034414088448249724,
+        "score_std": 2.234512899739561
+      }
+    },
+    {
+      "case": {
+        "backend": "svc",
+        "is_exact": 1,
+        "mode": "exact",
+        "size": "stress"
+      },
+      "dataset": {
+        "max_iter": 220,
+        "nC": 8,
+        "n_test": 280,
+        "n_train": 1400,
+        "nfolds": 5,
+        "nm": 8,
+        "num_landmarks": 256,
+        "nys_k": 128,
+        "p": 20
+      },
+      "wrapper_metrics": {
+        "accuracy": 0.925,
+        "best_C": 1000.0,
+        "cv_mis_min": 0.49714285135269165,
+        "fit_seconds": 0.1890001860447228,
+        "peak_memory_mb": 208.32861328125,
+        "pred_hash": "e743bd39381858f9bf9de7142bcb8a78dee54cea842aa99be371b5ee52e9bcbd",
+        "predict_seconds": 0.08647652203217149,
+        "score_hash": "aabc77eccea75582f3b1d4beb1cef90d85f5c452b58f998fd60285262999bab8",
+        "score_mean": 0.034414088448249724,
+        "score_std": 2.234512899739561
+      }
+    },
+    {
+      "case": {
+        "backend": "svc",
+        "is_exact": 0,
+        "mode": "low_rank",
+        "size": "stress"
+      },
+      "dataset": {
+        "max_iter": 220,
+        "nC": 8,
+        "n_test": 280,
+        "n_train": 1400,
+        "nfolds": 5,
+        "nm": 8,
+        "num_landmarks": 256,
+        "nys_k": 128,
+        "p": 20
+      },
+      "wrapper_metrics": {
+        "accuracy": 0.9392857142857143,
+        "best_C": 1000.0,
+        "cv_mis_min": 0.49714285135269165,
+        "fit_seconds": 0.09665184002369642,
+        "peak_memory_mb": 212.8330078125,
+        "pred_hash": "10026fb9d4b72e84ac2ff8c7bec9847c2bb5cb10e20664859bcc71c79d0a6b4f",
+        "predict_seconds": 0.0007556411437690258,
+        "score_hash": "13afc75980afd2144129f7aa377b4ddb375a1955c51a25eec9cafd343ee4a687",
+        "score_mean": -0.04543769509502217,
+        "score_std": 5.597888295274139
+      }
+    }
+  ],
+  "metadata": {
+    "compat_sigest_patch": true,
+    "cuda_available": true,
+    "device": "cuda",
+    "device_name": "GPU accelerator",
+    "git_sha": null,
+    "hostname": "tw029",
+    "profile_backend": false,
+    "repeats": 1,
+    "seed": 123,
+    "torch_version": "2.10.0.dev20251112 (GPU build)",
+    "warmup_runs": 1
+  }
+}
