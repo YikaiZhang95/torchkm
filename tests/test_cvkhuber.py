@@ -1,8 +1,6 @@
 import unittest
 import torch
-import os
 import numpy
-import time
 from torchkm.cvkhuber import cvkhuber
 from torchkm.functions import *
 
@@ -39,7 +37,8 @@ class Testcvkhuber(unittest.TestCase):
             foldid = torch.randperm(nn) % nfolds + 1
 
         delta = 0.5
-        model1 = cvkhuber(delta, Kmat=Kmat, y=y_train, nlam=nlam, ulam=ulam, foldid=foldid, nfolds=nfolds, eps=1e-5, maxit=1000, gamma=1e-8, device='cuda')
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        model1 = cvkhuber(delta, Kmat=Kmat, y=y_train, nlam=nlam, ulam=ulam, foldid=foldid, nfolds=nfolds, eps=1e-5, maxit=1000, gamma=1e-8, device=device)
         model1.fit()
 
         cv_mis = model1.cv(model1.pred, y_train).numpy()
