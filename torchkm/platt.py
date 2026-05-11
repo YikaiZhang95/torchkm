@@ -1,6 +1,5 @@
 import numpy as np
 import torch
-import matplotlib.pyplot as plt
 
 class PlattScalerTorch:
     """
@@ -158,6 +157,7 @@ class PlattScalerTorch:
         return float(np.mean((p - y01)**2))
 
     def plot_calibration(self, bin_centers, mean_pred, frac_pos, counts, label="Platt", show_counts=True):
+        import matplotlib.pyplot as plt
         plt.figure(figsize=(5.2, 5.2), dpi=140)
         plt.plot([0,1], [0,1], linestyle="--", linewidth=1.5, label="Perfect")
         plt.plot(mean_pred, frac_pos, marker="o", linewidth=2.0, label=label)
@@ -167,7 +167,6 @@ class PlattScalerTorch:
         plt.grid(True, alpha=0.3)
         plt.legend()
         if show_counts:
-            # annotate per-bin counts
             for x, y, c in zip(mean_pred, frac_pos, counts):
                 if c > 0:
                     plt.text(x, y, f"{int(c)}", fontsize=8, ha="center", va="bottom")

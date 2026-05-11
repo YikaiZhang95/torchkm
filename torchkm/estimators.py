@@ -263,111 +263,6 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
 
             K_train = K_train.to(dev)
 
-            # self.X_fit_ = X_np
-            # self.kernel_state_ = {"low_rank": True}
-
-            # backend = cvknysdwd(
-            #     Xmat=X_train_t,          # raw training features
-            #     X_test=X_train_t,        # use train set here; wrapper handles future X via transform()
-            #     y=y_backend,
-            #     nlam=nlam,
-            #     ulam=ulam_backend,
-            #     foldid=foldid_backend,
-            #     nfolds=int(self.nfolds),
-            #     eps=float(self.tol),
-            #     maxit=int(self.max_iter),
-            #     gamma=float(self.solver_gamma),
-            #     num_landmarks=int(self.num_landmarks),
-            #     k=int(self.nys_k),
-            #     device=dev,
-            # )
-            # backend.fit()
-
-            # # backend.pred is (n_train, nlam), just like the exact wrapper expects
-            # cv_mis_t = backend.cv(backend.pred, y_train_t)
-            # cv_mis = cv_mis_t.detach().cpu().numpy()
-            # best_ind = int(np.argmin(cv_mis))
-
-            # alpvec = backend.alpmat[:, best_ind].detach().cpu().to(torch.double)
-
-            # self.intercept_ = float(alpvec[0].item())
-            # self.alpha_ = alpvec[1:].numpy()   # coefficients in Nyström feature space
-            # self.low_rank_basis_dim_ = int(self.alpha_.shape[0])
-
-            # self.best_ind_ = best_ind
-            # self.best_C_ = float(1.0 / (2.0 * backend.ulam[best_ind].detach().cpu().item() * X_np.shape[0])) #transfer back
-            # self.cv_mis_ = cv_mis
-            # self.n_samples_fit_ = int(X_np.shape[0])
-
-            # # keep backend; decision_function() needs transform()
-            # self._nys_backend_ = backend
-
-            # # useful fitted attrs for debugging / reproducibility
-            # self.low_rank_landmark_indices_ = backend.indices.detach().cpu().numpy()
-            # self.num_landmarks_ = int(getattr(backend, "landmarks_", X_train_t).shape[0])
-            # self.nys_k_ = int(getattr(backend, "k_eff_", self.alpha_.shape[0]))
-
-        # else: 
-        #     if self.kernel == "precomputed":
-        #         # X is K_train: (n,n)
-        #         K_train = torch.as_tensor(X_np, dtype=torch.double)
-        #         if K_train.ndim != 2 or K_train.shape[0] != K_train.shape[1]:
-        #             raise ValueError("For kernel='precomputed', X must be a square (n,n) kernel matrix.")
-        #         kernel_state = {}
-        #         self.X_fit_ = None
-        #     else:
-        #         K_train, kernel_state = self._compute_K_train(X_train_t)
-        #         self.X_fit_ = X_np  # store original training features (CPU)
-
-        #     # backend expects torch.Tensor inputs (it validates this in cvksvm/cvkdwd) :contentReference[oaicite:5]{index=5}
-        #     K_train = K_train.to(dev)
-        #     y_backend = y_train_t.to(dev)
-        #     ulam_backend = ulam_t.to(dev)
-        #     foldid_backend = foldid_t.to(dev)
-
-        #     if self._BACKEND == "svm":
-        #         backend = cvksvm(
-        #             Kmat=K_train,
-        #             y=y_backend,
-        #             nlam=nlam,
-        #             ulam=ulam_backend,
-        #             foldid=foldid_backend,
-        #             nfolds=int(self.nfolds),
-        #             eps=float(self.tol),
-        #             maxit=int(self.max_iter),
-        #             gamma=float(self.solver_gamma),
-        #             is_exact=int(self.is_exact),
-        #             device=dev,
-        #         )
-        #     elif self._BACKEND == "dwd":
-        #         backend = cvkdwd(
-        #             Kmat=K_train,
-        #             y=y_backend,
-        #             nlam=nlam,
-        #             ulam=ulam_backend,
-        #             foldid=foldid_backend,
-        #             nfolds=int(self.nfolds),
-        #             eps=float(self.tol),
-        #             maxit=int(self.max_iter),
-        #             gamma=float(self.solver_gamma),
-        #             device=dev,
-        #         )
-        #     elif self._BACKEND == "logit":
-        #         # cvklogit requires foldid in its signature
-        #         backend = cvklogit(
-        #             Kmat=K_train,
-        #             y=y_backend,
-        #             nlam=nlam,
-        #             ulam=ulam_backend,
-        #             foldid=foldid_backend,
-        #             nfolds=int(self.nfolds),
-        #             eps=float(self.tol),
-        #             maxit=int(self.max_iter),
-        #             gamma=float(self.solver_gamma),
-        #             device=dev,
-        #         )
-        #     else:
-        #         raise ValueError(f"Unknown backend {self._BACKEND}")
         backend = self._make_backend(
             low_rank=self.low_rank,
             dev=dev,
@@ -412,12 +307,6 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             else:
                 self.alpmat_path_ = None
                 self.pred_path_ = None
-        # if self.store_path:
-        #     self.alpmat_path_ = backend.alpmat.detach().cpu()
-        #     self.pred_path_ = backend.pred.detach().cpu()
-        # else:
-        #     self.alpmat_path_ = None
-        #     self.pred_path_ = None
         
         self.platt_ = None
         self.platt_scores_ = None
@@ -428,21 +317,13 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             platt_dev = _pick_device_str(self.platt_device if self.platt_device is not None else dev)
             self._platt_device_ = platt_dev
 
-            # Scores used to fit the calibrator
             oof_scores = backend.pred[:, best_ind].detach().to(torch.double).to(platt_dev)
             y_platt = y_train_t.detach().to(torch.double).to(platt_dev)
 
             self.platt_ = PlattScalerTorch(device=platt_dev).fit(oof_scores, y_platt)
 
-            # Store CPU copies for plotting/debugging
             self.platt_scores_ = oof_scores.detach().cpu().numpy()
             self.platt_y_ = np.asarray(y_np).copy()
-        # optional Platt scaling (uses raw decision values; your class expects that)
-        # self.platt_ = None
-        # if self.probability:
-        #     platt_dev = _pick_device_str(self.platt_device)
-        #     oof_scores = backend.pred[:, best_ind].detach().cpu().to(torch.double)
-        #     self.platt_ = PlattScalerTorch(device=platt_dev).fit(oof_scores, y_train_t)
 
         # free big GPU kernel tensor ASAP
         del backend
@@ -499,7 +380,6 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
 
         scores = self.decision_function(X)
 
-        # Use the same device as the fitted Platt scaler
         platt_device = getattr(self, "_platt_device_", "cpu")
         scores_t = torch.as_tensor(scores, dtype=torch.double, device=platt_device)
 
@@ -507,17 +387,6 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             proba_t = self.platt_.predict_proba(scores_t)
 
         return proba_t.detach().cpu().numpy()
-
-    # def predict_proba(self, X: Any) -> np.ndarray:
-    #     check_is_fitted(self, ["alpha_", "intercept_", "classes_"])
-    #     if self.platt_ is None:
-    #         raise AttributeError(
-    #             "probability=False (or Platt not fitted). Initialize with probability=True to enable predict_proba."
-    #         )
-    #     scores = self.decision_function(X)
-    #     with torch.no_grad():
-    #         proba_t = self.platt_.predict_proba(torch.as_tensor(scores, dtype=torch.double))
-    #     return proba_t.detach().cpu().numpy()
 
     def platt_plot(
         self,

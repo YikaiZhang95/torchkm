@@ -1,7 +1,4 @@
 import torch
-import os
-import numpy
-import time
 
 from .functions import *
 
@@ -88,8 +85,8 @@ class cvkqr:
 
     Examples
     --------
-    >>> from torchsvm.cvkqr import cvkqr
-    >>> from torchsvm.functions import *
+    >>> from torchkm.cvkqr import cvkqr
+    >>> from torchkm.functions import *
     >>> import torch
     >>> import numpy
     >>> nn = 1000 # Number of samples
