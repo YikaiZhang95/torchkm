@@ -1,7 +1,4 @@
 import torch
-import os
-import numpy
-import time
 
 from .functions import *
 
@@ -79,8 +76,8 @@ class cvkdwd:
 
     Examples
     --------
-    >>> from torchsvm.cvkdwd import cvkdwd
-    >>> from torchsvm.functions import *
+    >>> from torchkm.cvkdwd import cvkdwd
+    >>> from torchkm.functions import *
     >>> import torch
     >>> import numpy
     >>> nn = 1000 # Number of samples

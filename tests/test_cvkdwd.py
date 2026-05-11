@@ -1,8 +1,6 @@
 import unittest
 import torch
-import os
 import numpy
-import time
 from torchkm.cvkdwd import cvkdwd
 from torchkm.functions import *
 
@@ -38,7 +36,8 @@ class Testcvkdwd(unittest.TestCase):
             # foldid = torch.tensor(np.random.permutation(np.repeat(np.arange(1, nfolds + 1), nn // nfolds + 1)[:nn]))
             foldid = torch.randperm(nn) % nfolds + 1
 
-        model1 = cvkdwd(Kmat=Kmat, y=y_train, nlam=nlam, ulam=ulam, foldid=foldid, nfolds=nfolds, eps=1e-5, maxit=100000, gamma=1e-8, device='cuda')
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        model1 = cvkdwd(Kmat=Kmat, y=y_train, nlam=nlam, ulam=ulam, foldid=foldid, nfolds=nfolds, eps=1e-5, maxit=100000, gamma=1e-8, device=device)
         model1.fit()
 
         cv_mis = model1.cv(model1.pred, y_train).numpy()
