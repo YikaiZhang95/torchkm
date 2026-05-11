@@ -1,7 +1,5 @@
 import torch
 
-__version__ = "4.1.0"
-
 def data_gen(nn, nm, pp, p1, p2, mu, ro, sdn=None, means=None):
     """
     Generate synthetic data with positive and negative centers.
