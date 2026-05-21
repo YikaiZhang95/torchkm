@@ -124,7 +124,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         Cs: Optional[Any] = None,
         C_max: float = 1e3,
         C_min: float = 1e-3,
-        nfolds: int = 5,
+        cv: int = 5,
         foldid: Optional[Any] = None,
         tol: float = 1e-5,
         max_iter: int = 1000,
@@ -153,7 +153,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         self.Cs = Cs
         self.C_max = C_max
         self.C_min = C_min
-        self.nfolds = nfolds
+        self.cv = cv
         self.foldid = foldid
         self.tol = tol
         self.max_iter = max_iter
@@ -242,7 +242,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         # folds (int64 on CPU, backend will move to device)
         foldid_t = _make_foldid(
             n=X_np.shape[0],
-            nfolds=self.nfolds,
+            nfolds=self.cv,
             foldid=self.foldid,
             random_state=self.random_state,
         )
@@ -673,7 +673,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 nlam=nlam,
                 ulam=ulam_backend,
                 foldid=foldid_backend,
-                nfolds=int(self.nfolds),
+                nfolds=int(self.cv),
                 eps=float(self.tol),
                 maxit=int(self.max_iter),
                 gamma=float(self.solver_gamma),
@@ -701,7 +701,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 nlam=nlam,
                 ulam=ulam_backend,
                 foldid=foldid_backend,
-                nfolds=int(self.nfolds),
+                nfolds=int(self.cv),
                 eps=float(self.tol),
                 maxit=int(self.max_iter),
                 gamma=float(self.solver_gamma),
@@ -716,7 +716,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 nlam=nlam,
                 ulam=ulam_backend,
                 foldid=foldid_backend,
-                nfolds=int(self.nfolds),
+                nfolds=int(self.cv),
                 eps=float(self.tol),
                 maxit=int(self.max_iter),
                 gamma=float(self.solver_gamma),
@@ -730,7 +730,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 nlam=nlam,
                 ulam=ulam_backend,
                 foldid=foldid_backend,
-                nfolds=int(self.nfolds),
+                nfolds=int(self.cv),
                 eps=float(self.tol),
                 maxit=int(self.max_iter),
                 gamma=float(self.solver_gamma),
