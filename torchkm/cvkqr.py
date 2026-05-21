@@ -425,7 +425,6 @@ class cvkqr:
                                     )
                                     int_new = golden_s[0]
                                     obj_value_new = golden_s[1]
-                                    print(obj_value_new, obj_value)
                                     if obj_value_new < obj_value:
                                         dif_step[0] = dif_step[0] + int_new - alptmp[0]
                                         alptmp[0] = int_new
