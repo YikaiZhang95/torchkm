@@ -27,13 +27,13 @@ def test_pipeline_fit_predict(probability):
 
     X, y = _toy_data(n_samples=120, random_state=0)
 
-    # Keep runtime small: small nC, small nfolds
+    # Keep runtime small: small nC, small cv
     clf = make_pipeline(
         StandardScaler(),
         TorchKMSVC(
             kernel="rbf",
             nC=5,
-            nfolds=3,
+            cv=3,
             device="cpu",
             random_state=123,
             max_iter=80,
@@ -55,7 +55,7 @@ def test_clone_works():
     est = TorchKMSVC(
         kernel="rbf",
         nC=3,
-        nfolds=3,
+        cv=3,
         device="cpu",
         random_state=7,
         max_iter=60,
@@ -77,7 +77,7 @@ def test_decision_function_shape():
     est = TorchKMSVC(
         kernel="rbf",
         nC=3,
-        nfolds=3,
+        cv=3,
         device="cpu",
         random_state=0,
         max_iter=60,
@@ -95,7 +95,7 @@ def test_predict_proba_sums_to_one():
     est = TorchKMSVC(
         kernel="rbf",
         nC=5,
-        nfolds=3,
+        cv=3,
         device="cpu",
         random_state=0,
         max_iter=80,
@@ -114,7 +114,7 @@ def test_random_state_deterministic_folds():
     est1 = TorchKMSVC(
         kernel="rbf",
         nC=3,
-        nfolds=5,
+        cv=5,
         device="cpu",
         random_state=999,
         max_iter=60,
@@ -124,7 +124,7 @@ def test_random_state_deterministic_folds():
     est2 = TorchKMSVC(
         kernel="rbf",
         nC=3,
-        nfolds=5,
+        cv=5,
         device="cpu",
         random_state=999,
         max_iter=60,
@@ -139,7 +139,7 @@ def test_random_state_deterministic_folds():
     est3 = TorchKMSVC(
         kernel="rbf",
         nC=3,
-        nfolds=5,
+        cv=5,
         device="cpu",
         random_state=1000,
         max_iter=60,
