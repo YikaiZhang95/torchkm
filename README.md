@@ -45,7 +45,7 @@ pytest -q
 
 ## Quickstart
 
-### sklearn-style wrapper (recommended)
+### sklearn-style estimators
 
 ```python
 import numpy as np
@@ -106,7 +106,7 @@ clf.fit(Xtr, ytr)
 
 ## What TorchKM provides
 
-### High-level wrappers
+### sklearn-style estimators
 
 - `TorchKMSVC` — kernel SVM classifier
 - `TorchKMDWD` — kernel DWD classifier
