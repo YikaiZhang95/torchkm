@@ -125,6 +125,7 @@ Common methods:
 - `cvksvm` — kernel SVM with cross-validation over `λ`
 - `cvkdwd` — kernel DWD with cross-validation over `λ`
 - `cvklogit` — kernel logistic regression with cross-validation over `λ`
+- `cvkqr` — kernel quantile regression with cross-validation over `λ`
 
 ### Utilities
 
