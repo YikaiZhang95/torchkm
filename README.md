@@ -5,7 +5,7 @@
 ![License](https://img.shields.io/github/license/YikaiZhang95/torchkm)
 ![GitHub Release](https://img.shields.io/github/v/release/YikaiZhang95/torchkm)
 
-**TorchKM** is a PyTorch-based library for **kernel machines** with a focus on fast **train + tune** workflows.
+**TorchKM** is a PyTorch-based library for **kernel machines** including kernel SVM with a focus on fast and integrated **train + tune** workflows. 
 
 It currently provides:
 
