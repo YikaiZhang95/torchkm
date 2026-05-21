@@ -70,7 +70,7 @@ clf = TorchKMSVC(
     kernel="rbf",
     nC=len(Cs),
     Cs=Cs,
-    nfolds=nfolds,
+    cv=nfolds,
     device='cuda',
     probability=True,
     max_iter=200,
@@ -94,7 +94,7 @@ clf = TorchKMSVC(
     num_landmarks=500,
     nys_k=250,
     nC=20,
-    nfolds=5,
+    cv=5,
     device='cuda',
     probability=True,
     platt_device='cuda',
@@ -174,7 +174,7 @@ If you use TorchKM in academic work, please cite:
 ```bibtex
 @article{zhang2026torchkm,
   title   = {TorchKM: GPU-Accelerated Kernel Machines with Fast Model Selection in PyTorch},
-  author  = {Zhang, Yikai and Jia, Gaoxiang and Wang, Boxiang},
+  author  = {Zhang, Yikai and Jia, Gaoxiang and Ding, Jie and Wang, Boxiang},
   journal = {Journal of Machine Learning Research (MLOSS track)},
   year    = {2026},
   note    = {Software paper submission}
