@@ -1,9 +1,7 @@
 import torch
-import os
-import numpy
-import time
 
 from .functions import *
+
 
 class cvkqr:
     """
@@ -26,12 +24,12 @@ class cvkqr:
 
     ulam : ndarray or tensor
         User-specified regularization parameters, of shape (nlam,).
-    
+
     tau : tensor
         A user-supplied tau value for a quantile level.
 
     foldid : ndarray, default=None
-        Array indicating the fold assignment for cross-validation. Each element is an 
+        Array indicating the fold assignment for cross-validation. Each element is an
         integer corresponding to a fold.
 
     nfolds : int, default=5
@@ -44,7 +42,7 @@ class cvkqr:
         Maximum number of iterations allowed for the optimization process.
 
     gamma : float, default=1.0
-        Regularization parameter for kernel methods, controlling the trade-off between 
+        Regularization parameter for kernel methods, controlling the trade-off between
         margin width and misclassification.
 
     is_exact : int, default=0
@@ -88,8 +86,8 @@ class cvkqr:
 
     Examples
     --------
-    >>> from torchsvm.cvkqr import cvkqr
-    >>> from torchsvm.functions import *
+    >>> from torchkm.cvkqr import cvkqr
+    >>> from torchkm.functions import *
     >>> import torch
     >>> import numpy
     >>> nn = 1000 # Number of samples
@@ -124,7 +122,22 @@ class cvkqr:
     >>> model.fit()
     """
 
-    def __init__(self, Kmat, y, nlam, ulam, tau, eps=1e-5, maxit=1000, gamma=1.0, is_exact=0, delta_len=4, mproj=2, KKTeps=1e-3, device='cuda'):
+    def __init__(
+        self,
+        Kmat,
+        y,
+        nlam,
+        ulam,
+        tau,
+        eps=1e-5,
+        maxit=1000,
+        gamma=1.0,
+        is_exact=0,
+        delta_len=4,
+        mproj=2,
+        KKTeps=1e-3,
+        device="cuda",
+    ):
         self.device = device
         self.nobs = Kmat.shape[0]
 
@@ -142,7 +155,7 @@ class cvkqr:
         # --- Check ulam ---
         if not isinstance(ulam, torch.Tensor):
             raise TypeError("ulam must be a torch.Tensor")
-        ulam = ulam.double().to(self.device)   
+        ulam = ulam.double().to(self.device)
 
         # --- Shape check ---
         if Kmat.shape[0] != Kmat.shape[1]:
@@ -151,7 +164,7 @@ class cvkqr:
             raise ValueError("Kmat and y size mismatch")
         # self.Kmat = None
         # self.y = None
-        
+
         self.nlam = nlam
         self.ulam = ulam.double()
         self.tau = tau
@@ -165,10 +178,14 @@ class cvkqr:
         self.nmaxit = self.nlam * self.maxit
 
         # Initialize outputs
-        self.alpmat = torch.zeros((self.nobs + 1, self.nlam), dtype=torch.double).to(self.device)
+        self.alpmat = torch.zeros((self.nobs + 1, self.nlam), dtype=torch.double).to(
+            self.device
+        )
         self.anlam = 0
         self.npass = torch.zeros(self.nlam, dtype=torch.int32).to(self.device)
-        self.pred = torch.zeros((self.nobs, self.nlam), dtype=torch.double).to(self.device)
+        self.pred = torch.zeros((self.nobs, self.nlam), dtype=torch.double).to(
+            self.device
+        )
         self.jerr = 0
 
     def fit(self):
@@ -194,7 +211,7 @@ class cvkqr:
         Umat = Umat.double().to(self.device)
         Kmat = Kmat.double().to(self.device)
         eigens += self.gamma
-        Usum = torch.sum(Umat, dim = 0)
+        Usum = torch.sum(Umat, dim=0)
         einv = 1 / eigens
         # eU = torch.mm(torch.diag(einv), Umat.T)
         eU = (einv * Umat).T
@@ -202,12 +219,19 @@ class cvkqr:
         r = y
         vareps = 1.0e-8
 
-        lpUsum = torch.zeros((nobs, self.delta_len), dtype=torch.double, device=self.device)
-        lpinv = torch.zeros((nobs, self.delta_len), dtype=torch.double, device=self.device)
-        svec = torch.zeros((nobs, self.delta_len), dtype=torch.double, device=self.device)
-        vvec = torch.zeros((nobs, self.delta_len), dtype=torch.double, device=self.device)
+        lpUsum = torch.zeros(
+            (nobs, self.delta_len), dtype=torch.double, device=self.device
+        )
+        lpinv = torch.zeros(
+            (nobs, self.delta_len), dtype=torch.double, device=self.device
+        )
+        svec = torch.zeros(
+            (nobs, self.delta_len), dtype=torch.double, device=self.device
+        )
+        vvec = torch.zeros(
+            (nobs, self.delta_len), dtype=torch.double, device=self.device
+        )
         gval = torch.zeros((self.delta_len), dtype=torch.double, device=self.device)
-
 
         for l in range(nlam):
             # start = time.time()
@@ -221,40 +245,58 @@ class cvkqr:
                 delta_id += 1
 
                 if delta_id > delta_save:
-                    lpinv[:, delta_id - 1] = 1.0 / (eigens + 2.0 * float(nobs) * delta * al)
+                    lpinv[:, delta_id - 1] = 1.0 / (
+                        eigens + 2.0 * float(nobs) * delta * al
+                    )
                     lpUsum[:, delta_id - 1] = lpinv[:, delta_id - 1] * Usum
-                    vvec[:, delta_id - 1] = torch.mv(Umat, eigens * lpUsum[:, delta_id - 1])
+                    vvec[:, delta_id - 1] = torch.mv(
+                        Umat, eigens * lpUsum[:, delta_id - 1]
+                    )
                     svec[:, delta_id - 1] = torch.mv(Umat, lpUsum[:, delta_id - 1])
-                    gval[delta_id - 1] = 1.0 / (nobs + 4.0 * nobs * delta * vareps - vvec[:, delta_id - 1].sum())
+                    gval[delta_id - 1] = 1.0 / (
+                        nobs + 4.0 * nobs * delta * vareps - vvec[:, delta_id - 1].sum()
+                    )
                     delta_save = delta_id
 
                 # Compute residual r
-                dif_step = torch.zeros((nobs + 1), dtype=torch.double, device=self.device)
+                dif_step = torch.zeros(
+                    (nobs + 1), dtype=torch.double, device=self.device
+                )
                 told = 1.0
                 # ka = torch.mv(Kmat, alpvec[1:])
                 # r = y - (alpvec[0] + ka)
                 # Update alpha
-                #alpha loop
+                # alpha loop
                 for iteration in range(self.maxit):
-                    zvec = torch.where(r < - delta, -(tau - 1.0), torch.where(r > delta, -tau, - r / (2.0 * delta) - tau + 0.50))
-                    gamvec = zvec + float(nobs) * al * alpvec[1:]##
+                    zvec = torch.where(
+                        r < -delta,
+                        -(tau - 1.0),
+                        torch.where(r > delta, -tau, -r / (2.0 * delta) - tau + 0.50),
+                    )
+                    gamvec = zvec + float(nobs) * al * alpvec[1:]  ##
                     rds = zvec.sum() + 2.0 * nobs * vareps * alpvec[0]
                     hval = rds - torch.dot(vvec[:, delta_id - 1], gamvec)
 
-                    tnew = 0.5 + 0.5 * torch.sqrt(torch.tensor(1.0, device=self.device) + 4.0 * told * told)
+                    tnew = 0.5 + 0.5 * torch.sqrt(
+                        torch.tensor(1.0, device=self.device) + 4.0 * told * told
+                    )
                     mul = 1.0 + (told - 1.0) / tnew
                     told = tnew.item()
-                    
+
                     # Update step using Pinv
                     if delta_id > self.delta_len:
                         print("Exceeded maximum delta_id")
                         break
-                    
+
                     # Compute dif vector
-                    
+
                     # dif_step = torch.zeros((nobs + 1), dtype=torch.double, device=self.device)
                     dif_step[0] = -2.0 * mul * delta * gval[delta_id - 1] * hval
-                    dif_step[1:] = -dif_step[0] * svec[:, delta_id - 1] - 2.0 * mul * delta * torch.mv(Umat, gamvec @ Umat * lpinv[:, delta_id - 1])
+                    dif_step[1:] = -dif_step[0] * svec[
+                        :, delta_id - 1
+                    ] - 2.0 * mul * delta * torch.mv(
+                        Umat, gamvec @ Umat * lpinv[:, delta_id - 1]
+                    )
                     alpvec += dif_step
                     # Update residual
                     ka = torch.mv(Kmat, alpvec[1:])
@@ -263,10 +305,9 @@ class cvkqr:
                     # print("##################################")
                     # print(torch.max(dif_step ** 2), self.eps * mul * mul)
                     # Check convergence
-                    if torch.max(dif_step ** 2).item() < (self.eps * mul * mul):
+                    if torch.max(dif_step**2).item() < (self.eps * mul * mul):
                         # print("break the loop")
                         break
-
 
                     if torch.sum(npass).item() > self.maxit:
                         jerr = -l - 1
@@ -276,22 +317,26 @@ class cvkqr:
                 dif_step = oldalpvec - alpvec
                 ka = torch.mv(Kmat, alpvec[1:])
                 aka = torch.dot(ka, alpvec[1:])
-                if self.device == 'cuda':
-                    ka_cpu = ka.to('cpu')
-                    aka_cpu = aka.to('cpu')
-                    y_cpu = y.to('cpu')
-                    alpvec0_cpu = alpvec[0].to('cpu')
+                if self.device == "cuda":
+                    ka_cpu = ka.to("cpu")
+                    aka_cpu = aka.to("cpu")
+                    y_cpu = y.to("cpu")
+                    alpvec0_cpu = alpvec[0].to("cpu")
                 else:
                     ka_cpu = ka
                     aka_cpu = aka
                     y_cpu = y
                     alpvec0_cpu = alpvec[0]
 
-                obj_value = self.objfun(alpvec0_cpu, aka_cpu, ka_cpu, y_cpu, al, nobs, tau, 1e-9)
+                obj_value = self.objfun(
+                    alpvec0_cpu, aka_cpu, ka_cpu, y_cpu, al, nobs, tau, 1e-9
+                )
                 # eps_float64 = np.finfo(np.float64).eps
                 # optimal_intercept = minimize_scalar(self.objfun, args=(aka, ka, y, al, nobs), bracket=(-100.0, 100.0), method="brent")
                 # obj_value_new = self.objfun(optimal_intercept.x, aka, ka, y, al, nobs)
-                golden_s = self.golden_section_search(-100.0, 100.0, nobs, ka_cpu, aka_cpu, y_cpu, al, tau, 1e-9)
+                golden_s = self.golden_section_search(
+                    -100.0, 100.0, nobs, ka_cpu, aka_cpu, y_cpu, al, tau, 1e-9
+                )
                 int_new = golden_s[0]
                 obj_value_new = golden_s[1]
                 if obj_value_new < obj_value:
@@ -301,21 +346,25 @@ class cvkqr:
 
                 oldalpvec = alpvec.clone()
 
-                zvec = torch.where(r <= - 1e-9, -(tau - 1.0), torch.where(r >= 1e-9, -tau, - r / (2.0 * 1e-9) - tau + 0.5))
+                zvec = torch.where(
+                    r <= -1e-9,
+                    -(tau - 1.0),
+                    torch.where(r >= 1e-9, -tau, -r / (2.0 * 1e-9) - tau + 0.5),
+                )
                 cvec = torch.zeros((nobs + 1), dtype=torch.double, device=self.device)
                 dvec = torch.zeros((nobs + 1), dtype=torch.double, device=self.device)
                 cvec[0] = zvec.sum()
-                cvec[1:] = torch.mv(Kmat,zvec)
+                cvec[1:] = torch.mv(Kmat, zvec)
                 dvec[0] = 2 * vareps * alpvec[0]
                 dvec[1:] = al * torch.mv(Kmat, alpvec[1:])
                 KKT = cvec / float(nobs) + dvec
                 uo = max(al, 1.0)
-                KKT_norm = torch.sum(KKT ** 2) / (uo ** 2)
+                KKT_norm = torch.sum(KKT**2) / (uo**2)
                 # print("#######################")
                 # print(KKT_norm)
                 if KKT_norm.item() < self.KKTeps:
                     # Check convergence
-                    dif_norm = torch.max(dif_step ** 2)
+                    dif_norm = torch.max(dif_step**2)
                     if dif_norm.item() < float(nobs) * (self.eps * mul * mul):
                         if self.is_exact == 0:
                             break
@@ -338,24 +387,42 @@ class cvkqr:
                                 for _ in range(self.maxit):
                                     ka = torch.mv(Kmat, alptmp[1:])
                                     aKa = torch.dot(ka, alptmp[1:])
-                                    if self.device == 'cuda':
-                                        ka_cpu = ka.to('cpu')
-                                        aka_cpu = aka.to('cpu')
-                                        y_cpu = y.to('cpu')
-                                        alptmp0_cpu = alptmp[0].to('cpu')
+                                    if self.device == "cuda":
+                                        ka_cpu = ka.to("cpu")
+                                        aka_cpu = aka.to("cpu")
+                                        y_cpu = y.to("cpu")
+                                        alptmp0_cpu = alptmp[0].to("cpu")
                                     else:
                                         ka_cpu = ka
                                         aka_cpu = aka
                                         y_cpu = y
                                         alptmp0_cpu = alptmp[0]
 
-                                    obj_value = self.objfun(alptmp0_cpu, aka_cpu, ka_cpu, y_cpu, al, nobs, tau, 1e-9)
+                                    obj_value = self.objfun(
+                                        alptmp0_cpu,
+                                        aka_cpu,
+                                        ka_cpu,
+                                        y_cpu,
+                                        al,
+                                        nobs,
+                                        tau,
+                                        1e-9,
+                                    )
 
-                                    
                                     # Optimize intercept
                                     # optimal_intercept = minimize_scalar(self.objfun, args=(aka, ka, y, al, nobs), bracket=(-100.0, 100.0), method = 'brent')
                                     # obj_value_new = self.objfun(optimal_intercept.x, aka, ka, y, al, nobs)
-                                    golden_s = self.golden_section_search(-100.0, 100.0, nobs, ka_cpu, aka_cpu, y_cpu, al, tau, 1e-9)
+                                    golden_s = self.golden_section_search(
+                                        -100.0,
+                                        100.0,
+                                        nobs,
+                                        ka_cpu,
+                                        aka_cpu,
+                                        y_cpu,
+                                        al,
+                                        tau,
+                                        1e-9,
+                                    )
                                     int_new = golden_s[0]
                                     obj_value_new = golden_s[1]
                                     print(obj_value_new, obj_value)
@@ -364,20 +431,39 @@ class cvkqr:
                                         alptmp[0] = int_new
 
                                     r = y - (alptmp[0] + ka)
-                                    zvec = torch.where(r < -delta, -(tau - 1.0), torch.where(r > delta, -tau, - r / (2.0 * delta) - tau + 0.5))
-                                    gamvec = zvec + float(nobs) * al * alptmp[1:]##
+                                    zvec = torch.where(
+                                        r < -delta,
+                                        -(tau - 1.0),
+                                        torch.where(
+                                            r > delta,
+                                            -tau,
+                                            -r / (2.0 * delta) - tau + 0.5,
+                                        ),
+                                    )
+                                    gamvec = zvec + float(nobs) * al * alptmp[1:]  ##
                                     rds = zvec.sum() + 2.0 * nobs * vareps * alptmp[0]
-                                    hval = rds - torch.dot(vvec[:, delta_id - 1], gamvec)
+                                    hval = rds - torch.dot(
+                                        vvec[:, delta_id - 1], gamvec
+                                    )
 
-                                    tnew = 0.5 + 0.5 * torch.sqrt(torch.tensor(1.0, device=self.device) + 4.0 * told * told)
+                                    tnew = 0.5 + 0.5 * torch.sqrt(
+                                        torch.tensor(1.0, device=self.device)
+                                        + 4.0 * told * told
+                                    )
                                     mul = 1.0 + (told - 1.0) / tnew
                                     told = tnew.item()
-                                        
+
                                     # Compute dif vector
-                                    
+
                                     # dif_step = torch.zeros((nobs + 1), dtype=torch.double, device=self.device)
-                                    dif_step[0] = -2.0 * mul * delta * gval[delta_id - 1] * hval
-                                    dif_step[1:] = -dif_step[0] * svec[:, delta_id - 1] - 2.0 * mul * delta * torch.mv(Umat, gamvec @ Umat * lpinv[:, delta_id - 1])
+                                    dif_step[0] = (
+                                        -2.0 * mul * delta * gval[delta_id - 1] * hval
+                                    )
+                                    dif_step[1:] = -dif_step[0] * svec[
+                                        :, delta_id - 1
+                                    ] - 2.0 * mul * delta * torch.mv(
+                                        Umat, gamvec @ Umat * lpinv[:, delta_id - 1]
+                                    )
                                     alptmp += dif_step
 
                                     ka = torch.mv(Kmat, alptmp[1:])
@@ -392,9 +478,9 @@ class cvkqr:
 
                                     dif_step = dif_step + alptmp - alp_old
                                     r = y - (alptmp[0] + torch.mv(Kmat, alptmp[1:]))
-                                    mdd = torch.max(dif_step ** 2)
+                                    mdd = torch.max(dif_step**2)
                                     # Check convergence
-                                    if mdd < self.eps * mul ** 2:
+                                    if mdd < self.eps * mul**2:
                                         break
                                     elif mdd > nobs and npass[l] > 2:
                                         is_exit = True
@@ -406,15 +492,21 @@ class cvkqr:
                             # Check KKT condition
                             if is_exit:
                                 break
-                            zvec = torch.where(r < -1e-9, -(tau-1.0), torch.where(r > 1e-9, -tau, - r / (2.0 * 1e-9) - tau + 0.5))
+                            zvec = torch.where(
+                                r < -1e-9,
+                                -(tau - 1.0),
+                                torch.where(
+                                    r > 1e-9, -tau, -r / (2.0 * 1e-9) - tau + 0.5
+                                ),
+                            )
                             cvec[0] = zvec.sum()
-                            cvec[1:] = torch.mv(Kmat,zvec)
+                            cvec[1:] = torch.mv(Kmat, zvec)
                             dvec[0] = 2 * vareps * alpvec[0]
                             dvec[1:] = al * torch.mv(Kmat, alpvec[1:])
                             KKT = cvec / float(nobs) + dvec
                             uo = max(al, 1.0)
 
-                            if torch.sum(KKT ** 2) / (uo ** 2) < self.KKTeps:
+                            if torch.sum(KKT**2) / (uo**2) < self.KKTeps:
                                 alpvec = alptmp.clone()
                                 break
                 # else:
@@ -434,14 +526,14 @@ class cvkqr:
                 self.jerr = -l - 1
                 break
             # print(f'Single fitting:{time.time() - start}')
-            
+
             self.anlam = l
 
         self.alpmat = alpmat
         self.npass = npass
         self.jerr = jerr
         self.pred = pred
-        
+
     def cross_validate(self, foldid=None, nfolds=5):
         """
         Perform K-fold cross-validation using the quantile check loss.
@@ -465,8 +557,12 @@ class cvkqr:
             if nfolds is None:
                 raise ValueError("nfolds must be provided when foldid is None")
             if nfolds <= 1 or nfolds > nobs:
-                raise ValueError("nfolds must be between 2 and the number of observations")
-            foldid = torch.arange(nobs, device=self.Kmat.device, dtype=torch.long) % nfolds
+                raise ValueError(
+                    "nfolds must be between 2 and the number of observations"
+                )
+            foldid = (
+                torch.arange(nobs, device=self.Kmat.device, dtype=torch.long) % nfolds
+            )
         else:
             if not isinstance(foldid, torch.Tensor):
                 foldid = torch.as_tensor(foldid, dtype=torch.long)
@@ -496,7 +592,9 @@ class cvkqr:
             val_mask = foldid == fold
             train_mask = ~val_mask
             if torch.sum(val_mask) == 0 or torch.sum(train_mask) == 0:
-                raise ValueError("Each fold must have at least one training and one validation sample")
+                raise ValueError(
+                    "Each fold must have at least one training and one validation sample"
+                )
 
             train_idx = torch.nonzero(train_mask, as_tuple=False).flatten()
             val_idx = torch.nonzero(val_mask, as_tuple=False).flatten()
@@ -541,7 +639,7 @@ class cvkqr:
         self.cv_best_lambda = self.ulam[best_index]
 
         return cv_scores, best_index
-    
+
     def predict(self, Kmat_new, y_new, alp_b):
         result = torch.mv(Kmat_new, alp_b[1:]) + alp_b[0]
         return result
@@ -549,18 +647,17 @@ class cvkqr:
     def obj_value(self, alp_b, lam_b):
         intcpt = alp_b[0]
         alp = alp_b[1:]
-        Kmat = self.Kmat.double().to('cpu')
+        Kmat = self.Kmat.double().to("cpu")
         ka = torch.mv(Kmat, alp)
         aka = torch.dot(alp, ka)
-        y_train = self.y.to('cpu')
+        y_train = self.y.to("cpu")
         obj = self.objfun(intcpt, aka, ka, y_train, lam_b, self.nobs, tau, delta)
         return obj
-    
+
     def check_loss(u, tau):
         # quantile check loss: ρ_τ(u) = u * (τ - 1(u < 0))
         return torch.where(u >= 0, tau * u, (tau - 1) * u)
 
-        
     def objfun(self, intcpt, aka, ka, y, lam, nobs, tau, delta):
         """
         Compute the objective function value for SVM.
@@ -586,14 +683,12 @@ class cvkqr:
         # smoothed quantile loss with torch.where
         ttau = tau - 1.0
         xi = torch.where(
-            xi_tmp <= - delta,
+            xi_tmp <= -delta,
             xi_tmp * ttau,
             torch.where(
                 xi_tmp >= delta,
                 xi_tmp * tau,
-                xi_tmp**2 / (4.0 * delta)
-                + (tau - 0.5) * xi_tmp
-                + delta / 4.0,
+                xi_tmp**2 / (4.0 * delta) + (tau - 0.5) * xi_tmp + delta / 4.0,
             ),
         )
 
@@ -620,7 +715,7 @@ class cvkqr:
         - fx (float): Objective function value at the optimized intercept.
         """
         eps = torch.tensor(torch.finfo(torch.float64).eps)
-        tol = eps ** 0.25
+        tol = eps**0.25
         tol1 = eps + 1.0
         eps = torch.sqrt(eps)
 
@@ -679,7 +774,7 @@ class cvkqr:
                 if (u - a < t2) or (b - u < t2):
                     d = tol1
                     if x >= xm:
-                        d = - d
+                        d = -d
 
             # Set the new point u
             u = x + d if abs(d) >= tol1 else (x + tol1 if d > 0 else x - tol1)
@@ -713,6 +808,5 @@ class cvkqr:
         # Return the optimal intercept and the objective value
         lhat = x
         res = self.objfun(x, aka, ka, y, lam, nobs, tau, delta)
-
 
         return lhat, res
