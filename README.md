@@ -9,15 +9,15 @@
 
 It currently provides:
 
-- **Kernel classification:** kernel SVM, kernel DWD, and kernel logistic regression
+- **Kernel classification:** kernel SVM, kernel DWD, kernel logistic regression, and kernel quantile regression
 - **Fast model selection:** pathwise solutions over a grid of regularization values (`λ`)
-- **Exact LOOCV support for kernel SVM**
+- **Exact cross-validation for kernel machines**
 - **GPU acceleration** via PyTorch/CUDA, with safe CPU fallback
 - A **scikit-learn–style API** for easy integration into existing Python workflows
 
 ## Why TorchKM?
 
-Kernel methods are still a strong choice when you want nonlinear decision boundaries, convex training objectives, and competitive performance on tabular or moderate-scale datasets. In practice, the bottleneck is often not training one model — it is training **and tuning many models**.
+Kernel methods are competitive supervised learning methods on tabular data. In practice, the bottleneck is often not training one model — it is training **and tuning many models**.
 
 TorchKM is built for that workflow.
 ## Installation
