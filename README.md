@@ -4,6 +4,8 @@
 ![Python](https://img.shields.io/pypi/pyversions/torchkm)
 ![License](https://img.shields.io/github/license/YikaiZhang95/torchkm)
 ![GitHub Release](https://img.shields.io/github/v/release/YikaiZhang95/torchkm)
+[![tests](https://github.com/YikaiZhang95/torchkm/actions/workflows/tests.yml/badge.svg)](https://github.com/YikaiZhang95/torchkm/actions/workflows/tests.yml)
+[![docs](https://github.com/YikaiZhang95/torchkm/actions/workflows/docs.yml/badge.svg)](https://github.com/YikaiZhang95/torchkm/actions/workflows/docs.yml)
 
 **TorchKM** is a GPU-accelerated PyTorch-based library for **kernel machines** including kernel SVM with a focus on fast and integrated **train + tune** workflows.
 
@@ -24,7 +26,7 @@ TorchKM is built for that an integrated training and tuning pipeline. Benchmarks
 
 ## Documentation
 
-Full documentation, examples, API reference, benchmark-reproduction notes, and developer guides will be available at:
+Full documentation, examples, API reference, benchmark-reproduction notes, and developer guides are available at:
 
 https://yikaizhang95.github.io/torchkm/
 
@@ -36,18 +38,15 @@ https://yikaizhang95.github.io/torchkm/
 pip install torchkm
 ```
 
-### Install the scikit-learn wrapper
-
-```bash
-pip install "torchkm[sklearn]"
-```
+The default installation includes the high-level scikit-learn-style estimator
+API used in the examples.
 
 ### Development install
 
 ```bash
 git clone https://github.com/YikaiZhang95/torchkm.git
 cd torchkm
-pip install -e ".[dev,sklearn]"
+pip install -e ".[dev,examples,viz]"
 pytest -q
 ```
 
@@ -71,15 +70,13 @@ y = np.where(y == 0, -1, 1)
 
 Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, random_state=0)
 
-nfolds = 5
 Cs = np.logspace(2, -2, num=4)
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 clf = TorchKMSVC(
     kernel="rbf",
-    nC=len(Cs),
     Cs=Cs,
-    cv=nfolds,
+    cv=5,
     device=device,
     probability=True,
     max_iter=40,
@@ -92,9 +89,12 @@ print("test accuracy:", (clf.predict(Xte) == yte).mean())
 print("first 3 probabilities:\n", clf.predict_proba(Xte[:3]))
 ```
 
+Set `probability=True` to enable Platt scaling and `predict_proba`.
+
 ### Low-rank approximation
 
-Use `low_rank=True` when you want to handle a larger data set.
+Use `low_rank=True` when you want to handle a larger data set. The recommended
+scikit-learn-style API sets this in the constructor:
 
 ```python
 clf = TorchKMSVC(
@@ -111,6 +111,14 @@ clf = TorchKMSVC(
 
 clf.fit(Xtr, ytr)
 (clf.predict(Xte) == yte).mean()
+```
+
+For convenience, low-rank Nyström fitting can also be enabled at fit time:
+`clf.fit(X, y, low_rank=True)`.
+
+```python
+clf = TorchKMSVC(kernel="rbf", Cs=Cs, cv=5, device=device, probability=True)
+clf.fit(Xtr, ytr, low_rank=True, num_landmarks=40, nys_k=20)
 ```
 
 ### Kernel quantile regression

@@ -117,5 +117,13 @@ clf = TorchKMSVC(
 clf.fit(Xtr, ytr)
 ```
 
+Constructor-based configuration is recommended, but short examples may also
+enable the Nyström path at fit time:
+
+```python
+clf = TorchKMSVC(kernel="rbf", Cs=Cs, cv=5, device=device, probability=True)
+clf.fit(Xtr, ytr, low_rank=True, num_landmarks=40, nys_k=20)
+```
+
 The high-level low-rank path currently supports raw-feature RBF workflows. It
 does not support `kernel="precomputed"`.

@@ -24,8 +24,8 @@ try:
 except Exception as e:
     raise ImportError(
         "torchkm.estimators requires scikit-learn.\n"
-        "Install it via: pip install scikit-learn\n"
-        "or (recommended) add an extra and do: pip install torchkm[sklearn]"
+        "Install TorchKM with its standard dependencies, or install scikit-learn "
+        "directly with: pip install scikit-learn"
     ) from e
 
 
@@ -164,6 +164,50 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         self.num_landmarks = num_landmarks
         self.nys_k = nys_k
 
+    def _apply_fit_low_rank_options(
+        self,
+        low_rank: Optional[bool],
+        num_landmarks: Optional[int],
+        nys_k: Optional[int],
+    ) -> None:
+        if low_rank is not None:
+            self.low_rank = bool(low_rank)
+        if num_landmarks is not None:
+            self.num_landmarks = int(num_landmarks)
+        if nys_k is not None:
+            self.nys_k = int(nys_k)
+
+    def _clear_fit_state(self) -> None:
+        fitted_attrs = (
+            "classes_",
+            "y_fit_original_",
+            "n_features_in_",
+            "foldid_",
+            "X_fit_",
+            "kernel_state_",
+            "_device_str_",
+            "intercept_",
+            "alpha_",
+            "best_ind_",
+            "best_C_",
+            "cv_mis_",
+            "n_samples_fit_",
+            "_low_rank_backend_",
+            "low_rank_basis_dim_",
+            "low_rank_landmark_indices_",
+            "num_landmarks_",
+            "nys_k_",
+            "alpmat_path_",
+            "pred_path_",
+            "platt_",
+            "platt_scores_",
+            "platt_y_",
+            "_platt_device_",
+        )
+        for attr in fitted_attrs:
+            if hasattr(self, attr):
+                delattr(self, attr)
+
     def _compute_K_train(self, X_t: torch.Tensor) -> Tuple[torch.Tensor, dict]:
         """
         Compute training kernel matrix K(X,X).
@@ -206,7 +250,18 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
 
         raise ValueError(f"Unsupported kernel={self.kernel} for non-precomputed mode.")
 
-    def fit(self, X: Any, y: Any):
+    def fit(
+        self,
+        X: Any,
+        y: Any,
+        *,
+        low_rank: Optional[bool] = None,
+        num_landmarks: Optional[int] = None,
+        nys_k: Optional[int] = None,
+    ):
+        self._apply_fit_low_rank_options(low_rank, num_landmarks, nys_k)
+        self._clear_fit_state()
+
         X_np, y_np = check_X_y(
             _as_numpy(X), _as_numpy(y), accept_sparse=False, ensure_2d=True
         )
@@ -632,6 +687,15 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 "low_rank=True currently supports only kernel='rbf', because cvknyssvm "
                 "internally uses an RBF Nyström map."
             )
+        if self.rbf_sigma is not None:
+            raise ValueError(
+                "low_rank=True with the binary classifier backends does not support "
+                "rbf_sigma; leave rbf_sigma=None so the Nyström backend estimates it."
+            )
+        if int(self.num_landmarks) < 1:
+            raise ValueError("num_landmarks must be positive.")
+        if int(self.nys_k) < 1:
+            raise ValueError("nys_k must be positive.")
 
     def _make_backend(
         self,
@@ -670,12 +734,6 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 k=int(self.nys_k),
                 device=dev,
             )
-
-            # Optional: only keep these if your nys classes support them
-            if self.rbf_sigma is not None:
-                kwargs["sigma"] = float(self.rbf_sigma)
-            if self.random_state is not None:
-                kwargs["random_state"] = int(self.random_state)
 
             return backend_cls(**kwargs)
 
@@ -957,6 +1015,44 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
         self.num_landmarks = num_landmarks
         self.nys_k = nys_k
 
+    def _apply_fit_low_rank_options(
+        self,
+        low_rank: Optional[bool],
+        num_landmarks: Optional[int],
+        nys_k: Optional[int],
+    ) -> None:
+        if low_rank is not None:
+            self.low_rank = bool(low_rank)
+        if num_landmarks is not None:
+            self.num_landmarks = int(num_landmarks)
+        if nys_k is not None:
+            self.nys_k = int(nys_k)
+
+    def _clear_fit_state(self) -> None:
+        fitted_attrs = (
+            "n_features_in_",
+            "n_samples_fit_",
+            "tau_",
+            "_device_str_",
+            "foldid_",
+            "X_fit_",
+            "kernel_state_",
+            "intercept_",
+            "alpha_",
+            "best_ind_",
+            "best_C_",
+            "cv_loss_",
+            "_low_rank_backend_",
+            "low_rank_landmark_indices_",
+            "num_landmarks_",
+            "nys_k_",
+            "alpmat_path_",
+            "pred_path_",
+        )
+        for attr in fitted_attrs:
+            if hasattr(self, attr):
+                delattr(self, attr)
+
     def _compute_K_train(self, X_t: torch.Tensor) -> Tuple[torch.Tensor, dict]:
         if self.kernel == "rbf":
             sigma = self.rbf_sigma
@@ -1052,7 +1148,18 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
             device=device,
         )
 
-    def fit(self, X: Any, y: Any):
+    def fit(
+        self,
+        X: Any,
+        y: Any,
+        *,
+        low_rank: Optional[bool] = None,
+        num_landmarks: Optional[int] = None,
+        nys_k: Optional[int] = None,
+    ):
+        self._apply_fit_low_rank_options(low_rank, num_landmarks, nys_k)
+        self._clear_fit_state()
+
         tau = float(self.tau)
         if not 0.0 < tau < 1.0:
             raise ValueError("tau must be in (0, 1).")
