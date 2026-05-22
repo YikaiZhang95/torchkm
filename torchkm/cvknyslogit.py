@@ -23,13 +23,16 @@ class cvknyslogit:
         device="cuda",
     ):
         self.device = device
-        self.nobs = Xmat.shape[0]
 
         # --- Check Xmat ---
         if not isinstance(Xmat, torch.Tensor):
             raise TypeError("Xmat must be a torch.Tensor")
         Xmat = Xmat.double().to(self.device)
         self.Xmat = Xmat
+        self.nobs = Xmat.shape[0]
+
+        if not isinstance(X_test, torch.Tensor):
+            raise TypeError("X_test must be a torch.Tensor")
 
         if not isinstance(y, torch.Tensor):
             raise TypeError("y must be a torch.Tensor")

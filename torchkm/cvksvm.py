@@ -143,13 +143,13 @@ class cvksvm:
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = torch.device(device)
-        self.nobs = Kmat.shape[0]
 
         # --- Check Kmat ---
         if not isinstance(Kmat, torch.Tensor):
             raise TypeError("Kmat must be a torch.Tensor")
         Kmat = Kmat.double().to(self.device)
         self.Kmat = Kmat
+        self.nobs = Kmat.shape[0]
 
         if not isinstance(y, torch.Tensor):
             raise TypeError("y must be a torch.Tensor")
