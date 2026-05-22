@@ -11,14 +11,16 @@ from .functions import sigest, rbf_kernel as rbf_kernel_train, kernelMult
 from .cvksvm import cvksvm
 from .cvkdwd import cvkdwd
 from .cvklogit import cvklogit
+from .cvkqr import cvkqr
 from .platt import PlattScalerTorch
 from .cvknyssvm import cvknyssvm
 from .cvknysdwd import cvknysdwd
 from .cvknyslogit import cvknyslogit
+from .cvknysqr import cvknysqr
 
 # ---- sklearn is OPTIONAL: raise a clean error only when wrapper is imported ----
 try:
-    from sklearn.base import BaseEstimator, ClassifierMixin
+    from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
     from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
 except Exception as e:
     raise ImportError(
@@ -42,10 +44,6 @@ def _as_numpy(X: Any) -> np.ndarray:
 
 
 def _pick_device_str(device: Optional[Union[str, torch.device]]) -> str:
-    """
-    Return exactly 'cuda' or 'cpu' to stay compatible with your current
-    internal checks like `if self.device == "cuda": ...` in cvksvm.py.
-    """
     if device is None:
         return "cuda" if torch.cuda.is_available() else "cpu"
     if isinstance(device, torch.device):
@@ -55,10 +53,6 @@ def _pick_device_str(device: Optional[Union[str, torch.device]]) -> str:
 
 
 def _make_ulam(nC: int, Cs: Optional[Any], C_max: float, C_min: float) -> torch.Tensor:
-    """
-    torch.logspace uses base-10 exponents.
-    Default matches your docs: torch.logspace(3, -3, steps=nlam). :contentReference[oaicite:2]{index=2}
-    """
     if Cs is not None:
         u = torch.as_tensor(_as_numpy(Cs), dtype=torch.double)
         if u.ndim != 1:
@@ -72,9 +66,6 @@ def _make_ulam(nC: int, Cs: Optional[Any], C_max: float, C_min: float) -> torch.
 def _make_foldid(
     n: int, nfolds: int, foldid: Optional[Any], random_state: Optional[int]
 ) -> torch.Tensor:
-    """
-    Your internal generators use fold IDs in {1,...,nfolds}. We follow that.
-    """
     if foldid is not None:
         f = torch.as_tensor(_as_numpy(foldid)).reshape(-1)
         if f.numel() != n:
@@ -108,11 +99,6 @@ def _check_binary_y(y: np.ndarray) -> Tuple[np.ndarray, Any, Any]:
 class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
     """
     Common sklearn wrapper for your torchkm large-margin *binary* classifiers.
-
-    Notes:
-    - Supports kernels: rbf / linear / poly / precomputed.
-    - Uses your pathwise solver (nC Cs) and selects best C by CV
-      using your built-in `model.cv(model.pred, y)` routine. :contentReference[oaicite:3]{index=3}
     """
 
     _BACKEND: BackendName = "svm"
@@ -185,7 +171,6 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         if self.kernel == "rbf":
             sigma = self.rbf_sigma
             if sigma is None:
-                # your sigest returns a float gamma-like parameter :contentReference[oaicite:4]{index=4}
                 sigma = float(sigest(X_t, frac=float(self.sigest_frac)))
             K = rbf_kernel_train(X_t, sigma)
             return K, {"sigma": sigma}
@@ -294,7 +279,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         )
         backend.fit()
 
-        # CV selection: backend.cv expects y on CPU shape (n,) :contentReference[oaicite:6]{index=6}
+        # CV selection: backend.cv expects y on CPU shape (n,)
         cv_mis_t = backend.cv(backend.pred, y_train_t)  # returns tensor length nlam
         cv_mis = cv_mis_t.detach().cpu().numpy()
         best_ind = int(np.argmin(cv_mis))
@@ -741,18 +726,366 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
 
 
 class TorchKMSVC(_TorchKMBaseBinaryClassifier):
-    """sklearn-style wrapper for torchkm.cvksvm. :contentReference[oaicite:7]{index=7}"""
+    """sklearn-style wrapper for torchkm.cvksvm."""
 
     _BACKEND: BackendName = "svm"
 
 
 class TorchKMDWD(_TorchKMBaseBinaryClassifier):
-    """sklearn-style wrapper for torchkm.cvkdwd. :contentReference[oaicite:8]{index=8}"""
+    """sklearn-style wrapper for torchkm.cvkdwd."""
 
     _BACKEND: BackendName = "dwd"
 
 
 class TorchKMLogit(_TorchKMBaseBinaryClassifier):
-    """sklearn-style wrapper for torchkm.cvklogit. :contentReference[oaicite:9]{index=9}"""
+    """sklearn-style wrapper for torchkm.cvklogit."""
 
     _BACKEND: BackendName = "logit"
+
+
+class TorchKMKQR(BaseEstimator, RegressorMixin):
+    """sklearn-style wrapper for torchkm.cvkqr (kernel quantile regression).
+
+    Notes
+    -----
+    - Continuous regression target; no class label remapping.
+    - Selects best lambda along the path using the check-loss CV score
+      returned by ``cvkqr.cv(pred, y)``.
+    - Supports kernels: rbf / linear / poly / precomputed.
+    """
+
+    def __init__(
+        self,
+        kernel: KernelName = "rbf",
+        nC: int = 50,
+        Cs: Optional[Any] = None,
+        C_max: float = 1e3,
+        C_min: float = 1e-3,
+        cv: int = 5,
+        foldid: Optional[Any] = None,
+        tau: float = 0.5,
+        tol: float = 1e-5,
+        max_iter: int = 1000,
+        solver_gamma: float = 1e-8,
+        is_exact: int = 0,
+        delta_len: int = 4,
+        mproj: int = 2,
+        KKTeps: float = 1e-3,
+        KKTeps2: float = 1e-3,
+        device: Optional[Union[str, torch.device]] = None,
+        rbf_sigma: Optional[float] = None,
+        sigest_frac: float = 0.5,
+        poly_degree: int = 3,
+        poly_coef0: float = 1.0,
+        poly_gamma: float = 1.0,
+        random_state: Optional[int] = None,
+        store_path: bool = False,
+    ):
+        self.kernel = kernel
+        self.nC = nC
+        self.Cs = Cs
+        self.C_max = C_max
+        self.C_min = C_min
+        self.cv = cv
+        self.foldid = foldid
+        self.tau = tau
+        self.tol = tol
+        self.max_iter = max_iter
+        self.solver_gamma = solver_gamma
+        self.is_exact = is_exact
+        self.delta_len = delta_len
+        self.mproj = mproj
+        self.KKTeps = KKTeps
+        self.KKTeps2 = KKTeps2
+        self.device = device
+        self.rbf_sigma = rbf_sigma
+        self.sigest_frac = sigest_frac
+        self.poly_degree = poly_degree
+        self.poly_coef0 = poly_coef0
+        self.poly_gamma = poly_gamma
+        self.random_state = random_state
+        self.store_path = store_path
+
+    def _compute_K_train(self, X_t: torch.Tensor) -> Tuple[torch.Tensor, dict]:
+        if self.kernel == "rbf":
+            sigma = self.rbf_sigma
+            if sigma is None:
+                sigma = float(sigest(X_t, frac=float(self.sigest_frac)))
+            return rbf_kernel_train(X_t, sigma), {"sigma": sigma}
+        if self.kernel == "linear":
+            return X_t @ X_t.T, {}
+        if self.kernel == "poly":
+            K = (self.poly_gamma * (X_t @ X_t.T) + self.poly_coef0) ** self.poly_degree
+            return K, {}
+        raise ValueError(f"Unsupported kernel={self.kernel} for non-precomputed mode.")
+
+    def _compute_K_test(
+        self, X_test_t: torch.Tensor, X_train_t: torch.Tensor, kernel_state: dict
+    ) -> torch.Tensor:
+        if self.kernel == "rbf":
+            return kernelMult(X_test_t, X_train_t, float(kernel_state["sigma"]))
+        if self.kernel == "linear":
+            return X_test_t @ X_train_t.T
+        if self.kernel == "poly":
+            return (
+                self.poly_gamma * (X_test_t @ X_train_t.T) + self.poly_coef0
+            ) ** self.poly_degree
+        raise ValueError(f"Unsupported kernel={self.kernel} for non-precomputed mode.")
+
+    def fit(self, X: Any, y: Any):
+        X_np, y_np = check_X_y(
+            _as_numpy(X), _as_numpy(y), accept_sparse=False, ensure_2d=True, y_numeric=True
+        )
+        self.n_features_in_ = X_np.shape[1]
+
+        dev = _pick_device_str(self.device)
+        self._device_str_ = dev
+
+        uC_t = _make_ulam(self.nC, self.Cs, self.C_max, self.C_min)
+        ulam_t = 1.0 / (2 * X_np.shape[0] * uC_t)
+        nlam = int(ulam_t.numel())
+
+        foldid_t = _make_foldid(
+            n=X_np.shape[0],
+            nfolds=self.cv,
+            foldid=self.foldid,
+            random_state=self.random_state,
+        )
+        self.foldid_ = foldid_t.detach().cpu().to(torch.int64).numpy()
+
+        X_train_t = torch.as_tensor(X_np, dtype=torch.double)
+        y_train_t = torch.as_tensor(y_np, dtype=torch.double)
+
+        ulam_backend = ulam_t.to(dev)
+        foldid_backend = foldid_t.to(dev)
+        y_backend = y_train_t.to(dev)
+
+        if self.kernel == "precomputed":
+            K_train = torch.as_tensor(X_np, dtype=torch.double)
+            if K_train.ndim != 2 or K_train.shape[0] != K_train.shape[1]:
+                raise ValueError(
+                    "For kernel='precomputed', X must be a square (n,n) kernel matrix."
+                )
+            self.X_fit_ = None
+            self.kernel_state_ = {}
+        else:
+            K_train, kernel_state = self._compute_K_train(X_train_t)
+            self.X_fit_ = X_np
+            self.kernel_state_ = kernel_state
+        K_train = K_train.to(dev)
+
+        backend = cvkqr(
+            Kmat=K_train,
+            y=y_backend,
+            nlam=nlam,
+            ulam=ulam_backend,
+            tau=float(self.tau),
+            foldid=foldid_backend,
+            nfolds=int(self.cv),
+            eps=float(self.tol),
+            maxit=int(self.max_iter),
+            gamma=float(self.solver_gamma),
+            is_exact=int(self.is_exact),
+            delta_len=int(self.delta_len),
+            mproj=int(self.mproj),
+            KKTeps=float(self.KKTeps),
+            KKTeps2=float(self.KKTeps2),
+            device=dev,
+        )
+        backend.fit()
+
+        cv_loss_t = backend.cv(backend.pred, y_train_t.to(backend.pred.device))
+        cv_loss = cv_loss_t.detach().cpu().numpy()
+        best_ind = int(np.nanargmin(cv_loss))
+
+        alpvec = backend.alpmat[:, best_ind].detach().cpu().to(torch.double)
+        self.intercept_ = float(alpvec[0].item())
+        self.alpha_ = alpvec[1:].numpy()
+        self.best_ind_ = best_ind
+        self.best_C_ = float(
+            1.0 / (2.0 * backend.ulam[best_ind].detach().cpu().item() * X_np.shape[0])
+        )
+        self.cv_loss_ = cv_loss
+        self.n_samples_fit_ = int(X_np.shape[0])
+
+        if self.store_path:
+            self.alpmat_path_ = backend.alpmat.detach().cpu()
+            self.pred_path_ = backend.pred.detach().cpu()
+        else:
+            self.alpmat_path_ = None
+            self.pred_path_ = None
+
+        del backend
+        return self
+
+    def predict(self, X: Any) -> np.ndarray:
+        check_is_fitted(self, ["alpha_", "intercept_"])
+        X_np = check_array(_as_numpy(X), accept_sparse=False, ensure_2d=True)
+        dev = getattr(self, "_device_str_", "cpu")
+
+        alpha_t = torch.as_tensor(self.alpha_, dtype=torch.double, device=dev)
+        b = float(self.intercept_)
+
+        if self.kernel == "precomputed":
+            K_test = torch.as_tensor(X_np, dtype=torch.double, device=dev)
+            if K_test.ndim != 2 or K_test.shape[1] != self.n_samples_fit_:
+                raise ValueError(
+                    f"For kernel='precomputed', X must have shape (n_test, {self.n_samples_fit_})."
+                )
+        else:
+            X_train_t = torch.as_tensor(self.X_fit_, dtype=torch.double)
+            X_test_t = torch.as_tensor(X_np, dtype=torch.double)
+            K_test = self._compute_K_test(X_test_t, X_train_t, self.kernel_state_).to(dev)
+
+        with torch.no_grad():
+            scores = torch.mv(K_test, alpha_t) + b
+        return scores.detach().cpu().numpy()
+
+class TorchKMNysKQR(BaseEstimator, RegressorMixin):
+    """sklearn-style wrapper for torchkm.cvknysqr (Nyström kernel quantile regression).
+    Uses a low-rank Nyström feature map in place of the full n×n kernel matrix,
+    making it suitable for large-scale problems.
+    Notes
+    -----
+    - Continuous regression target; no class label remapping.
+    - Selects best lambda along the path using the check-loss CV score.
+    - Does not support kernel='precomputed'; raw features required.
+    """
+
+    def __init__(
+        self,
+        nC: int = 50,
+        Cs: Optional[Any] = None,
+        C_max: float = 1e3,
+        C_min: float = 1e-3,
+        cv: int = 5,
+        foldid: Optional[Any] = None,
+        tau: float = 0.5,
+        tol: float = 1e-5,
+        max_iter: int = 1000,
+        solver_gamma: float = 1.0,
+        is_exact: int = 0,
+        delta_len: int = 4,
+        mproj: int = 2,
+        KKTeps: float = 1e-3,
+        KKTeps2: float = 1e-3,
+        num_landmarks: int = 2000,
+        k: int = 1000,
+        device: Optional[Union[str, torch.device]] = None,
+        random_state: Optional[int] = None,
+        store_path: bool = False,
+    ):
+        self.nC = nC
+        self.Cs = Cs
+        self.C_max = C_max
+        self.C_min = C_min
+        self.cv = cv
+        self.foldid = foldid
+        self.tau = tau
+        self.tol = tol
+        self.max_iter = max_iter
+        self.solver_gamma = solver_gamma
+        self.is_exact = is_exact
+        self.delta_len = delta_len
+        self.mproj = mproj
+        self.KKTeps = KKTeps
+        self.KKTeps2 = KKTeps2
+        self.num_landmarks = num_landmarks
+        self.k = k
+        self.device = device
+        self.random_state = random_state
+        self.store_path = store_path
+
+    def fit(self, X: Any, y: Any):
+        X_np, y_np = check_X_y(
+            _as_numpy(X), _as_numpy(y), accept_sparse=False, ensure_2d=True, y_numeric=True
+        )
+        self.n_features_in_ = X_np.shape[1]
+
+        dev = _pick_device_str(self.device)
+        self._device_str_ = dev
+
+        uC_t = _make_ulam(self.nC, self.Cs, self.C_max, self.C_min)
+        ulam_t = 1.0 / (2 * X_np.shape[0] * uC_t)
+        nlam = int(ulam_t.numel())
+
+        if self.random_state is not None:
+            torch.manual_seed(int(self.random_state))
+
+        foldid_t = _make_foldid(
+            n=X_np.shape[0],
+            nfolds=self.cv,
+            foldid=self.foldid,
+            random_state=self.random_state,
+        )
+        self.foldid_ = foldid_t.detach().cpu().to(torch.int64).numpy()
+
+        X_train_t = torch.as_tensor(X_np, dtype=torch.double)
+        y_train_t = torch.as_tensor(y_np, dtype=torch.double)
+
+        ulam_backend = ulam_t.to(dev)
+        foldid_backend = foldid_t.to(dev)
+        y_backend = y_train_t.to(dev)
+
+        backend = cvknysqr(
+            Xmat=X_train_t,
+            X_test=X_train_t,
+            y=y_backend,
+            nlam=nlam,
+            ulam=ulam_backend,
+            tau=float(self.tau),
+            foldid=foldid_backend,
+            nfolds=int(self.cv),
+            eps=float(self.tol),
+            maxit=int(self.max_iter),
+            gamma=float(self.solver_gamma),
+            is_exact=int(self.is_exact),
+            delta_len=int(self.delta_len),
+            mproj=int(self.mproj),
+            KKTeps=float(self.KKTeps),
+            KKTeps2=float(self.KKTeps2),
+            num_landmarks=int(self.num_landmarks),
+            k=int(self.k),
+            device=dev,
+        )
+        backend.fit()
+
+        cv_loss_t = backend.cv(backend.pred, y_train_t.to(backend.pred.device))
+        cv_loss = cv_loss_t.detach().cpu().numpy()
+        best_ind = int(np.nanargmin(cv_loss))
+
+        alpvec = backend.alpmat[:, best_ind].detach().cpu().to(torch.double)
+        self.intercept_ = float(alpvec[0].item())
+        self.alpha_ = alpvec[1:].numpy()
+        self.best_ind_ = best_ind
+        self.best_C_ = float(
+            1.0 / (2.0 * backend.ulam[best_ind].detach().cpu().item() * X_np.shape[0])
+        )
+        self.cv_loss_ = cv_loss
+        self.n_samples_fit_ = int(X_np.shape[0])
+
+        self._backend_ = backend
+        self.X_fit_ = X_np
+
+        if self.store_path:
+            self.alpmat_path_ = backend.alpmat.detach().cpu()
+            self.pred_path_ = backend.pred.detach().cpu()
+        else:
+            self.alpmat_path_ = None
+            self.pred_path_ = None
+
+        return self
+
+    def predict(self, X: Any) -> np.ndarray:
+        check_is_fitted(self, ["alpha_", "intercept_", "_backend_"])
+        X_np = check_array(_as_numpy(X), accept_sparse=False, ensure_2d=True)
+        dev = getattr(self, "_device_str_", "cpu")
+
+        alpha_t = torch.as_tensor(self.alpha_, dtype=torch.double, device=dev)
+        b = float(self.intercept_)
+
+        X_test_t = torch.as_tensor(X_np, dtype=torch.double)
+        with torch.no_grad():
+            Z_test = self._backend_.transform(X_test_t)
+            scores = torch.mv(Z_test, alpha_t) + b
+        return scores.detach().cpu().numpy()
