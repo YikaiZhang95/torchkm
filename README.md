@@ -5,11 +5,12 @@
 ![License](https://img.shields.io/github/license/YikaiZhang95/torchkm)
 ![GitHub Release](https://img.shields.io/github/v/release/YikaiZhang95/torchkm)
 
-**TorchKM** is a GPU-accelerated PyTorch-based library for **kernel machines** including kernel SVM with a focus on fast and integrated **train + tune** workflows. 
+**TorchKM** is a GPU-accelerated PyTorch-based library for **kernel machines** including kernel SVM with a focus on fast and integrated **train + tune** workflows.
 
 It currently provides:
 
-- **Kernel classification:** kernel SVM, kernel DWD, kernel logistic regression, and kernel quantile regression
+- **Kernel classification:** kernel SVM, kernel DWD, and kernel logistic regression
+- **Kernel regression:** kernel quantile regression
 - **Fast model selection:** pathwise solutions over a grid of regularization values (`λ`)
 - **Exact cross-validation for kernel machines**
 - **GPU acceleration** via PyTorch/CUDA, with safe CPU fallback
@@ -20,6 +21,14 @@ It currently provides:
 Kernel methods are competitive supervised learning methods on tabular data. In practice, the bottleneck is often not training one model — it is training **and tuning many models**.
 
 TorchKM is built for that workflow.
+
+## Documentation
+
+Full documentation, examples, API reference, benchmark-reproduction notes, and
+developer guides will be available at:
+
+https://yikaizhang95.github.io/torchkm/
+
 ## Installation
 
 ### Minimal install
@@ -57,47 +66,48 @@ from sklearn.preprocessing import StandardScaler
 from torchkm.estimators import TorchKMSVC
 
 # Toy nonlinear classification task
-X, y = make_circles(n_samples=1200, factor=0.4, noise=0.08, random_state=0)
+X, y = make_circles(n_samples=120, factor=0.4, noise=0.08, random_state=0)
 X = StandardScaler().fit_transform(X)
-y = np.where(y == 0, -1, 1)   # TorchKM accepts {-1, +1} labels
+y = np.where(y == 0, -1, 1)
 
 Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, random_state=0)
 
 nfolds = 5
-Cs = np.logspace(3, -3, num=12)
+Cs = np.logspace(2, -2, num=4)
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 clf = TorchKMSVC(
     kernel="rbf",
     nC=len(Cs),
     Cs=Cs,
     cv=nfolds,
-    device='cuda',
+    device=device,
     probability=True,
-    max_iter=200,
+    max_iter=40,
 )
 
 clf.fit(Xtr, ytr)
 
-print("best lambda:", clf.best_C_)
+print("best C:", clf.best_C_)
 print("test accuracy:", (clf.predict(Xte) == yte).mean())
 print("first 3 probabilities:\n", clf.predict_proba(Xte[:3]))
 ```
 
 ### Low-rank approximation
 
-Use the `low_rank=True` when you want to handle a large data set.
+Use `low_rank=True` when you want to handle a larger data set.
 
 ```python
 clf = TorchKMSVC(
     kernel="rbf",
     low_rank=True,
-    num_landmarks=500,
-    nys_k=250,
-    nC=20,
+    num_landmarks=40,
+    nys_k=20,
+    nC=4,
     cv=5,
-    device='cuda',
+    device=device,
     probability=True,
-    platt_device='cuda',
+    max_iter=40,
 )
 
 clf.fit(Xtr, ytr)
@@ -111,7 +121,7 @@ clf.fit(Xtr, ytr)
 - `TorchKMSVC` — kernel SVM classifier
 - `TorchKMDWD` — kernel DWD classifier
 - `TorchKMLogit` — kernel logistic regression
-- `TorchKMQR` — kernel quantile regression
+- `TorchKMKQR` — kernel quantile regression
 
 Common methods:
 

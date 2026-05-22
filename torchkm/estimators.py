@@ -726,32 +726,223 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
 
 
 class TorchKMSVC(_TorchKMBaseBinaryClassifier):
-    """sklearn-style wrapper for torchkm.cvksvm."""
+    """Kernel support vector classifier with integrated model selection.
+
+    ``TorchKMSVC`` is the scikit-learn-style wrapper around
+    :class:`torchkm.cvksvm.cvksvm`. It builds a kernel matrix from feature
+    input, fits a path of candidate regularization values, selects ``best_C_``
+    by cross-validation, and exposes familiar prediction methods.
+
+    Parameters
+    ----------
+    kernel : {"rbf", "linear", "poly", "precomputed"}, default="rbf"
+        Kernel used by the estimator. ``"precomputed"`` expects a square
+        training kernel matrix in ``fit`` and a test-by-train kernel matrix in
+        ``decision_function`` or ``predict``.
+    nC : int, default=50
+        Number of candidate ``C`` values when ``Cs`` is not provided.
+    Cs : array-like, optional
+        Candidate regularization values under the scikit-learn/LIBSVM
+        ``C`` convention. Internally these are converted to solver
+        regularization values.
+    C_max, C_min : float, default=1e3, 1e-3
+        Endpoints for the log-spaced ``C`` grid used when ``Cs`` is omitted.
+    cv : int, default=5
+        Number of cross-validation folds used to choose ``best_C_``.
+    foldid : array-like, optional
+        Optional fold assignment of length ``n_samples``. Fold labels follow
+        the low-level solver convention and are typically in ``1, ..., cv``.
+    tol : float, default=1e-5
+        Solver convergence tolerance.
+    max_iter : int, default=1000
+        Maximum number of iterations used by the low-level solver.
+    solver_gamma : float, default=1e-8
+        Small numerical regularizer passed to the solver.
+    is_exact : int, default=0
+        Solver option used by the exact SVM backend.
+    device : {"cpu", "cuda"} or torch.device, optional
+        Device used for computation. If ``None``, CUDA is used when available;
+        otherwise CPU is used. Requests for CUDA fall back to CPU when CUDA is
+        unavailable.
+    rbf_sigma : float, optional
+        RBF kernel scale. If omitted, ``sigest`` estimates a scale from the
+        training data.
+    sigest_frac : float, default=0.5
+        Fraction passed to ``sigest`` when estimating the RBF scale.
+    poly_degree, poly_coef0, poly_gamma : int or float
+        Polynomial-kernel parameters.
+    probability : bool, default=False
+        If ``True``, fit a Platt scaler on the selected out-of-fold scores and
+        enable ``predict_proba`` and ``platt_plot``.
+    platt_device : {"cpu", "cuda"} or torch.device, optional
+        Device used for Platt calibration. Defaults to the estimator device.
+    random_state : int, optional
+        Seed used for deterministic fold construction.
+    store_path : bool, default=False
+        If ``True``, keep the full coefficient and out-of-fold prediction path.
+    low_rank : bool, default=False
+        If ``True``, use the Nyström SVM backend. The low-rank path currently
+        supports raw-feature RBF-kernel workflows, not ``kernel="precomputed"``.
+    num_landmarks : int, default=2000
+        Number of Nyström landmarks when ``low_rank=True``.
+    nys_k : int, default=1000
+        Rank used by the Nyström feature map when ``low_rank=True``.
+
+    Attributes
+    ----------
+    classes_ : ndarray of shape (2,)
+        Original binary class labels, ordered as negative then positive.
+    best_C_ : float
+        Regularization value selected by cross-validation.
+    best_ind_ : int
+        Index of the selected value in the candidate path.
+    cv_mis_ : ndarray of shape (nC,)
+        Cross-validation misclassification scores for the candidate path.
+    alpha_ : ndarray
+        Coefficients for the selected model.
+    intercept_ : float
+        Intercept for the selected model.
+    foldid_ : ndarray
+        Fold assignment used during fitting.
+    n_features_in_ : int
+        Number of input features seen during fitting.
+    n_samples_fit_ : int
+        Number of training samples.
+    kernel_state_ : dict
+        Kernel parameters needed for prediction, such as the fitted RBF scale.
+    low_rank_basis_dim_ : int
+        Effective low-rank feature dimension when ``low_rank=True``.
+    low_rank_landmark_indices_ : ndarray
+        Landmark indices when exposed by the Nyström backend.
+    num_landmarks_ : int
+        Number of landmarks used by the fitted Nyström backend, when available.
+    nys_k_ : int
+        Effective Nyström rank, when available.
+
+    Notes
+    -----
+    The high-level wrapper accepts any two distinct class labels and maps them
+    internally to the ``{-1, +1}`` convention used by the low-level solvers.
+    Predictions are mapped back to the original labels.
+
+    The methods ``decision_function`` and ``predict`` are available after
+    fitting. ``predict_proba`` and ``platt_plot`` require
+    ``probability=True`` at construction time.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import torch
+    >>> from sklearn.datasets import make_circles
+    >>> from sklearn.model_selection import train_test_split
+    >>> from sklearn.preprocessing import StandardScaler
+    >>> from torchkm.estimators import TorchKMSVC
+    >>> X, y = make_circles(n_samples=120, factor=0.4, noise=0.08,
+    ...                     random_state=0)
+    >>> X = StandardScaler().fit_transform(X)
+    >>> Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.25,
+    ...                                       random_state=0)
+    >>> Cs = np.logspace(2, -2, num=4)
+    >>> device = "cuda" if torch.cuda.is_available() else "cpu"
+    >>> clf = TorchKMSVC(kernel="rbf", Cs=Cs, nC=len(Cs), cv=5,
+    ...                  device=device, max_iter=40)
+    >>> clf.fit(Xtr, ytr)
+    TorchKMSVC(...)
+    >>> clf.best_C_ > 0
+    True
+    >>> clf.predict(Xte[:3]).shape
+    (3,)
+    """
 
     _BACKEND: BackendName = "svm"
 
 
 class TorchKMDWD(_TorchKMBaseBinaryClassifier):
-    """sklearn-style wrapper for torchkm.cvkdwd."""
+    """Kernel distance-weighted discrimination classifier.
+
+    ``TorchKMDWD`` uses the same scikit-learn-style interface and model
+    selection machinery as ``TorchKMSVC``, but delegates fitting to
+    :class:`torchkm.cvkdwd.cvkdwd`. It accepts binary labels, maps them to the
+    solver's ``{-1, +1}`` convention internally, and returns predictions in the
+    original label space.
+
+    Parameters are inherited from the shared binary-classifier wrapper. The
+    most common options are ``kernel``, ``Cs``/``nC``, ``cv``, ``device``,
+    ``probability``, ``low_rank``, ``num_landmarks``, and ``nys_k``.
+
+    Attributes include ``best_C_``, ``cv_mis_``, ``alpha_``, ``intercept_``,
+    ``classes_``, and ``foldid_`` after fitting. ``predict_proba`` and
+    ``platt_plot`` are available only when ``probability=True``.
+    """
 
     _BACKEND: BackendName = "dwd"
 
 
 class TorchKMLogit(_TorchKMBaseBinaryClassifier):
-    """sklearn-style wrapper for torchkm.cvklogit."""
+    """Kernel logistic-regression classifier.
+
+    ``TorchKMLogit`` wraps :class:`torchkm.cvklogit.cvklogit` with the same
+    estimator interface used by the other TorchKM binary classifiers. It fits
+    a path over candidate ``C`` values, chooses ``best_C_`` by cross-validation,
+    and supports CPU or CUDA execution through the ``device`` parameter.
+
+    The estimator accepts any two distinct class labels and maps them
+    internally to the low-level solver convention. Use ``decision_function`` for
+    fitted scores and ``predict`` for class labels. Set ``probability=True`` to
+    fit Platt calibration and enable ``predict_proba``.
+    """
 
     _BACKEND: BackendName = "logit"
 
 
 class TorchKMKQR(BaseEstimator, RegressorMixin):
-    """sklearn-style wrapper for torchkm.cvkqr (kernel quantile regression).
+    """Kernel quantile regressor with integrated model selection.
+
+    ``TorchKMKQR`` delegates fitting to :class:`torchkm.cvkqr.cvkqr`. It fits
+    kernel quantile regression for a continuous response, selects ``best_C_``
+    by cross-validation check loss, and exposes predictions through
+    ``predict``.
+
+    Parameters
+    ----------
+    kernel : {"rbf", "linear", "poly", "precomputed"}, default="rbf"
+        Kernel used by the estimator. ``"precomputed"`` expects a square
+        training kernel matrix in ``fit`` and a test-by-train kernel matrix in
+        ``predict``.
+    nC : int, default=50
+        Number of candidate ``C`` values when ``Cs`` is not provided.
+    Cs : array-like, optional
+        Candidate regularization values under the scikit-learn/LIBSVM
+        ``C`` convention.
+    cv : int, default=5
+        Number of cross-validation folds used to choose ``best_C_``.
+    tau : float, default=0.5
+        Quantile level in ``(0, 1)``.
+    device : {"cpu", "cuda"} or torch.device, optional
+        Device used for computation. If ``None``, CUDA is used when available;
+        otherwise CPU is used.
+
+    Attributes
+    ----------
+    best_C_ : float
+        Regularization value selected by cross-validation.
+    best_ind_ : int
+        Index of the selected value in the candidate path.
+    cv_loss_ : ndarray of shape (nC,)
+        Cross-validation check-loss scores for the candidate path.
+    alpha_ : ndarray
+        Coefficients for the selected model.
+    intercept_ : float
+        Intercept for the selected model.
+    foldid_ : ndarray
+        Fold assignment used during fitting.
+    n_features_in_ : int
+        Number of input features seen during fitting.
 
     Notes
     -----
-    - Continuous regression target; no class label remapping.
-    - Selects best lambda along the path using the check-loss CV score
-      returned by ``cvkqr.cv(pred, y)``.
-    - Supports kernels: rbf / linear / poly / precomputed.
+    ``TorchKMKQR`` uses continuous regression targets; there is no class-label
+    remapping. The lower-level solver uses check loss for cross-validation.
     """
 
     def __init__(
@@ -941,15 +1132,19 @@ class TorchKMKQR(BaseEstimator, RegressorMixin):
             scores = torch.mv(K_test, alpha_t) + b
         return scores.detach().cpu().numpy()
 
+
 class TorchKMNysKQR(BaseEstimator, RegressorMixin):
-    """sklearn-style wrapper for torchkm.cvknysqr (Nyström kernel quantile regression).
-    Uses a low-rank Nyström feature map in place of the full n×n kernel matrix,
-    making it suitable for large-scale problems.
+    """Nyström kernel quantile regressor.
+
+    ``TorchKMNysKQR`` delegates fitting to :class:`torchkm.cvknysqr.cvknysqr`
+    and uses a low-rank Nyström feature map instead of the full training kernel
+    matrix.
+
     Notes
     -----
-    - Continuous regression target; no class label remapping.
-    - Selects best lambda along the path using the check-loss CV score.
-    - Does not support kernel='precomputed'; raw features required.
+    This estimator expects raw feature input and does not support
+    ``kernel="precomputed"``. It uses continuous regression targets and selects
+    ``best_C_`` by cross-validation check loss.
     """
 
     def __init__(
