@@ -111,6 +111,7 @@ clf.fit(Xtr, ytr)
 - `TorchKMSVC` — kernel SVM classifier
 - `TorchKMDWD` — kernel DWD classifier
 - `TorchKMLogit` — kernel logistic regression
+- `TorchKMQR` — kernel quantile regression
 
 Common methods:
 
@@ -119,13 +120,6 @@ Common methods:
 - `predict(X)`
 - `predict_proba(X)` (when `probability=True`)
 - `platt_plot(X, y)`
-
-### Low-level solvers
-
-- `cvksvm` — kernel SVM with cross-validation over `λ`
-- `cvkdwd` — kernel DWD with cross-validation over `λ`
-- `cvklogit` — kernel logistic regression with cross-validation over `λ`
-- `cvkqr` — kernel quantile regression with cross-validation over `λ`
 
 ### Utilities
 
