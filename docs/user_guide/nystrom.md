@@ -6,11 +6,13 @@ TorchKM supports a Nyström approximation for larger problems. This provides a l
 
 ## Basic usage
 
+The recommended scikit-learn-style API sets the Nyström options in the
+constructor:
+
 ```python
 clf = TorchKMSVC(
     kernel="rbf",
     Cs=Cs,
-    nC=len(Cs),
     cv=5,
     device=device,
     low_rank=True,
@@ -20,6 +22,13 @@ clf = TorchKMSVC(
     probability=True,
 )
 clf.fit(Xtr, ytr)
+```
+
+For convenience, the same options can also be supplied at fit time:
+
+```python
+clf = TorchKMSVC(kernel="rbf", Cs=Cs, cv=5, device=device, probability=True)
+clf.fit(Xtr, ytr, low_rank=True, num_landmarks=40, nys_k=20)
 ```
 
 ## Important parameters

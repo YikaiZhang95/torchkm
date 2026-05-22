@@ -60,6 +60,10 @@ print("first predictions:", pred[:3])
 | `low_rank` | Use the Nyström approximation through `cvknyqr` |
 | `num_landmarks`, `nys_k` | Landmark count and Nyström rank when `low_rank=True` |
 
+Constructor-based low-rank configuration is recommended, but `TorchKMKQR.fit`
+also accepts `low_rank`, `num_landmarks`, and `nys_k` as keyword-only
+convenience arguments.
+
 ## Fitted attributes
 
 After fitting, useful attributes include:

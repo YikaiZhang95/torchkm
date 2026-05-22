@@ -19,10 +19,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -41,7 +41,7 @@ jobs:
       - name: Lint
         if: matrix.python-version == '3.11'
         run: |
-          python -m flake8 torchkm tests --max-line-length=88 --extend-ignore=E203,W503
+          python -m flake8 torchkm tests
 
       - name: Run tests with coverage
         run: |
@@ -58,7 +58,7 @@ jobs:
           mkdocs build --strict
 
       - name: Upload coverage artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: coverage-xml-${{ matrix.python-version }}
           path: coverage.xml

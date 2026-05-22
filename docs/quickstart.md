@@ -28,7 +28,6 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 clf = TorchKMSVC(
     kernel="rbf",
     Cs=Cs,
-    nC=len(Cs),
     cv=5,
     device=device,
     probability=True,
@@ -74,7 +73,6 @@ For larger data sets, use `low_rank=True`:
 clf = TorchKMSVC(
     kernel="rbf",
     Cs=Cs,
-    nC=len(Cs),
     cv=5,
     device=device,
     low_rank=True,
@@ -83,4 +81,12 @@ clf = TorchKMSVC(
     max_iter=40,
 )
 clf.fit(Xtr, ytr)
+```
+
+The constructor-based form is the recommended scikit-learn-style API. For
+convenience, low-rank Nyström fitting can also be enabled at fit time:
+
+```python
+clf = TorchKMSVC(kernel="rbf", Cs=Cs, cv=5, device=device, probability=True)
+clf.fit(Xtr, ytr, low_rank=True, num_landmarks=40, nys_k=20)
 ```

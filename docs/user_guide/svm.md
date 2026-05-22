@@ -88,7 +88,6 @@ To enable class probabilities, set `probability=True` before fitting:
 clf = TorchKMSVC(
     kernel="rbf",
     Cs=Cs,
-    nC=len(Cs),
     cv=5,
     device=device,
     probability=True,
@@ -106,7 +105,6 @@ For larger data sets, use the Nyström approximation:
 clf = TorchKMSVC(
     kernel="rbf",
     Cs=Cs,
-    nC=len(Cs),
     cv=5,
     device=device,
     low_rank=True,
@@ -115,6 +113,14 @@ clf = TorchKMSVC(
     max_iter=40,
 )
 clf.fit(Xtr, ytr)
+```
+
+Constructor-based configuration is recommended, but the Nyström path can also
+be enabled at fit time:
+
+```python
+clf = TorchKMSVC(kernel="rbf", Cs=Cs, cv=5, device=device, probability=True)
+clf.fit(Xtr, ytr, low_rank=True, num_landmarks=40, nys_k=20)
 ```
 
 The high-level low-rank path currently supports raw-feature RBF workflows. It
