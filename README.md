@@ -160,6 +160,7 @@ pytest -q
 ## Contributing
 
 Issues, bug reports, benchmarks, documentation improvements, and pull requests are welcome.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, pull request guidelines, and bug-report instructions.
 
 Good first contributions include:
 
@@ -190,5 +191,3 @@ MIT License. See `LICENSE`.
 
 Yikai Zhang  
 yikai-zhang@uiowa.edu
-
-
