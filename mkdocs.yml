@@ -1,0 +1,67 @@
+site_name: TorchKM
+site_description: Documentation for TorchKM, a PyTorch library for kernel machines.
+site_url: https://yikaizhang95.github.io/torchkm/
+repo_url: https://github.com/YikaiZhang95/torchkm
+repo_name: YikaiZhang95/torchkm
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.indexes
+    - content.code.copy
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths:
+            - .
+          options:
+            docstring_style: numpy
+            show_source: true
+            show_root_heading: true
+            show_root_full_path: false
+            inherited_members: true
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Quickstart: quickstart.md
+  - User Guide:
+      - Kernel SVM: user_guide/svm.md
+      - Distance-Weighted Discrimination: user_guide/dwd.md
+      - Kernel Logistic Regression: user_guide/logistic_regression.md
+      - Model Selection: user_guide/model_selection.md
+      - Nyström Approximation: user_guide/nystrom.md
+      - Probability Calibration: user_guide/probability_calibration.md
+      - Kernel Quantile Regression: user_guide/quantile_regression.md
+      - Device and Precision: user_guide/device_and_precision.md
+  - Examples:
+      - SVM on make_circles: examples/svm_make_circles.md
+      - DWD Classification: examples/dwd_classification.md
+      - Kernel Logistic Regression: examples/logistic_regression.md
+      - Nyström Approximation: examples/nystrom_large_scale.md
+      - Probability Calibration: examples/probability_calibration.md
+      - Benchmark Protocol: examples/reproduce_paper_benchmarks.md
+  - API Reference:
+      - Estimators: api/estimators.md
+      - Low-Level Solvers: api/solvers.md
+      - Kernels and Utilities: api/utilities.md
+  - Developer Guide:
+      - Architecture: developer/architecture.md
+      - Adding an Estimator: developer/adding_an_estimator.md
+      - Adding a Solver: developer/adding_a_solver.md
+      - Testing: developer/testing.md
+      - Benchmarking: developer/benchmarking.md
+  - FAQ: faq.md
