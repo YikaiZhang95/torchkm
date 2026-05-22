@@ -18,14 +18,13 @@ It currently provides:
 
 ## Why TorchKM?
 
-Kernel methods are competitive supervised learning methods on tabular data. In practice, the bottleneck is often not training one model — it is training **and tuning many models**.
+Kernel methods are competitive supervised learning methods on tabular data. In practice, the dominant cost often arises not from a single model fit alone, but from repeated kernel-matrix computations and linear solves across cross-validation folds and tuning parameters.
 
-TorchKM is built for that workflow.
+TorchKM is built for that an integrated training and tuning pipeline. Benchmarks show competitive predictive performance together with substantial speedups over standard baselines.
 
 ## Documentation
 
-Full documentation, examples, API reference, benchmark-reproduction notes, and
-developer guides will be available at:
+Full documentation, examples, API reference, benchmark-reproduction notes, and developer guides will be available at:
 
 https://yikaizhang95.github.io/torchkm/
 
@@ -245,4 +244,4 @@ MIT License. See `LICENSE`.
 ## Contact
 
 Yikai Zhang  
-yikai-zhang@uiowa.edu
+skyezhang1995@gmail.com

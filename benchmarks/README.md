@@ -8,29 +8,37 @@ build because they may take a long time and can depend heavily on hardware.
 
 When adding or reporting a benchmark, include:
 
-- data set name, source, and preprocessing steps;
-- number of samples and features;
-- train/test split and random seed;
-- estimator or low-level solver used;
-- kernel and kernel parameters;
-- `C` grid or solver regularization grid;
-- number of cross-validation folds;
 - exact command used;
-- CPU model and core count;
-- GPU model and GPU memory, if CUDA is used;
-- system RAM;
+- CPU model;
+- GPU model, if used;
+- RAM and GPU memory, if relevant;
 - operating system;
-- Python, PyTorch, CUDA, NumPy, and scikit-learn versions;
-- whether data loading and preprocessing are included in the timing;
-- number of repetitions, warmup policy, and summary statistic.
+- Python version;
+- PyTorch version;
+- CUDA version, if used;
+- TorchKM version or commit hash;
+- data set;
+- sample size and feature dimension;
+- number of cross-validation folds;
+- regularization grid;
+- whether timing includes preprocessing, training, and model selection.
 
 ## Timing Caveats
 
 Wall-clock times vary across hardware, software versions, CUDA settings, and
 system load. Do not expect identical times on different machines.
 
-For GPU runs, use warmup runs before timed runs. First-use CUDA initialization
-and kernel compilation can make a cold run unrepresentative.
+Do not compare a cold first run with a warmed run. For GPU benchmarks, CUDA
+initialization and first-use overhead can make the first run misleading. Run at
+least one warmup iteration before timing. When timing CUDA work, call
+`torch.cuda.synchronize()` before starting and after ending the timed region.
+
+Report the number of repeats. Prefer median and IQR, or mean and standard
+deviation. Avoid reporting a single timing as a strong benchmark claim.
+
+Benchmark scripts should optionally write JSON or CSV output. Output should
+include both results and environment metadata. Do not commit large generated
+benchmark outputs.
 
 ## Development Guidance
 

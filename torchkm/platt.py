@@ -102,7 +102,6 @@ class PlattScalerTorch:
                 )
                 nll_new = nll_new + 0.5 * self.reg * (A_new * A_new + B_new * B_new)
 
-                z_old = z
                 p_old = p
                 nll_old = -torch.sum(
                     t * torch.log(p_old + eps)

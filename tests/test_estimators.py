@@ -8,7 +8,6 @@ from sklearn.base import clone
 from sklearn.datasets import make_moons, make_regression
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
 
 from torchkm.estimators import TorchKMSVC, TorchKMKQR
 

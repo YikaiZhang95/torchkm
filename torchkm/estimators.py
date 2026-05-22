@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Literal, Optional, Tuple, Union
 
 import numpy as np
@@ -89,7 +88,9 @@ def _check_binary_y(y: np.ndarray) -> Tuple[np.ndarray, Any, Any]:
     classes = np.unique(y)
     if classes.size != 2:
         raise ValueError(
-            f"Only binary classification is supported. Got classes={classes}. For multiclass case, the problem can be addressed using either a one-vs-one or a one-vs-rest strategy."
+            "Only binary classification is supported. "
+            f"Got classes={classes}. For multiclass case, the problem can be "
+            "addressed using either a one-vs-one or a one-vs-rest strategy."
         )
     neg_label, pos_label = classes[0], classes[1]
     y_pm1 = np.where(y == pos_label, 1.0, -1.0).astype(np.float64)
@@ -1207,6 +1208,5 @@ class TorchKMKQR(_TorchKMBaseKernelQuantileRegressor):
     """Kernel quantile regressor with integrated model selection.
 
     ``TorchKMKQR`` uses :class:`torchkm.cvkqr.cvkqr` when ``low_rank=False``
-    and :class:`torchkm.cvknyqr.cvknyqr` when ``low_rank=True``. There is
-    intentionally no separate ``TorchKMNysKQR`` class.
+    and :class:`torchkm.cvknyqr.cvknyqr` when ``low_rank=True``.
     """

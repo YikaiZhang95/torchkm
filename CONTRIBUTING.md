@@ -44,13 +44,13 @@ Tests live in `tests/` and are run with `pytest`. Please add or update tests whe
 Useful test targets include:
 
 - solver output shapes and selected regularization values
-- prediction behavior for the estimator wrappers (`TorchKMSVC`, `TorchKMDWD`, `TorchKMLogit`)
+- prediction behavior for the estimator wrappers (`TorchKMSVC`, `TorchKMDWD`, `TorchKMLogit`, `TorchKMKQR`)
 - low-level quantile regression behavior through `cvkqr`
 - CPU fallback behavior
 - low-rank and exact solver paths
 - edge cases for labels, folds, kernels, and input types
 
-Keep tests reasonably small so they can run on CPU in a normal development environment. CUDA-specific tests are welcome, but they should skip cleanly when CUDA is unavailable.
+Keep tests reasonably small so they can run on CPU in a normal development environment. Use deterministic random seeds in examples and tests. CUDA-specific tests are welcome, but they should skip cleanly when CUDA is unavailable.
 
 ## Documentation
 
@@ -66,14 +66,24 @@ When adding examples, prefer compact snippets that users can copy and run. Speci
 
 ## Benchmarks
 
-Benchmark scripts and results belong under `benchmarks/`. Benchmark pull requests are ideal to include:
+Benchmark guidance lives in `docs/developer/benchmarking.md`. Benchmark-related
+pull requests should report:
 
-- the exact command used
-- hardware details, especially GPU model if CUDA was used
-- Python, PyTorch, and CUDA versions
-- a short note explaining what changed and why it matters
+- exact command used
+- CPU model
+- GPU model, if used
+- operating system
+- Python version
+- PyTorch version
+- CUDA version, if used
+- TorchKM version or commit hash
+- data set
+- sample size and feature dimension
+- number of cross-validation folds
+- regularization grid
+- whether timing includes preprocessing, training, and model selection
 
-Please avoid comparing a warmed run against a cold first run. For GPU benchmarks, please note that first-use kernel compilation can make the first run misleading.
+Do not compare a cold first run with a warmed run. For GPU timing, run at least one warmup iteration. When timing CUDA work, call `torch.cuda.synchronize()` before starting and after ending the timed region. Prefer repeated runs and report median/IQR or mean/standard deviation. Benchmark scripts should optionally write JSON or CSV output with both results and environment metadata.
 
 ## Adding Kernels
 
@@ -90,7 +100,7 @@ Please include tests that cover basic correctness and parameter handling. If the
 
 Estimator and solver changes should preserve the existing public behavior unless the pull request clearly explains a breaking change.
 
-- keep the scikit-learn-style API consistent across `TorchKMSVC`, `TorchKMDWD`, and `TorchKMLogit`
+- keep the scikit-learn-style API consistent across `TorchKMSVC`, `TorchKMDWD`, `TorchKMLogit`, and `TorchKMKQR`
 - validate inputs with clear error messages
 - keep CPU behavior working when CUDA is not available
 - add tests for `fit`, `predict`, and `decision_function` when relevant
@@ -118,4 +128,19 @@ A good pull request description does not need to be long. A clear summary, a sho
 
 ## Code Style
 
-Use clear names and keep changes focused. TorchKM has performance-sensitive solver code.
+Use clear names and keep changes focused. Avoid unrelated formatting-only changes, especially in performance-sensitive solver code.
+
+Before opening a pull request, run:
+
+```bash
+python -m black --check .
+python -m flake8 .
+```
+
+You may run this locally to format code:
+
+```bash
+python -m black .
+```
+
+Pull requests should avoid unrelated large formatting changes.
