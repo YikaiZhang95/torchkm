@@ -11,10 +11,12 @@ Fork the repository on GitHub, then clone your fork and install in editable mode
 ```bash
 git clone https://github.com/<your-username>/torchkm.git
 cd torchkm
-python -m pip install -e ".[dev,sklearn]"
+python -m pip install -e ".[dev,examples,viz]"
 ```
 
-The `sklearn` extra is useful for the estimator wrappers in `torchkm/estimators.py`. If you are only working on low-level solver code, the base install plus the `dev` extra may be enough.
+The standard install includes scikit-learn because the high-level estimator API
+is a core part of TorchKM. The development extras add testing, formatting,
+packaging, example, and visualization dependencies.
 
 Run the test suite:
 

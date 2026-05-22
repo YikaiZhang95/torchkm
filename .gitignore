@@ -21,8 +21,12 @@ env/
 # Testing
 .pytest_cache/
 .coverage
+.coverage.*
 coverage.xml
+coverage.json
+coverage-summary.md
 htmlcov/
+.DS_Store
 
 # IDE
 .vscode/

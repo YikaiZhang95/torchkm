@@ -32,7 +32,7 @@ https://yikaizhang95.github.io/torchkm/
 
 ## Installation
 
-### Minimal install
+### Standard install
 
 ```bash
 pip install torchkm
@@ -47,7 +47,7 @@ API used in the examples.
 git clone https://github.com/YikaiZhang95/torchkm.git
 cd torchkm
 pip install -e ".[dev,examples,viz]"
-pytest -q
+python -m pytest -q
 ```
 
 ## Quickstart
@@ -213,10 +213,29 @@ TorchKM is a good fit when you want:
 - a wrapper API that feels familiar if you already use scikit-learn
 - lower-level access to kernel matrices and solver internals
 
-## Testing
+## Testing and coverage
 
 ```bash
-pytest -q
+python -m pytest -q
+```
+
+Run coverage locally with:
+
+```bash
+python -m pytest -q --cov=torchkm --cov-report=term-missing:skip-covered --cov-report=xml --cov-report=html
+```
+
+Current coverage: 54.93% on commit `a1b0489`, measured with Python 3.11.14 on
+macOS arm64.
+
+The GitHub Actions test workflow runs the test suite and uploads `coverage.xml`
+and `htmlcov/` as artifacts.
+
+CUDA smoke tests are marked with `pytest.mark.cuda` and skip automatically when
+CUDA is unavailable. On a CUDA machine, run:
+
+```bash
+python -m pytest -q -m cuda
 ```
 
 ## Contributing

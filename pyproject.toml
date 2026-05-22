@@ -1,3 +1,10 @@
 [build-system]
 requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "cuda: tests requiring CUDA",
+    "slow: slow tests not run by default",
+]

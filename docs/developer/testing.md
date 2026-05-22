@@ -3,13 +3,19 @@
 Run the test suite from the repository root:
 
 ```bash
-pytest -q
+python -m pytest -q
+```
+
+The default CI path runs CPU-safe tests and skips CUDA-only tests:
+
+```bash
+python -m pytest -q -m "not cuda"
 ```
 
 For a quick environment check, collect tests first:
 
 ```bash
-pytest --collect-only -q
+python -m pytest --collect-only -q
 ```
 
 ## Coverage
@@ -17,8 +23,11 @@ pytest --collect-only -q
 To run tests with coverage:
 
 ```bash
-pytest --cov=torchkm --cov-report=term-missing --cov-report=xml
+python -m pytest -q --cov=torchkm --cov-report=term-missing:skip-covered --cov-report=xml --cov-report=html
 ```
+
+Current coverage: 54.93% on commit `a1b0489`, measured with Python 3.11.14 on
+macOS arm64.
 
 ## Test categories
 
@@ -36,16 +45,12 @@ Useful test categories include:
 
 ## CUDA tests
 
-Tests that require CUDA should be skipped when CUDA is not available. For example:
+CUDA smoke tests are marked with `pytest.mark.cuda` and skip automatically when
+CUDA is unavailable. GitHub-hosted runners usually may not have CUDA GPUs, so
+run the CUDA smoke tests on a CUDA machine with:
 
-```python
-import pytest
-import torch
-
-pytestmark = pytest.mark.skipif(
-    not torch.cuda.is_available(),
-    reason="CUDA is not available",
-)
+```bash
+python -m pytest -q -m cuda
 ```
 
 ## Small tests are better
