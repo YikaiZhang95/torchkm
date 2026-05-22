@@ -57,6 +57,8 @@ print("first predictions:", pred[:3])
 | `cv` | Number of cross-validation folds |
 | `device` | `"cpu"`, `"cuda"`, or `None` for automatic selection |
 | `max_iter` | Maximum solver iterations |
+| `low_rank` | Use the Nyström approximation through `cvknyqr` |
+| `num_landmarks`, `nys_k` | Landmark count and Nyström rank when `low_rank=True` |
 
 ## Fitted attributes
 
@@ -74,8 +76,9 @@ Advanced users can access the lower-level solver directly:
 
 ```python
 from torchkm.cvkqr import cvkqr
+from torchkm.cvknyqr import cvknyqr
 ```
 
-`cvkqr` handles full-kernel quantile regression, and `cvknysqr` provides the
+`cvkqr` handles full-kernel quantile regression, and `cvknyqr` provides the
 Nyström solver. See the [low-level solver API](../api/solvers.md) for exact
 signatures.

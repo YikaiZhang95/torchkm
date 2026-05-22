@@ -128,16 +128,36 @@ class TestCvkqr(unittest.TestCase):
 
         torch.manual_seed(7)
         foldid = torch.randperm(120) % nfolds + 1
-        m1 = cvkqr(Kmat=Kmat, y=y, nlam=3, ulam=ulam, tau=0.5,
-                    foldid=foldid, nfolds=nfolds, eps=1e-4, maxit=300,
-                    gamma=1e-7, device=device)
+        m1 = cvkqr(
+            Kmat=Kmat,
+            y=y,
+            nlam=3,
+            ulam=ulam,
+            tau=0.5,
+            foldid=foldid,
+            nfolds=nfolds,
+            eps=1e-4,
+            maxit=300,
+            gamma=1e-7,
+            device=device,
+        )
         m1.fit()
 
         torch.manual_seed(7)
         foldid2 = torch.randperm(120) % nfolds + 1
-        m2 = cvkqr(Kmat=Kmat, y=y, nlam=3, ulam=ulam, tau=0.5,
-                    foldid=foldid2, nfolds=nfolds, eps=1e-4, maxit=300,
-                    gamma=1e-7, device=device)
+        m2 = cvkqr(
+            Kmat=Kmat,
+            y=y,
+            nlam=3,
+            ulam=ulam,
+            tau=0.5,
+            foldid=foldid2,
+            nfolds=nfolds,
+            eps=1e-4,
+            maxit=300,
+            gamma=1e-7,
+            device=device,
+        )
         m2.fit()
 
         # same foldid → identical pred

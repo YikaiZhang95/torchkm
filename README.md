@@ -114,6 +114,53 @@ clf.fit(Xtr, ytr)
 (clf.predict(Xte) == yte).mean()
 ```
 
+### Kernel quantile regression
+
+```python
+import numpy as np
+import torch
+from sklearn.model_selection import train_test_split
+
+from torchkm.estimators import TorchKMKQR
+
+rng = np.random.default_rng(0)
+X = rng.normal(size=(200, 5))
+y = np.sin(X[:, 0]) + 0.2 * rng.normal(size=200)
+
+Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.25, random_state=0)
+
+Cs = np.logspace(2, -2, 4)
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+qr = TorchKMKQR(
+    kernel="rbf",
+    Cs=Cs,
+    nC=len(Cs),
+    cv=3,
+    tau=0.5,
+    device=device,
+    max_iter=40,
+)
+qr.fit(Xtr, ytr)
+print("best C:", qr.best_C_)
+print("predictions:", qr.predict(Xte[:3]))
+
+qr_nys = TorchKMKQR(
+    kernel="rbf",
+    Cs=Cs,
+    nC=len(Cs),
+    cv=3,
+    tau=0.5,
+    low_rank=True,
+    num_landmarks=40,
+    nys_k=20,
+    device=device,
+    max_iter=40,
+)
+qr_nys.fit(Xtr, ytr)
+print("Nyström predictions:", qr_nys.predict(Xte[:3]))
+```
+
 ## What TorchKM provides
 
 ### sklearn-style estimators
@@ -122,6 +169,10 @@ clf.fit(Xtr, ytr)
 - `TorchKMDWD` — kernel DWD classifier
 - `TorchKMLogit` — kernel logistic regression
 - `TorchKMKQR` — kernel quantile regression
+
+`TorchKMKQR` provides kernel quantile regression. Use
+`TorchKMKQR(low_rank=True)` for the Nyström approximation. There is no separate
+`TorchKMNysKQR` class.
 
 Common methods:
 

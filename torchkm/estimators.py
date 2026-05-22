@@ -12,11 +12,11 @@ from .cvksvm import cvksvm
 from .cvkdwd import cvkdwd
 from .cvklogit import cvklogit
 from .cvkqr import cvkqr
+from .cvknyqr import cvknyqr
 from .platt import PlattScalerTorch
 from .cvknyssvm import cvknyssvm
 from .cvknysdwd import cvknysdwd
 from .cvknyslogit import cvknyslogit
-from .cvknysqr import cvknysqr
 
 # ---- sklearn is OPTIONAL: raise a clean error only when wrapper is imported ----
 try:
@@ -895,55 +895,8 @@ class TorchKMLogit(_TorchKMBaseBinaryClassifier):
     _BACKEND: BackendName = "logit"
 
 
-class TorchKMKQR(BaseEstimator, RegressorMixin):
-    """Kernel quantile regressor with integrated model selection.
-
-    ``TorchKMKQR`` delegates fitting to :class:`torchkm.cvkqr.cvkqr`. It fits
-    kernel quantile regression for a continuous response, selects ``best_C_``
-    by cross-validation check loss, and exposes predictions through
-    ``predict``.
-
-    Parameters
-    ----------
-    kernel : {"rbf", "linear", "poly", "precomputed"}, default="rbf"
-        Kernel used by the estimator. ``"precomputed"`` expects a square
-        training kernel matrix in ``fit`` and a test-by-train kernel matrix in
-        ``predict``.
-    nC : int, default=50
-        Number of candidate ``C`` values when ``Cs`` is not provided.
-    Cs : array-like, optional
-        Candidate regularization values under the scikit-learn/LIBSVM
-        ``C`` convention.
-    cv : int, default=5
-        Number of cross-validation folds used to choose ``best_C_``.
-    tau : float, default=0.5
-        Quantile level in ``(0, 1)``.
-    device : {"cpu", "cuda"} or torch.device, optional
-        Device used for computation. If ``None``, CUDA is used when available;
-        otherwise CPU is used.
-
-    Attributes
-    ----------
-    best_C_ : float
-        Regularization value selected by cross-validation.
-    best_ind_ : int
-        Index of the selected value in the candidate path.
-    cv_loss_ : ndarray of shape (nC,)
-        Cross-validation check-loss scores for the candidate path.
-    alpha_ : ndarray
-        Coefficients for the selected model.
-    intercept_ : float
-        Intercept for the selected model.
-    foldid_ : ndarray
-        Fold assignment used during fitting.
-    n_features_in_ : int
-        Number of input features seen during fitting.
-
-    Notes
-    -----
-    ``TorchKMKQR`` uses continuous regression targets; there is no class-label
-    remapping. The lower-level solver uses check loss for cross-validation.
-    """
+class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
+    """Shared implementation for the public kernel quantile regressor."""
 
     def __init__(
         self,
@@ -971,6 +924,9 @@ class TorchKMKQR(BaseEstimator, RegressorMixin):
         poly_gamma: float = 1.0,
         random_state: Optional[int] = None,
         store_path: bool = False,
+        low_rank: bool = False,
+        num_landmarks: int = 2000,
+        nys_k: int = 1000,
     ):
         self.kernel = kernel
         self.nC = nC
@@ -996,6 +952,9 @@ class TorchKMKQR(BaseEstimator, RegressorMixin):
         self.poly_gamma = poly_gamma
         self.random_state = random_state
         self.store_path = store_path
+        self.low_rank = low_rank
+        self.num_landmarks = num_landmarks
+        self.nys_k = nys_k
 
     def _compute_K_train(self, X_t: torch.Tensor) -> Tuple[torch.Tensor, dict]:
         if self.kernel == "rbf":
@@ -1023,49 +982,57 @@ class TorchKMKQR(BaseEstimator, RegressorMixin):
             ) ** self.poly_degree
         raise ValueError(f"Unsupported kernel={self.kernel} for non-precomputed mode.")
 
-    def fit(self, X: Any, y: Any):
-        X_np, y_np = check_X_y(
-            _as_numpy(X), _as_numpy(y), accept_sparse=False, ensure_2d=True, y_numeric=True
-        )
-        self.n_features_in_ = X_np.shape[1]
-
-        dev = _pick_device_str(self.device)
-        self._device_str_ = dev
-
-        uC_t = _make_ulam(self.nC, self.Cs, self.C_max, self.C_min)
-        ulam_t = 1.0 / (2 * X_np.shape[0] * uC_t)
-        nlam = int(ulam_t.numel())
-
-        foldid_t = _make_foldid(
-            n=X_np.shape[0],
-            nfolds=self.cv,
-            foldid=self.foldid,
-            random_state=self.random_state,
-        )
-        self.foldid_ = foldid_t.detach().cpu().to(torch.int64).numpy()
-
-        X_train_t = torch.as_tensor(X_np, dtype=torch.double)
-        y_train_t = torch.as_tensor(y_np, dtype=torch.double)
-
-        ulam_backend = ulam_t.to(dev)
-        foldid_backend = foldid_t.to(dev)
-        y_backend = y_train_t.to(dev)
-
+    def _validate_low_rank(self):
+        if not self.low_rank:
+            return
         if self.kernel == "precomputed":
-            K_train = torch.as_tensor(X_np, dtype=torch.double)
-            if K_train.ndim != 2 or K_train.shape[0] != K_train.shape[1]:
-                raise ValueError(
-                    "For kernel='precomputed', X must be a square (n,n) kernel matrix."
-                )
-            self.X_fit_ = None
-            self.kernel_state_ = {}
-        else:
-            K_train, kernel_state = self._compute_K_train(X_train_t)
-            self.X_fit_ = X_np
-            self.kernel_state_ = kernel_state
-        K_train = K_train.to(dev)
+            raise ValueError("low_rank=True does not support kernel='precomputed'.")
+        if self.kernel != "rbf":
+            raise ValueError(
+                "low_rank=True is currently supported only for kernel='rbf'."
+            )
+        if int(self.num_landmarks) < 1:
+            raise ValueError("num_landmarks must be positive.")
+        if int(self.nys_k) < 1:
+            raise ValueError("nys_k must be positive.")
 
-        backend = cvkqr(
+    def _make_backend(
+        self,
+        *,
+        K_train: Optional[torch.Tensor],
+        X_train_t: torch.Tensor,
+        y_backend: torch.Tensor,
+        nlam: int,
+        ulam_backend: torch.Tensor,
+        foldid_backend: torch.Tensor,
+        device: str,
+    ):
+        if self.low_rank:
+            return cvknyqr(
+                Xmat=X_train_t,
+                X_test=X_train_t,
+                y=y_backend,
+                nlam=nlam,
+                ulam=ulam_backend,
+                tau=float(self.tau),
+                foldid=foldid_backend,
+                nfolds=int(self.cv),
+                eps=float(self.tol),
+                maxit=int(self.max_iter),
+                gamma=float(self.solver_gamma),
+                is_exact=int(self.is_exact),
+                delta_len=int(self.delta_len),
+                mproj=int(self.mproj),
+                KKTeps=float(self.KKTeps),
+                KKTeps2=float(self.KKTeps2),
+                num_landmarks=int(self.num_landmarks),
+                k=int(self.nys_k),
+                sigma=self.rbf_sigma,
+                random_state=self.random_state,
+                device=device,
+            )
+
+        return cvkqr(
             Kmat=K_train,
             y=y_backend,
             nlam=nlam,
@@ -1081,121 +1048,26 @@ class TorchKMKQR(BaseEstimator, RegressorMixin):
             mproj=int(self.mproj),
             KKTeps=float(self.KKTeps),
             KKTeps2=float(self.KKTeps2),
-            device=dev,
+            device=device,
         )
-        backend.fit()
-
-        cv_loss_t = backend.cv(backend.pred, y_train_t.to(backend.pred.device))
-        cv_loss = cv_loss_t.detach().cpu().numpy()
-        best_ind = int(np.nanargmin(cv_loss))
-
-        alpvec = backend.alpmat[:, best_ind].detach().cpu().to(torch.double)
-        self.intercept_ = float(alpvec[0].item())
-        self.alpha_ = alpvec[1:].numpy()
-        self.best_ind_ = best_ind
-        self.best_C_ = float(
-            1.0 / (2.0 * backend.ulam[best_ind].detach().cpu().item() * X_np.shape[0])
-        )
-        self.cv_loss_ = cv_loss
-        self.n_samples_fit_ = int(X_np.shape[0])
-
-        if self.store_path:
-            self.alpmat_path_ = backend.alpmat.detach().cpu()
-            self.pred_path_ = backend.pred.detach().cpu()
-        else:
-            self.alpmat_path_ = None
-            self.pred_path_ = None
-
-        del backend
-        return self
-
-    def predict(self, X: Any) -> np.ndarray:
-        check_is_fitted(self, ["alpha_", "intercept_"])
-        X_np = check_array(_as_numpy(X), accept_sparse=False, ensure_2d=True)
-        dev = getattr(self, "_device_str_", "cpu")
-
-        alpha_t = torch.as_tensor(self.alpha_, dtype=torch.double, device=dev)
-        b = float(self.intercept_)
-
-        if self.kernel == "precomputed":
-            K_test = torch.as_tensor(X_np, dtype=torch.double, device=dev)
-            if K_test.ndim != 2 or K_test.shape[1] != self.n_samples_fit_:
-                raise ValueError(
-                    f"For kernel='precomputed', X must have shape (n_test, {self.n_samples_fit_})."
-                )
-        else:
-            X_train_t = torch.as_tensor(self.X_fit_, dtype=torch.double)
-            X_test_t = torch.as_tensor(X_np, dtype=torch.double)
-            K_test = self._compute_K_test(X_test_t, X_train_t, self.kernel_state_).to(dev)
-
-        with torch.no_grad():
-            scores = torch.mv(K_test, alpha_t) + b
-        return scores.detach().cpu().numpy()
-
-
-class TorchKMNysKQR(BaseEstimator, RegressorMixin):
-    """Nyström kernel quantile regressor.
-
-    ``TorchKMNysKQR`` delegates fitting to :class:`torchkm.cvknysqr.cvknysqr`
-    and uses a low-rank Nyström feature map instead of the full training kernel
-    matrix.
-
-    Notes
-    -----
-    This estimator expects raw feature input and does not support
-    ``kernel="precomputed"``. It uses continuous regression targets and selects
-    ``best_C_`` by cross-validation check loss.
-    """
-
-    def __init__(
-        self,
-        nC: int = 50,
-        Cs: Optional[Any] = None,
-        C_max: float = 1e3,
-        C_min: float = 1e-3,
-        cv: int = 5,
-        foldid: Optional[Any] = None,
-        tau: float = 0.5,
-        tol: float = 1e-5,
-        max_iter: int = 1000,
-        solver_gamma: float = 1.0,
-        is_exact: int = 0,
-        delta_len: int = 4,
-        mproj: int = 2,
-        KKTeps: float = 1e-3,
-        KKTeps2: float = 1e-3,
-        num_landmarks: int = 2000,
-        k: int = 1000,
-        device: Optional[Union[str, torch.device]] = None,
-        random_state: Optional[int] = None,
-        store_path: bool = False,
-    ):
-        self.nC = nC
-        self.Cs = Cs
-        self.C_max = C_max
-        self.C_min = C_min
-        self.cv = cv
-        self.foldid = foldid
-        self.tau = tau
-        self.tol = tol
-        self.max_iter = max_iter
-        self.solver_gamma = solver_gamma
-        self.is_exact = is_exact
-        self.delta_len = delta_len
-        self.mproj = mproj
-        self.KKTeps = KKTeps
-        self.KKTeps2 = KKTeps2
-        self.num_landmarks = num_landmarks
-        self.k = k
-        self.device = device
-        self.random_state = random_state
-        self.store_path = store_path
 
     def fit(self, X: Any, y: Any):
+        tau = float(self.tau)
+        if not 0.0 < tau < 1.0:
+            raise ValueError("tau must be in (0, 1).")
+        self._validate_low_rank()
+
         X_np, y_np = check_X_y(
-            _as_numpy(X), _as_numpy(y), accept_sparse=False, ensure_2d=True, y_numeric=True
+            _as_numpy(X),
+            _as_numpy(y),
+            accept_sparse=False,
+            ensure_2d=True,
+            y_numeric=True,
         )
+        y_np = np.asarray(y_np, dtype=np.float64).reshape(-1)
         self.n_features_in_ = X_np.shape[1]
+        self.n_samples_fit_ = int(X_np.shape[0])
+        self.tau_ = tau
 
         dev = _pick_device_str(self.device)
         self._device_str_ = dev
@@ -1203,9 +1075,6 @@ class TorchKMNysKQR(BaseEstimator, RegressorMixin):
         uC_t = _make_ulam(self.nC, self.Cs, self.C_max, self.C_min)
         ulam_t = 1.0 / (2 * X_np.shape[0] * uC_t)
         nlam = int(ulam_t.numel())
-
-        if self.random_state is not None:
-            torch.manual_seed(int(self.random_state))
 
         foldid_t = _make_foldid(
             n=X_np.shape[0],
@@ -1222,25 +1091,32 @@ class TorchKMNysKQR(BaseEstimator, RegressorMixin):
         foldid_backend = foldid_t.to(dev)
         y_backend = y_train_t.to(dev)
 
-        backend = cvknysqr(
-            Xmat=X_train_t,
-            X_test=X_train_t,
-            y=y_backend,
+        if self.low_rank:
+            K_train = None
+            self.X_fit_ = X_np
+            self.kernel_state_ = {}
+        elif self.kernel == "precomputed":
+            K_train = torch.as_tensor(X_np, dtype=torch.double)
+            if K_train.ndim != 2 or K_train.shape[0] != K_train.shape[1]:
+                raise ValueError(
+                    "For kernel='precomputed', X must be a square (n,n) kernel matrix."
+                )
+            self.X_fit_ = None
+            self.kernel_state_ = {}
+        else:
+            K_train, kernel_state = self._compute_K_train(X_train_t)
+            self.X_fit_ = X_np
+            self.kernel_state_ = kernel_state
+        if K_train is not None:
+            K_train = K_train.to(dev)
+
+        backend = self._make_backend(
+            K_train=K_train,
+            X_train_t=X_train_t,
+            y_backend=y_backend,
             nlam=nlam,
-            ulam=ulam_backend,
-            tau=float(self.tau),
-            foldid=foldid_backend,
-            nfolds=int(self.cv),
-            eps=float(self.tol),
-            maxit=int(self.max_iter),
-            gamma=float(self.solver_gamma),
-            is_exact=int(self.is_exact),
-            delta_len=int(self.delta_len),
-            mproj=int(self.mproj),
-            KKTeps=float(self.KKTeps),
-            KKTeps2=float(self.KKTeps2),
-            num_landmarks=int(self.num_landmarks),
-            k=int(self.k),
+            ulam_backend=ulam_backend,
+            foldid_backend=foldid_backend,
             device=dev,
         )
         backend.fit()
@@ -1257,10 +1133,15 @@ class TorchKMNysKQR(BaseEstimator, RegressorMixin):
             1.0 / (2.0 * backend.ulam[best_ind].detach().cpu().item() * X_np.shape[0])
         )
         self.cv_loss_ = cv_loss
-        self.n_samples_fit_ = int(X_np.shape[0])
 
-        self._backend_ = backend
-        self.X_fit_ = X_np
+        if self.low_rank:
+            self._low_rank_backend_ = backend
+            if getattr(backend, "indices", None) is not None:
+                self.low_rank_landmark_indices_ = backend.indices
+            if getattr(backend, "indices", None) is not None:
+                self.num_landmarks_ = int(len(backend.indices))
+            if getattr(backend, "k_eff_", None) is not None:
+                self.nys_k_ = int(backend.k_eff_)
 
         if self.store_path:
             self.alpmat_path_ = backend.alpmat.detach().cpu()
@@ -1269,18 +1150,63 @@ class TorchKMNysKQR(BaseEstimator, RegressorMixin):
             self.alpmat_path_ = None
             self.pred_path_ = None
 
+        if not self.low_rank:
+            del backend
         return self
 
     def predict(self, X: Any) -> np.ndarray:
-        check_is_fitted(self, ["alpha_", "intercept_", "_backend_"])
+        check_is_fitted(self, ["alpha_", "intercept_"])
         X_np = check_array(_as_numpy(X), accept_sparse=False, ensure_2d=True)
         dev = getattr(self, "_device_str_", "cpu")
+
+        if self.low_rank:
+            check_is_fitted(self, ["_low_rank_backend_"])
+            alp_b = np.concatenate(([self.intercept_], np.asarray(self.alpha_)))
+            alp_t = torch.as_tensor(alp_b, dtype=torch.double, device=dev)
+            X_test_t = torch.as_tensor(X_np, dtype=torch.double)
+            with torch.no_grad():
+                scores = self._low_rank_backend_.predict(X_test_t, alp_t)
+            return scores.detach().cpu().numpy()
 
         alpha_t = torch.as_tensor(self.alpha_, dtype=torch.double, device=dev)
         b = float(self.intercept_)
 
-        X_test_t = torch.as_tensor(X_np, dtype=torch.double)
+        if self.kernel == "precomputed":
+            K_test = torch.as_tensor(X_np, dtype=torch.double, device=dev)
+            if K_test.ndim != 2 or K_test.shape[1] != self.n_samples_fit_:
+                raise ValueError(
+                    f"For kernel='precomputed', X must have shape (n_test, {self.n_samples_fit_})."
+                )
+        else:
+            X_train_t = torch.as_tensor(self.X_fit_, dtype=torch.double)
+            X_test_t = torch.as_tensor(X_np, dtype=torch.double)
+            K_test = self._compute_K_test(X_test_t, X_train_t, self.kernel_state_).to(
+                dev
+            )
+
         with torch.no_grad():
-            Z_test = self._backend_.transform(X_test_t)
-            scores = torch.mv(Z_test, alpha_t) + b
+            scores = torch.mv(K_test, alpha_t) + b
         return scores.detach().cpu().numpy()
+
+    def score(self, X: Any, y: Any) -> float:
+        y_true = np.asarray(_as_numpy(y), dtype=np.float64).reshape(-1)
+        y_pred = self.predict(X).reshape(-1)
+        if y_true.shape[0] != y_pred.shape[0]:
+            raise ValueError("X and y have incompatible lengths.")
+
+        residual = y_true - y_pred
+        loss = np.where(
+            residual >= 0,
+            float(self.tau_) * residual,
+            (float(self.tau_) - 1.0) * residual,
+        )
+        return -float(np.mean(loss))
+
+
+class TorchKMKQR(_TorchKMBaseKernelQuantileRegressor):
+    """Kernel quantile regressor with integrated model selection.
+
+    ``TorchKMKQR`` uses :class:`torchkm.cvkqr.cvkqr` when ``low_rank=False``
+    and :class:`torchkm.cvknyqr.cvknyqr` when ``low_rank=True``. There is
+    intentionally no separate ``TorchKMNysKQR`` class.
+    """

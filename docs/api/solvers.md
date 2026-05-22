@@ -32,7 +32,7 @@ This page documents low-level solvers in TorchKM. These are intended for advance
 
 ## Nyström Quantile Regression
 
-::: torchkm.cvknysqr.cvknysqr
+::: torchkm.cvknyqr.cvknyqr
 
 ## Notes
 

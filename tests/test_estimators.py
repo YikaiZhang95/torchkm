@@ -10,7 +10,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 
-from torchkm.estimators import TorchKMSVC, TorchKMKQR, TorchKMNysKQR
+from torchkm.estimators import TorchKMSVC, TorchKMKQR
 
 
 def _toy_data(n_samples=120, random_state=0):
@@ -260,7 +260,9 @@ def test_nys_kqr_pipeline_fit_predict():
 
     reg = make_pipeline(
         StandardScaler(),
-        TorchKMNysKQR(
+        TorchKMKQR(
+            kernel="rbf",
+            low_rank=True,
             nC=5,
             cv=3,
             tau=0.5,
@@ -268,7 +270,7 @@ def test_nys_kqr_pipeline_fit_predict():
             random_state=123,
             max_iter=200,
             num_landmarks=50,
-            k=30,
+            nys_k=30,
         ),
     )
 
@@ -282,7 +284,9 @@ def test_nys_kqr_pipeline_fit_predict():
 def test_nys_kqr_clone_works():
     X, y = _toy_reg_data(n_samples=150, random_state=1)
 
-    est = TorchKMNysKQR(
+    est = TorchKMKQR(
+        kernel="rbf",
+        low_rank=True,
         nC=3,
         cv=3,
         tau=0.5,
@@ -290,7 +294,7 @@ def test_nys_kqr_clone_works():
         random_state=7,
         max_iter=200,
         num_landmarks=40,
-        k=20,
+        nys_k=20,
     )
 
     est2 = clone(est)
@@ -306,7 +310,9 @@ def test_nys_kqr_clone_works():
 def test_nys_kqr_quantile_levels(tau):
     X, y = _toy_reg_data(n_samples=200, random_state=2)
 
-    est = TorchKMNysKQR(
+    est = TorchKMKQR(
+        kernel="rbf",
+        low_rank=True,
         nC=3,
         cv=3,
         tau=tau,
@@ -314,7 +320,7 @@ def test_nys_kqr_quantile_levels(tau):
         random_state=0,
         max_iter=200,
         num_landmarks=60,
-        k=30,
+        nys_k=30,
     ).fit(X, y)
 
     pred = est.predict(X)
@@ -335,12 +341,13 @@ def test_nys_kqr_random_state_deterministic_folds():
         device="cpu",
         max_iter=200,
         num_landmarks=50,
-        k=25,
+        nys_k=25,
+        low_rank=True,
     )
 
-    est1 = TorchKMNysKQR(random_state=999, **common).fit(X, y)
-    est2 = TorchKMNysKQR(random_state=999, **common).fit(X, y)
-    est3 = TorchKMNysKQR(random_state=1000, **common).fit(X, y)
+    est1 = TorchKMKQR(random_state=999, **common).fit(X, y)
+    est2 = TorchKMKQR(random_state=999, **common).fit(X, y)
+    est3 = TorchKMKQR(random_state=1000, **common).fit(X, y)
 
     assert hasattr(est1, "foldid_") and hasattr(est2, "foldid_")
     assert np.array_equal(est1.foldid_, est2.foldid_)

@@ -24,7 +24,7 @@ The low-level solvers implement the computational routines used by the estimator
 | `torchkm.cvknyssvm` | Nyström SVM solver |
 | `torchkm.cvknysdwd` | Nyström DWD solver |
 | `torchkm.cvknyslogit` | Nyström logistic regression solver |
-| `torchkm.cvknysqr` | Nyström quantile regression solver |
+| `torchkm.cvknyqr` | Nyström quantile regression solver |
 | `torchkm.kernels` | Basic kernel functions |
 | `torchkm.functions` | Kernel and numerical utility functions |
 | `torchkm.platt` | Probability calibration utilities |
