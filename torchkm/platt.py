@@ -124,6 +124,9 @@ class PlattScalerTorch:
 
     @torch.no_grad()
     def predict_proba(self, f):
+        if self.A is None or self.B is None:
+            raise RuntimeError("Call fit() before predict_proba().")
+
         f = torch.as_tensor(f, dtype=self.dtype, device=self.device).reshape(-1)
         z = self.A * f + self.B
         p1 = torch.where(
@@ -131,6 +134,11 @@ class PlattScalerTorch:
         )
         # Return [P(y=-1), P(y=1)] per row to match sklearn style
         return torch.stack([1.0 - p1, p1], dim=1)
+
+    @torch.no_grad()
+    def predict(self, f):
+        proba = self.predict_proba(f)
+        return torch.where(proba[:, 1] >= 0.5, 1.0, -1.0).to(self.dtype)
 
     @torch.no_grad()
     def reliability_curve(self, y_true, p_pred, n_bins=15):

@@ -225,7 +225,7 @@ Run coverage locally with:
 python -m pytest -q --cov=torchkm --cov-report=term-missing:skip-covered --cov-report=xml --cov-report=html
 ```
 
-Current coverage: 54.93% on commit `a1b0489`, measured with Python 3.11.14 on
+Current coverage: 66.57% on commit `a1b0489`, measured with Python 3.11.14 on
 macOS arm64.
 
 The GitHub Actions test workflow runs the test suite and uploads `coverage.xml`

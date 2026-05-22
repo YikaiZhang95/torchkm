@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 import torch
 from sklearn.datasets import make_circles
 from sklearn.preprocessing import StandardScaler
@@ -40,7 +41,17 @@ def test_platt_scaler_tiny_tensor_smoke():
 
     scaler = PlattScalerTorch(max_iter=20, device="cpu").fit(scores, labels)
     proba = scaler.predict_proba(scores)
+    pred = scaler.predict(scores)
 
     assert proba.shape == (4, 2)
+    assert pred.shape == (4,)
     assert torch.isfinite(proba).all()
     assert torch.allclose(proba.sum(dim=1), torch.ones(4, dtype=torch.double))
+    assert set(pred.tolist()).issubset({-1.0, 1.0})
+
+
+def test_platt_scaler_predict_proba_requires_fit():
+    scaler = PlattScalerTorch(device="cpu")
+
+    with pytest.raises(RuntimeError, match="fit"):
+        scaler.predict_proba(torch.tensor([0.0], dtype=torch.double))
