@@ -8,8 +8,13 @@ TorchKM can be installed from PyPI or from source.
 pip install torchkm
 ```
 
-The default installation includes the high-level scikit-learn-style estimator
-API used throughout the examples.
+## Installation with scikit-learn wrappers
+
+The recommended user-facing interface is the scikit-learn-style estimator API. To install TorchKM with scikit-learn support, use:
+
+```bash
+pip install "torchkm[sklearn]"
+```
 
 ## Development installation
 
@@ -18,7 +23,7 @@ For development, clone the repository and install the package in editable mode:
 ```bash
 git clone https://github.com/YikaiZhang95/torchkm.git
 cd torchkm
-pip install -e ".[dev,examples,viz]"
+pip install -e ".[dev,sklearn]"
 ```
 
 Then run the test suite:

@@ -107,56 +107,6 @@ def test_predict_proba_sums_to_one():
     assert np.allclose(proba.sum(axis=1), 1.0, atol=1e-6)
 
 
-def test_svc_fit_time_low_rank_switches_modes_without_stale_state():
-    X, y = _toy_data(n_samples=80, random_state=5)
-
-    est = TorchKMSVC(
-        kernel="rbf",
-        nC=2,
-        cv=2,
-        device="cpu",
-        random_state=0,
-        max_iter=40,
-        probability=False,
-    )
-
-    est.fit(X, y)
-    assert est.low_rank is False
-    assert not hasattr(est, "_low_rank_backend_")
-    assert est.predict(X[:4]).shape == (4,)
-
-    est.fit(X, y, low_rank=True, num_landmarks=20, nys_k=10)
-    assert est.low_rank is True
-    assert est.num_landmarks == 20
-    assert est.nys_k == 10
-    assert hasattr(est, "_low_rank_backend_")
-    assert est.predict(X[:4]).shape == (4,)
-
-    est.fit(X, y, low_rank=False)
-    assert est.low_rank is False
-    assert not hasattr(est, "_low_rank_backend_")
-    assert not hasattr(est, "low_rank_basis_dim_")
-    assert est.predict(X[:4]).shape == (4,)
-
-
-def test_svc_fit_time_low_rank_does_not_enable_predict_proba():
-    X, y = _toy_data(n_samples=80, random_state=6)
-
-    est = TorchKMSVC(
-        kernel="rbf",
-        nC=2,
-        cv=2,
-        device="cpu",
-        random_state=0,
-        max_iter=40,
-        probability=False,
-    )
-    est.fit(X, y, low_rank=True, num_landmarks=20, nys_k=10)
-
-    with pytest.raises(AttributeError, match="probability=True"):
-        est.predict_proba(X[:4])
-
-
 def test_random_state_deterministic_folds():
     X, y = _toy_data(n_samples=150, random_state=4)
 
@@ -328,37 +278,6 @@ def test_nys_kqr_pipeline_fit_predict():
 
     assert pred.shape == (10,)
     assert np.isfinite(pred).all()
-
-
-def test_kqr_fit_time_low_rank_switches_modes_without_stale_state():
-    X, y = _toy_reg_data(n_samples=80, random_state=5)
-
-    est = TorchKMKQR(
-        kernel="rbf",
-        nC=2,
-        cv=2,
-        tau=0.5,
-        device="cpu",
-        random_state=0,
-        max_iter=40,
-    )
-
-    est.fit(X, y)
-    assert est.low_rank is False
-    assert not hasattr(est, "_low_rank_backend_")
-    assert est.predict(X[:4]).shape == (4,)
-
-    est.fit(X, y, low_rank=True, num_landmarks=20, nys_k=10)
-    assert est.low_rank is True
-    assert est.num_landmarks == 20
-    assert est.nys_k == 10
-    assert hasattr(est, "_low_rank_backend_")
-    assert np.isfinite(est.predict(X[:4])).all()
-
-    est.fit(X, y, low_rank=False)
-    assert est.low_rank is False
-    assert not hasattr(est, "_low_rank_backend_")
-    assert np.isfinite(est.predict(X[:4])).all()
 
 
 def test_nys_kqr_clone_works():

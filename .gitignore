@@ -8,7 +8,6 @@ __pycache__/
 dist/
 build/
 *.egg
-site/
 
 # Virtual environments
 .venv/
@@ -21,7 +20,6 @@ env/
 # Testing
 .pytest_cache/
 .coverage
-coverage.xml
 htmlcov/
 
 # IDE

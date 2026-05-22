@@ -4,17 +4,13 @@ This page documents the high-level scikit-learn-style estimators in TorchKM.
 
 The classification estimators provide a familiar interface:
 
-- `fit(X, y, *, low_rank=None, num_landmarks=None, nys_k=None)`
+- `fit(X, y)`
 - `predict(X)`
 - `decision_function(X)`
 - `predict_proba(X)` when `probability=True`
 - `platt_plot(X, y)` when probability calibration is enabled
 
-`TorchKMKQR` provides `fit(X, y, *, low_rank=None, num_landmarks=None, nys_k=None)`
-and `predict(X)` for continuous targets.
-Low-rank options are normally configured in the estimator constructor, but
-`fit` also accepts keyword-only convenience arguments `low_rank`,
-`num_landmarks`, and `nys_k`.
+`TorchKMKQR` provides `fit(X, y)` and `predict(X)` for continuous targets.
 
 The classification wrappers accept NumPy arrays and torch tensors, map arbitrary
 binary labels to the low-level `{-1, +1}` convention internally, choose
