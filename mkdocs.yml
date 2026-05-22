@@ -3,6 +3,7 @@ site_description: Documentation for TorchKM, a PyTorch library for kernel machin
 site_url: https://yikaizhang95.github.io/torchkm/
 repo_url: https://github.com/YikaiZhang95/torchkm
 repo_name: YikaiZhang95/torchkm
+docs_dir: docs
 
 theme:
   name: material
