@@ -1,0 +1,55 @@
+cff-version: 1.2.0
+message: "If you use TorchKM in your research, please cite it as below."
+type: software
+title: "TorchKM: Fast Kernel Machines in PyTorch"
+abstract: >-
+  TorchKM is a GPU-accelerated PyTorch library for kernel machines.
+  It provides kernel classifiers (SVM, DWD, logistic), kernel quantile
+  regression, Nyström approximations of each, integrated cross-validated
+  model selection over a regularization path, and a scikit-learn-style
+  Python API.
+authors:
+  - family-names: Zhang
+    given-names: Yikai
+    email: yikai-zhang@uiowa.edu
+    # Fill in your affiliation and ORCID if you have one:
+    # affiliation: "University of Iowa"
+    # orcid: "https://orcid.org/XXXX-XXXX-XXXX-XXXX"
+  # Add additional contributors here, e.g. Jiagao Xiang who contributed
+  # the paper-perf-optimisations work in PR #1:
+  # - family-names: Xiang
+  #   given-names: Jiagao
+repository-code: "https://github.com/YikaiZhang95/torchkm"
+url: "https://yikaizhang95.github.io/torchkm/"
+license: MIT
+version: 4.2.3
+# date-released is in YYYY-MM-DD; update on each tagged release:
+date-released: "2026-05-23"
+keywords:
+  - machine-learning
+  - kernel-methods
+  - support-vector-machine
+  - distance-weighted-discrimination
+  - kernel-logistic-regression
+  - quantile-regression
+  - nystrom-approximation
+  - pytorch
+  - gpu
+  - scikit-learn
+
+# If/when the JMLR MLOSS paper is published, uncomment and fill in
+# `preferred-citation` so the "Cite this repository" button surfaces the
+# paper instead of the software entry:
+#
+# preferred-citation:
+#   type: article
+#   title: "TorchKM: Fast Kernel Machines in PyTorch"
+#   authors:
+#     - family-names: Zhang
+#       given-names: Yikai
+#   journal: "Journal of Machine Learning Research"
+#   year: 2026
+#   volume: "??"
+#   start: "??"   # first page
+#   end: "??"     # last page
+#   url: "https://www.jmlr.org/papers/v??/??.html"
