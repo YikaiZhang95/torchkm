@@ -1,0 +1,31 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.4, pytest-9.0.3, pluggy-1.6.0 -- /home/yzhang705/gittest/torchkm/torchkm-main/.venv-cuda/bin/python
+cachedir: .pytest_cache
+rootdir: /home/yzhang705/gittest/torchkm/torchkm-main
+configfile: pyproject.toml
+testpaths: tests
+plugins: cov-7.1.0
+collecting ... collected 214 items / 194 deselected / 20 selected
+
+tests/test_cuda_smoke.py::test_torchkmsvc_cuda_smoke PASSED              [  5%]
+tests/test_cuda_smoke.py::test_torchkmdwd_cuda_smoke PASSED              [ 10%]
+tests/test_cuda_smoke.py::test_torchkmlogit_cuda_smoke PASSED            [ 15%]
+tests/test_cuda_smoke.py::test_torchkmkqr_cuda_smoke PASSED              [ 20%]
+tests/test_cuda_smoke.py::test_torchkmsvc_alternative_kernels_cuda[linear] PASSED [ 25%]
+tests/test_cuda_smoke.py::test_torchkmsvc_alternative_kernels_cuda[poly] PASSED [ 30%]
+tests/test_cuda_smoke.py::test_torchkmsvc_precomputed_kernel_cuda PASSED [ 35%]
+tests/test_cuda_smoke.py::test_torchkmsvc_low_rank_cuda PASSED           [ 40%]
+tests/test_cuda_smoke.py::test_torchkmkqr_low_rank_cuda PASSED           [ 45%]
+tests/test_cuda_smoke.py::test_torchkmsvc_predict_proba_cuda PASSED      [ 50%]
+tests/test_cuda_smoke.py::test_cvksvm_cuda_solver PASSED                 [ 55%]
+tests/test_cuda_smoke.py::test_cvkdwd_cuda_solver PASSED                 [ 60%]
+tests/test_cuda_smoke.py::test_cvklogit_cuda_solver PASSED               [ 65%]
+tests/test_cuda_smoke.py::test_cvkqr_cuda_solver PASSED                  [ 70%]
+tests/test_cuda_smoke.py::test_cvknyssvm_cuda_solver PASSED              [ 75%]
+tests/test_cuda_smoke.py::test_cvknysdwd_cuda_solver PASSED              [ 80%]
+tests/test_cuda_smoke.py::test_cvknyslogit_cuda_solver PASSED            [ 85%]
+tests/test_cuda_smoke.py::test_cvknyqr_cuda_solver PASSED                [ 90%]
+tests/test_cuda_smoke.py::test_torchkmsvc_cpu_cuda_predictions_agree PASSED [ 95%]
+tests/test_cuda_smoke.py::test_torchkmkqr_cpu_cuda_predictions_agree PASSED [100%]
+
+====================== 20 passed, 194 deselected in 4.48s ======================
