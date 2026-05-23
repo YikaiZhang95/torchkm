@@ -67,4 +67,3 @@ nav:
       - CUDA Testing Protocol: developer/cuda_testing.md
       - Benchmarking: developer/benchmarking.md
   - FAQ: faq.md
-  - Citation: citation.md
