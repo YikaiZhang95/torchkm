@@ -92,14 +92,18 @@ CUDA_MARK_RESULT=PASS
 python -m pytest -m cuda -v 2>&1 | tee "${RUN_DIR}/cuda-marked-tests.log" \
     || CUDA_MARK_RESULT=FAIL
 
-# Detect whether any CUDA-marked test actually ran (rather than being
-# skipped because the runner had no GPU). A skip means we accidentally
-# ran on a CPU machine and the bundle should be marked FAIL.
-if grep -qE "no tests ran|0 selected" "${RUN_DIR}/cuda-marked-tests.log" 2>/dev/null; then
+# Verify the cuda-marked tests actually executed. pytest's exit code
+# (captured above) already distinguishes pass / fail / nothing-collected;
+# this extra check catches the "ran on a CPU host so every test skipped"
+# case, which still exits 0. Inspect only the trailing summary lines so
+# the "<N> selected" collection line — e.g. "20 selected" — cannot cause
+# a false substring match.
+CUDA_SUMMARY="$(tail -n 5 "${RUN_DIR}/cuda-marked-tests.log" 2>/dev/null)"
+if echo "${CUDA_SUMMARY}" | grep -qE "no tests ran"; then
     echo "WARNING: no CUDA-marked tests were collected" >&2
     CUDA_MARK_RESULT=FAIL
-elif grep -qE "skipped, 0 passed" "${RUN_DIR}/cuda-marked-tests.log" 2>/dev/null; then
-    echo "WARNING: CUDA-marked tests were skipped (not executed)" >&2
+elif ! echo "${CUDA_SUMMARY}" | grep -qE "[0-9]+ passed"; then
+    echo "WARNING: CUDA-marked tests were skipped or did not pass" >&2
     CUDA_MARK_RESULT=FAIL
 fi
 
