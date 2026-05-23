@@ -64,5 +64,6 @@ nav:
       - Adding an Estimator: developer/adding_an_estimator.md
       - Adding a Solver: developer/adding_a_solver.md
       - Testing: developer/testing.md
+      - CUDA Testing Protocol: developer/cuda_testing.md
       - Benchmarking: developer/benchmarking.md
   - FAQ: faq.md
