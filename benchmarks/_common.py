@@ -26,6 +26,14 @@ def c_grid(n: int = 50) -> np.ndarray:
     return np.logspace(3.0, -3.0, num=n)
 
 
+def lam_grid(n: int = 50) -> np.ndarray:
+    """50 log-uniform lambda values over [1e-3, 1e3] (source-notebook grid).
+
+    Convert to the LIBSVM/scikit-learn C parameterization with C = 1/(2*n_obs*lambda).
+    """
+    return np.logspace(3.0, -3.0, num=n)
+
+
 def synchronize(device: str) -> None:
     if str(device).startswith("cuda"):
         torch.cuda.synchronize()

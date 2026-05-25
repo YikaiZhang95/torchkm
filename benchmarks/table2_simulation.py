@@ -7,10 +7,12 @@ averaged over 50 independent runs.
 Protocol (matches the paper):
   * One RBF bandwidth ``sig = sigest(X_train)`` is drawn per run, defining the
     common kernel ``K = rbf_kernel(X_train, sig)`` = exp(-2*sig*||.||^2).
-  * Each library is tuned by 10-fold CV over a 50-point C grid (log-uniform over
-    [1e-3, 1e3]); the reported **time** is that full train-and-tune pipeline.
-    Baselines use ``gamma = 2*sig`` so their RBF kernel equals K (scikit-learn /
-    LIBSVM use exp(-gamma*||.||^2)); TorchKM is fit with ``rbf_sigma=sig``.
+  * The tuning grid is 50 log-uniform *lambda* values over [1e-3, 1e3]; each is
+    transferred to the LIBSVM C parameterization via C = 1/(2*n*lambda) (so the
+    C sequence depends on n). Each library is tuned by 10-fold CV over that grid
+    and the reported **time** is the full train-and-tune pipeline. Baselines use
+    ``gamma = 2*sig`` so their RBF kernel equals K (scikit-learn / LIBSVM use
+    exp(-gamma*||.||^2)); TorchKM is fit with ``rbf_sigma=sig``.
   * The reported **objective** is equation (1) evaluated for every method at the
     *same* tuning parameter -- the CV-selected lambda* -- so the three solvers
     are compared on the same optimization problem (paper Section 3). Because C
@@ -48,7 +50,7 @@ import torch
 from torchkm import data_gen, rbf_kernel, sigest, standardize
 from torchkm.estimators import TorchKMSVC
 
-from _common import c_grid, get_device, mean_se, svm_objective, timed, warmup
+from _common import get_device, lam_grid, mean_se, svm_objective, timed, warmup
 
 # Synthetic-data parameters (paper / source notebook).
 NM, MU, RO, NFOLDS = 5, 2.0, 3.0, 10
@@ -62,10 +64,10 @@ def make_split(n: int, p: int, seed: int):
     return standardize(Xtr), ytr, standardize(Xte), yte
 
 
-def run_torchkm(Xtr, ytr, sig, K, y_t, device, seed, max_iter):
+def run_torchkm(Xtr, ytr, sig, K, y_t, device, seed, max_iter, Cs):
     """Fit TorchKM (timed). Returns (objective at its lambda*, time, C*)."""
     clf = TorchKMSVC(
-        kernel="rbf", rbf_sigma=sig, Cs=c_grid(), nC=50,
+        kernel="rbf", rbf_sigma=sig, Cs=Cs, nC=len(Cs),
         cv=NFOLDS, device=device, random_state=seed, max_iter=max_iter,
     )
     with timed(device) as t:
@@ -76,11 +78,10 @@ def run_torchkm(Xtr, ytr, sig, K, y_t, device, seed, max_iter):
     return svm_objective(K, y_t, alpha, clf.intercept_, lam), t.dt, Cstar
 
 
-def libsvm_time(SVC, Xtr_np, ytr_np, gamma, device):
+def libsvm_time(SVC, Xtr_np, ytr_np, gamma, device, Cs):
     """Time the full 10-fold CV grid search + final fit for a libsvm-style SVC."""
     from sklearn.model_selection import cross_val_score
 
-    Cs = c_grid()
     with timed(device) as t:
         scores = [
             cross_val_score(SVC(kernel="rbf", C=float(c), gamma=gamma), Xtr_np, ytr_np, cv=NFOLDS).mean()
@@ -139,7 +140,7 @@ def main() -> None:
         sizes = [tuple(int(v) for v in s.split(",")) for s in args.sizes]
 
     device = get_device(args.device)
-    print(f"device={device}  repeats={args.repeats}  folds={NFOLDS}  grid=50 C in [1e-3,1e3]")
+    print(f"device={device}  repeats={args.repeats}  folds={NFOLDS}  grid=50 lambda in [1e-3,1e3]")
 
     from sklearn.svm import SVC as SkSVC
 
@@ -163,7 +164,9 @@ def main() -> None:
     print(header)
     print("-" * len(header))
 
+    lam = lam_grid()  # 50 lambda values over [1e-3, 1e3]
     for n, p in sizes:
+        Cs = 1.0 / (2.0 * n * lam)  # transfer lambda grid to the LIBSVM C sequence
         sk, th, tk = ([], []), ([], []), ([], [])  # (objs, times)
         for i in range(args.repeats):
             Xtr, ytr, _, _ = make_split(n, p, args.seed + i)
@@ -174,14 +177,14 @@ def main() -> None:
             Xtr_np, ytr_np = Xtr.numpy(), ytr.numpy()
 
             # TorchKM defines the common tuning parameter C* (= its CV selection).
-            o, dt, Cstar = run_torchkm(Xtr, ytr, sig, K, y_t, device, args.seed + i, args.max_iter)
+            o, dt, Cstar = run_torchkm(Xtr, ytr, sig, K, y_t, device, args.seed + i, args.max_iter, Cs)
             tk[0].append(o)
             tk[1].append(dt)
             if not args.skip_sklearn:
-                sk[1].append(libsvm_time(SkSVC, Xtr_np, ytr_np, gamma, device))
+                sk[1].append(libsvm_time(SkSVC, Xtr_np, ytr_np, gamma, device, Cs))
                 sk[0].append(libsvm_obj(SkSVC, Xtr_np, ytr_np, gamma, Cstar, K, y_t, n, device))
             if ThunderSVC is not None:
-                th[1].append(libsvm_time(ThunderSVC, Xtr_np, ytr_np, gamma, device))
+                th[1].append(libsvm_time(ThunderSVC, Xtr_np, ytr_np, gamma, device, Cs))
                 th[0].append(libsvm_obj(ThunderSVC, Xtr_np, ytr_np, gamma, Cstar, K, y_t, n, device))
 
         def cell(pair):
