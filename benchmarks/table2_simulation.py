@@ -15,8 +15,17 @@ Protocol (matches the paper):
     *same* tuning parameter -- the CV-selected lambda* -- so the three solvers
     are compared on the same optimization problem (paper Section 3). Because C
     and lambda are in one-to-one correspondence via C = 1/(2*n*lambda), the
-    baselines are evaluated at C* = 1/(2*n*lambda*). The exact solver (TorchKM)
-    attains the lowest objective there.
+    baselines are evaluated at C* = 1/(2*n*lambda*). At a fixed lambda and kernel
+    the SVM objective is a unique convex minimum, so a converged TorchKM matches
+    the scikit-learn / ThunderSVM objective; TorchKM's advantage is the time
+    column (integrated CV). The objective lands around 0.5 because, once
+    converged, CV selects a regularized lambda* (the generalizing operating
+    point) rather than the interpolating end of the grid.
+
+Convergence note: TorchKM needs a large iteration budget (``--max-iter``,
+default 100000; the paper used 1e6). With the library default of 1000 the path
+under-converges, returns near-zero solutions at moderate C, and CV collapses to
+the unregularized end (objective ~ 0). Use a GPU for the paper-scale budget.
 
 ThunderSVM is optional. Install it first (https://github.com/Xtra-Computing/thundersvm),
 then either run this script from its python directory (``cd thundersvm/python/``)
@@ -53,11 +62,11 @@ def make_split(n: int, p: int, seed: int):
     return standardize(Xtr), ytr, standardize(Xte), yte
 
 
-def run_torchkm(Xtr, ytr, sig, K, y_t, device, seed):
+def run_torchkm(Xtr, ytr, sig, K, y_t, device, seed, max_iter):
     """Fit TorchKM (timed). Returns (objective at its lambda*, time, C*)."""
     clf = TorchKMSVC(
         kernel="rbf", rbf_sigma=sig, Cs=c_grid(), nC=50,
-        cv=NFOLDS, device=device, random_state=seed,
+        cv=NFOLDS, device=device, random_state=seed, max_iter=max_iter,
     )
     with timed(device) as t:
         clf.fit(Xtr.numpy(), ytr.numpy())
@@ -115,6 +124,10 @@ def main() -> None:
         help="one or more cells to run, e.g. --sizes 10000,10 (default: full grid)",
     )
     ap.add_argument("--device", default=None, help="cuda / cpu (default: auto)")
+    ap.add_argument(
+        "--max-iter", type=int, default=100000,
+        help="TorchKM solver iterations; the default 1000 under-converges (paper used 1e6)",
+    )
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--skip-sklearn", action="store_true", help="scikit-learn is very slow at scale")
     ap.add_argument("--skip-thunder", action="store_true")
@@ -161,7 +174,7 @@ def main() -> None:
             Xtr_np, ytr_np = Xtr.numpy(), ytr.numpy()
 
             # TorchKM defines the common tuning parameter C* (= its CV selection).
-            o, dt, Cstar = run_torchkm(Xtr, ytr, sig, K, y_t, device, args.seed + i)
+            o, dt, Cstar = run_torchkm(Xtr, ytr, sig, K, y_t, device, args.seed + i, args.max_iter)
             tk[0].append(o)
             tk[1].append(dt)
             if not args.skip_sklearn:
