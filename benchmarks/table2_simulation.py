@@ -1,22 +1,33 @@
-"""Reproduce Table 2: scikit-learn vs TorchKM on synthetic data.
+"""Reproduce Table 2 on a GPU: scikit-learn vs ThunderSVM vs TorchKM.
 
-Table 2 compares objective values and end-to-end run time on Gaussian-cluster
-synthetic data (``torchkm.data_gen``) across sizes (n, p). The paper averages
-over 50 independent runs and also reports a ThunderSVM column; ThunderSVM needs
-a from-source CUDA build, so this lean script reports TorchKM and the
-scikit-learn SVC baseline only.
+Table 2 compares the SVM objective value (equation 1) and end-to-end run time on
+Gaussian-cluster synthetic data (``torchkm.data_gen``) across sizes (n, p),
+averaged over 50 independent runs.
 
-Objective values use the same functional, equation (1), evaluated at each
-method's selected lambda, so they are comparable (see ``_common.svm_objective``).
+Protocol (matches the paper / source notebook):
+  * One RBF bandwidth ``sig = sigest(X_train)`` is drawn per run.
+  * The competing libraries are trained as RBF-SVMs with ``gamma = sig`` and a
+    50-point C grid (log-uniform over [1e-3, 1e3]), tuned by 10-fold CV.
+  * All three solutions are scored with the *same* objective (equation 1) on the
+    common kernel ``K = rbf_kernel(X_train, sig)`` so the values are comparable.
+    Note ``torchkm.rbf_kernel`` uses exp(-2*sig*||.||^2); to make TorchKM use the
+    identical kernel it is fit with ``rbf_sigma=sig``.
+  * Reported time is the full train-and-tune pipeline.
 
-Example:
-    python benchmarks/table2_simulation.py --repeats 3
-    python benchmarks/table2_simulation.py --repeats 50 --device cuda   # paper scale
+ThunderSVM is optional. Install it first (https://github.com/Xtra-Computing/thundersvm),
+then either run this script from its python directory (``cd thundersvm/python/``)
+or pass ``--thundersvm-path /path/to/thundersvm/python``. If it cannot be
+imported the ThunderSVM column is skipped.
+
+Example (paper scale, GPU):
+    python benchmarks/table2_simulation.py --repeats 50 --device cuda \
+        --thundersvm-path /path/to/thundersvm/python
 """
 
 from __future__ import annotations
 
 import argparse
+import sys
 
 import numpy as np
 import torch
@@ -26,7 +37,7 @@ from torchkm.estimators import TorchKMSVC
 
 from _common import c_grid, get_device, mean_se, svm_objective, timed, warmup
 
-# Synthetic-data parameters (paper / example notebook).
+# Synthetic-data parameters (paper / source notebook).
 NM, MU, RO, NFOLDS = 5, 2.0, 3.0, 10
 # (n, p) cells of Table 2.
 SIZES = [(10000, 10), (10000, 100), (10000, 1000), (20000, 10), (20000, 100), (20000, 1000)]
@@ -38,48 +49,53 @@ def make_split(n: int, p: int, seed: int):
     return standardize(Xtr), ytr, standardize(Xte), yte
 
 
-def run_torchkm(Xtr, ytr, device, seed):
+def torchkm_obj_time(Xtr, ytr, sig, K, y_t, device, seed):
     Cs = c_grid()
-    clf = TorchKMSVC(kernel="rbf", Cs=Cs, nC=len(Cs), cv=NFOLDS, device=device, random_state=seed)
+    clf = TorchKMSVC(
+        kernel="rbf", rbf_sigma=sig, Cs=Cs, nC=len(Cs),
+        cv=NFOLDS, device=device, random_state=seed,
+    )
     with timed(device) as t:
         clf.fit(Xtr.numpy(), ytr.numpy())
-
-    # Objective on the common training kernel at the selected lambda.
-    sigma = clf.kernel_state_["sigma"]
-    K = rbf_kernel(Xtr.to(torch.double).to(device), sigma)
     alpha = torch.as_tensor(clf.alpha_, dtype=torch.double, device=device)
-    y = ytr.to(torch.double).to(device)
     lam = 1.0 / (2.0 * Xtr.shape[0] * clf.best_C_)
-    return svm_objective(K, y, alpha, clf.intercept_, lam), t.dt
+    return svm_objective(K, y_t, alpha, clf.intercept_, lam), t.dt
 
 
-def run_sklearn(Xtr, ytr, device):
+def libsvm_obj_time(SVC, Xtr_np, ytr_np, sig, K, y_t, n, device):
+    """Tune + fit an RBF-SVM via a scikit-learn-style ``SVC`` (sklearn or thundersvm)."""
     from sklearn.model_selection import cross_val_score
-    from sklearn.svm import SVC
-
-    Xtr_np, ytr_np = Xtr.numpy(), ytr.numpy()
-    n = Xtr.shape[0]
-    sigma = sigest(Xtr)
-    # torchkm's rbf_kernel uses exp(-2*sigma*||.||^2); scikit-learn uses
-    # exp(-gamma*||.||^2). gamma = 2*sigma makes both solve the same kernel SVM.
-    gamma = 2.0 * sigma
 
     Cs = c_grid()
     with timed(device) as t:
         scores = [
-            cross_val_score(SVC(kernel="rbf", C=float(c), gamma=gamma), Xtr_np, ytr_np, cv=NFOLDS).mean()
+            cross_val_score(SVC(kernel="rbf", C=float(c), gamma=sig), Xtr_np, ytr_np, cv=NFOLDS).mean()
             for c in Cs
         ]
         best_c = float(Cs[int(np.argmax(scores))])
-        model = SVC(kernel="rbf", C=best_c, gamma=gamma).fit(Xtr_np, ytr_np)
+        model = SVC(kernel="rbf", C=best_c, gamma=sig).fit(Xtr_np, ytr_np)
 
     alpha_full = np.zeros(n)
-    alpha_full[model.support_] = model.dual_coef_.ravel()
-    K = rbf_kernel(Xtr.to(torch.double).to(device), sigma)
+    alpha_full[np.asarray(model.support_)] = np.asarray(model.dual_coef_).ravel()
     alpha = torch.as_tensor(alpha_full, dtype=torch.double, device=device)
-    y = ytr.to(torch.double).to(device)
+    intercept = float(np.asarray(model.intercept_).ravel()[0])
     lam = 1.0 / (2.0 * n * best_c)
-    return svm_objective(K, y, alpha, float(model.intercept_[0]), lam), t.dt
+    return svm_objective(K, y_t, alpha, intercept, lam), t.dt
+
+
+def load_thundersvm(path):
+    if path:
+        sys.path.insert(0, path)
+    from thundersvm import SVC
+
+    return SVC
+
+
+def fmt(obj_se, time_mean):
+    if obj_se is None:
+        return f"{'skipped':>16} {'-':>8}"
+    m, se = obj_se
+    return f"{m:>7.3f} ({se:>6.3f}) {time_mean:>8.1f}"
 
 
 def main() -> None:
@@ -88,37 +104,62 @@ def main() -> None:
     ap.add_argument("--device", default=None, help="cuda / cpu (default: auto)")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--skip-sklearn", action="store_true", help="scikit-learn is very slow at scale")
+    ap.add_argument("--skip-thunder", action="store_true")
+    ap.add_argument("--thundersvm-path", default=None, help="path to thundersvm/python")
     args = ap.parse_args()
 
     device = get_device(args.device)
-    print(f"device={device}  repeats={args.repeats}  folds={NFOLDS}  grid=50 C in [1e-3,1e3]\n")
+    print(f"device={device}  repeats={args.repeats}  folds={NFOLDS}  grid=50 C in [1e-3,1e3]")
+
+    from sklearn.svm import SVC as SkSVC
+
+    ThunderSVC = None
+    if not args.skip_thunder:
+        try:
+            ThunderSVC = load_thundersvm(args.thundersvm_path)
+        except ImportError:
+            print(
+                "ThunderSVM not importable -> skipping that column. Install it "
+                "(https://github.com/Xtra-Computing/thundersvm), then `cd thundersvm/python/` "
+                "or pass --thundersvm-path /path/to/thundersvm/python."
+            )
+    print()
     warmup(device)
 
-    header = f"{'n':>7} {'p':>5} | {'TorchKM obj':>22} {'time(s)':>9} | {'sklearn obj':>22} {'time(s)':>9}"
+    header = (
+        f"{'n':>7} {'p':>5} | {'scikit-learn obj / t(s)':>25} | "
+        f"{'ThunderSVM obj / t(s)':>25} | {'TorchKM obj / t(s)':>25}"
+    )
     print(header)
     print("-" * len(header))
 
     for n, p in SIZES:
-        tk_obj, tk_t, sk_obj, sk_t = [], [], [], []
+        sk, th, tk = ([], []), ([], []), ([], [])  # (objs, times)
         for i in range(args.repeats):
             Xtr, ytr, _, _ = make_split(n, p, args.seed + i)
-            o, dt = run_torchkm(Xtr, ytr, device, args.seed + i)
-            tk_obj.append(o)
-            tk_t.append(dt)
-            if not args.skip_sklearn:
-                o, dt = run_sklearn(Xtr, ytr, device)
-                sk_obj.append(o)
-                sk_t.append(dt)
+            sig = sigest(Xtr)
+            K = rbf_kernel(Xtr.to(torch.double).to(device), sig)
+            y_t = ytr.to(torch.double).to(device)
+            Xtr_np, ytr_np = Xtr.numpy(), ytr.numpy()
 
-        tk_om, tk_os = mean_se(tk_obj)
-        tk_tm, _ = mean_se(tk_t)
-        if sk_obj:
-            sk_om, sk_os = mean_se(sk_obj)
-            sk_tm, _ = mean_se(sk_t)
-            sk_cell = f"{sk_om:>9.3f} ({sk_os:>6.3f}) {sk_tm:>9.1f}"
-        else:
-            sk_cell = f"{'skipped':>22} {'-':>9}"
-        print(f"{n:>7} {p:>5} | {tk_om:>9.3f} ({tk_os:>6.3f}) {tk_tm:>9.1f} | {sk_cell}")
+            o, dt = torchkm_obj_time(Xtr, ytr, sig, K, y_t, device, args.seed + i)
+            tk[0].append(o)
+            tk[1].append(dt)
+            if not args.skip_sklearn:
+                o, dt = libsvm_obj_time(SkSVC, Xtr_np, ytr_np, sig, K, y_t, n, device)
+                sk[0].append(o)
+                sk[1].append(dt)
+            if ThunderSVC is not None:
+                o, dt = libsvm_obj_time(ThunderSVC, Xtr_np, ytr_np, sig, K, y_t, n, device)
+                th[0].append(o)
+                th[1].append(dt)
+
+        def cell(pair):
+            if not pair[0]:
+                return fmt(None, None)
+            return fmt(mean_se(pair[0]), mean_se(pair[1])[0])
+
+        print(f"{n:>7} {p:>5} | {cell(sk)} | {cell(th)} | {cell(tk)}")
 
 
 if __name__ == "__main__":
