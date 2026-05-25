@@ -101,12 +101,20 @@ def fmt(obj_se, time_mean):
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--repeats", type=int, default=3, help="runs per cell (paper: 50)")
+    ap.add_argument(
+        "--sizes", nargs="+", default=None, metavar="N,P",
+        help="one or more cells to run, e.g. --sizes 10000,10 (default: full grid)",
+    )
     ap.add_argument("--device", default=None, help="cuda / cpu (default: auto)")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--skip-sklearn", action="store_true", help="scikit-learn is very slow at scale")
     ap.add_argument("--skip-thunder", action="store_true")
     ap.add_argument("--thundersvm-path", default=None, help="path to thundersvm/python")
     args = ap.parse_args()
+
+    sizes = SIZES
+    if args.sizes is not None:
+        sizes = [tuple(int(v) for v in s.split(",")) for s in args.sizes]
 
     device = get_device(args.device)
     print(f"device={device}  repeats={args.repeats}  folds={NFOLDS}  grid=50 C in [1e-3,1e3]")
@@ -133,7 +141,7 @@ def main() -> None:
     print(header)
     print("-" * len(header))
 
-    for n, p in SIZES:
+    for n, p in sizes:
         sk, th, tk = ([], []), ([], []), ([], [])  # (objs, times)
         for i in range(args.repeats):
             Xtr, ytr, _, _ = make_split(n, p, args.seed + i)
