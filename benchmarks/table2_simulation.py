@@ -12,10 +12,11 @@ and kernel:
   * The tuning grid is 50 log-uniform *lambda* values over [1e-3, 1e3], each
     transferred to the LIBSVM C parameterization via C = 1/(2*n*lambda).
   * Baselines are RBF-SVMs fit with ``gamma = sig`` (the notebook's setting; note
-    this is half the bandwidth of Kmat) and tuned by 10-fold CV; TorchKM uses the
-    CV solver with ``is_exact=0`` and ``rbf_sigma=sig``. Reported **time** is the
-    full train-and-tune pipeline -- for the baselines this is the 10-fold CV
-    over the whole grid plus the final model fit, all inside the timed region.
+    this is half the bandwidth of Kmat) and tuned by 10-fold CV; TorchKM uses
+    ``rbf_sigma=sig`` with ``is_exact=0`` by default (pass ``--exact`` for the
+    exact cross-validation solver, is_exact=1). Reported **time** is the full
+    train-and-tune pipeline -- for the baselines this is the 10-fold CV over the
+    whole grid plus the final model fit, all inside the timed region.
   * The **objective** is ``objfun`` = lam*aKa + sum(hinge)/n evaluated on Kmat.
     TorchKM uses its selected lambda* = ulam[best_ind]. The baselines reproduce
     the notebook's regularization weight, which is the *leftover loop variable*
@@ -57,11 +58,11 @@ def make_split(n: int, p: int, seed: int):
     return standardize(Xtr), ytr, standardize(Xte), yte
 
 
-def run_torchkm(Xtr, ytr, sig, Kmat, y_t, device, seed, max_iter, Cs):
+def run_torchkm(Xtr, ytr, sig, Kmat, y_t, device, seed, max_iter, Cs, is_exact):
     """Fit TorchKM (timed) and return (objfun at its lambda*, time)."""
     clf = TorchKMSVC(
         kernel="rbf", rbf_sigma=sig, Cs=Cs, nC=len(Cs), cv=NFOLDS,
-        device=device, random_state=seed, max_iter=max_iter, is_exact=0,
+        device=device, random_state=seed, max_iter=max_iter, is_exact=is_exact,
     )
     with timed(device) as t:
         clf.fit(Xtr.numpy(), ytr.numpy())
@@ -126,6 +127,10 @@ def main() -> None:
         "--baseline-lambda", choices=["notebook", "best"], default="notebook",
         help="objective reg weight for baselines: 'notebook'=ulam[-1] (exact), 'best'=lam_best",
     )
+    ap.add_argument(
+        "--exact", action="store_true",
+        help="use TorchKM exact cross-validation (is_exact=1; default is 0)",
+    )
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--skip-sklearn", action="store_true", help="scikit-learn is very slow at scale")
     ap.add_argument("--skip-thunder", action="store_true")
@@ -172,7 +177,7 @@ def main() -> None:
             y_t = ytr.to(torch.double).to(device)
             Xtr_np, ytr_np = Xtr.numpy(), ytr.numpy()
 
-            o, dt = run_torchkm(Xtr, ytr, sig, Kmat, y_t, device, args.seed + i, args.max_iter, Cs)
+            o, dt = run_torchkm(Xtr, ytr, sig, Kmat, y_t, device, args.seed + i, args.max_iter, Cs, int(args.exact))
             tk[0].append(o)
             tk[1].append(dt)
             if not args.skip_sklearn:
