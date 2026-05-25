@@ -4,15 +4,19 @@ Table 2 compares the SVM objective value (equation 1) and end-to-end run time on
 Gaussian-cluster synthetic data (``torchkm.data_gen``) across sizes (n, p),
 averaged over 50 independent runs.
 
-Protocol (matches the paper / source notebook):
-  * One RBF bandwidth ``sig = sigest(X_train)`` is drawn per run.
-  * The competing libraries are trained as RBF-SVMs with ``gamma = sig`` and a
-    50-point C grid (log-uniform over [1e-3, 1e3]), tuned by 10-fold CV.
-  * All three solutions are scored with the *same* objective (equation 1) on the
-    common kernel ``K = rbf_kernel(X_train, sig)`` so the values are comparable.
-    Note ``torchkm.rbf_kernel`` uses exp(-2*sig*||.||^2); to make TorchKM use the
-    identical kernel it is fit with ``rbf_sigma=sig``.
-  * Reported time is the full train-and-tune pipeline.
+Protocol (matches the paper):
+  * One RBF bandwidth ``sig = sigest(X_train)`` is drawn per run, defining the
+    common kernel ``K = rbf_kernel(X_train, sig)`` = exp(-2*sig*||.||^2).
+  * Each library is tuned by 10-fold CV over a 50-point C grid (log-uniform over
+    [1e-3, 1e3]); the reported **time** is that full train-and-tune pipeline.
+    Baselines use ``gamma = 2*sig`` so their RBF kernel equals K (scikit-learn /
+    LIBSVM use exp(-gamma*||.||^2)); TorchKM is fit with ``rbf_sigma=sig``.
+  * The reported **objective** is equation (1) evaluated for every method at the
+    *same* tuning parameter -- the CV-selected lambda* -- so the three solvers
+    are compared on the same optimization problem (paper Section 3). Because C
+    and lambda are in one-to-one correspondence via C = 1/(2*n*lambda), the
+    baselines are evaluated at C* = 1/(2*n*lambda*). The exact solver (TorchKM)
+    attains the lowest objective there.
 
 ThunderSVM is optional. Install it first (https://github.com/Xtra-Computing/thundersvm),
 then either run this script from its python directory (``cd thundersvm/python/``)
@@ -49,38 +53,43 @@ def make_split(n: int, p: int, seed: int):
     return standardize(Xtr), ytr, standardize(Xte), yte
 
 
-def torchkm_obj_time(Xtr, ytr, sig, K, y_t, device, seed):
-    Cs = c_grid()
+def run_torchkm(Xtr, ytr, sig, K, y_t, device, seed):
+    """Fit TorchKM (timed). Returns (objective at its lambda*, time, C*)."""
     clf = TorchKMSVC(
-        kernel="rbf", rbf_sigma=sig, Cs=Cs, nC=len(Cs),
+        kernel="rbf", rbf_sigma=sig, Cs=c_grid(), nC=50,
         cv=NFOLDS, device=device, random_state=seed,
     )
     with timed(device) as t:
         clf.fit(Xtr.numpy(), ytr.numpy())
+    Cstar = clf.best_C_
+    lam = 1.0 / (2.0 * Xtr.shape[0] * Cstar)
     alpha = torch.as_tensor(clf.alpha_, dtype=torch.double, device=device)
-    lam = 1.0 / (2.0 * Xtr.shape[0] * clf.best_C_)
-    return svm_objective(K, y_t, alpha, clf.intercept_, lam), t.dt
+    return svm_objective(K, y_t, alpha, clf.intercept_, lam), t.dt, Cstar
 
 
-def libsvm_obj_time(SVC, Xtr_np, ytr_np, sig, K, y_t, n, device):
-    """Tune + fit an RBF-SVM via a scikit-learn-style ``SVC`` (sklearn or thundersvm)."""
+def libsvm_time(SVC, Xtr_np, ytr_np, gamma, device):
+    """Time the full 10-fold CV grid search + final fit for a libsvm-style SVC."""
     from sklearn.model_selection import cross_val_score
 
     Cs = c_grid()
     with timed(device) as t:
         scores = [
-            cross_val_score(SVC(kernel="rbf", C=float(c), gamma=sig), Xtr_np, ytr_np, cv=NFOLDS).mean()
+            cross_val_score(SVC(kernel="rbf", C=float(c), gamma=gamma), Xtr_np, ytr_np, cv=NFOLDS).mean()
             for c in Cs
         ]
-        best_c = float(Cs[int(np.argmax(scores))])
-        model = SVC(kernel="rbf", C=best_c, gamma=sig).fit(Xtr_np, ytr_np)
+        SVC(kernel="rbf", C=float(Cs[int(np.argmax(scores))]), gamma=gamma).fit(Xtr_np, ytr_np)
+    return t.dt
 
+
+def libsvm_obj(SVC, Xtr_np, ytr_np, gamma, Cstar, K, y_t, n, device):
+    """Objective (equation 1) of a libsvm-style SVC fit at the common C*."""
+    model = SVC(kernel="rbf", C=Cstar, gamma=gamma).fit(Xtr_np, ytr_np)
     alpha_full = np.zeros(n)
     alpha_full[np.asarray(model.support_)] = np.asarray(model.dual_coef_).ravel()
     alpha = torch.as_tensor(alpha_full, dtype=torch.double, device=device)
     intercept = float(np.asarray(model.intercept_).ravel()[0])
-    lam = 1.0 / (2.0 * n * best_c)
-    return svm_objective(K, y_t, alpha, intercept, lam), t.dt
+    lam = 1.0 / (2.0 * n * Cstar)
+    return svm_objective(K, y_t, alpha, intercept, lam)
 
 
 def load_thundersvm(path):
@@ -146,21 +155,21 @@ def main() -> None:
         for i in range(args.repeats):
             Xtr, ytr, _, _ = make_split(n, p, args.seed + i)
             sig = sigest(Xtr)
+            gamma = 2.0 * sig  # match torchkm's exp(-2*sig*||.||^2) kernel
             K = rbf_kernel(Xtr.to(torch.double).to(device), sig)
             y_t = ytr.to(torch.double).to(device)
             Xtr_np, ytr_np = Xtr.numpy(), ytr.numpy()
 
-            o, dt = torchkm_obj_time(Xtr, ytr, sig, K, y_t, device, args.seed + i)
+            # TorchKM defines the common tuning parameter C* (= its CV selection).
+            o, dt, Cstar = run_torchkm(Xtr, ytr, sig, K, y_t, device, args.seed + i)
             tk[0].append(o)
             tk[1].append(dt)
             if not args.skip_sklearn:
-                o, dt = libsvm_obj_time(SkSVC, Xtr_np, ytr_np, sig, K, y_t, n, device)
-                sk[0].append(o)
-                sk[1].append(dt)
+                sk[1].append(libsvm_time(SkSVC, Xtr_np, ytr_np, gamma, device))
+                sk[0].append(libsvm_obj(SkSVC, Xtr_np, ytr_np, gamma, Cstar, K, y_t, n, device))
             if ThunderSVC is not None:
-                o, dt = libsvm_obj_time(ThunderSVC, Xtr_np, ytr_np, sig, K, y_t, n, device)
-                th[0].append(o)
-                th[1].append(dt)
+                th[1].append(libsvm_time(ThunderSVC, Xtr_np, ytr_np, gamma, device))
+                th[0].append(libsvm_obj(ThunderSVC, Xtr_np, ytr_np, gamma, Cstar, K, y_t, n, device))
 
         def cell(pair):
             if not pair[0]:
