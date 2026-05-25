@@ -13,8 +13,9 @@ and kernel:
     transferred to the LIBSVM C parameterization via C = 1/(2*n*lambda).
   * Baselines are RBF-SVMs fit with ``gamma = sig`` (the notebook's setting; note
     this is half the bandwidth of Kmat) and tuned by 10-fold CV; TorchKM uses the
-    exact CV solver (``is_exact=1``, ``rbf_sigma=sig``). Reported **time** is the
-    full train-and-tune pipeline.
+    CV solver with ``is_exact=0`` and ``rbf_sigma=sig``. Reported **time** is the
+    full train-and-tune pipeline -- for the baselines this is the 10-fold CV
+    over the whole grid plus the final model fit, all inside the timed region.
   * The **objective** is ``objfun`` = lam*aKa + sum(hinge)/n evaluated on Kmat.
     TorchKM uses its selected lambda* = ulam[best_ind]. The baselines reproduce
     the notebook's regularization weight, which is the *leftover loop variable*
@@ -60,7 +61,7 @@ def run_torchkm(Xtr, ytr, sig, Kmat, y_t, device, seed, max_iter, Cs):
     """Fit TorchKM (timed) and return (objfun at its lambda*, time)."""
     clf = TorchKMSVC(
         kernel="rbf", rbf_sigma=sig, Cs=Cs, nC=len(Cs), cv=NFOLDS,
-        device=device, random_state=seed, max_iter=max_iter, is_exact=1,
+        device=device, random_state=seed, max_iter=max_iter, is_exact=0,
     )
     with timed(device) as t:
         clf.fit(Xtr.numpy(), ytr.numpy())
