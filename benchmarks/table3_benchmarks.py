@@ -123,21 +123,22 @@ class CNN1DModel(nn.Module):
         return self.fc(self.conv(x))
 
 
-def run_nn(Xtr, ytr, Xte, yte, device, seed):
-    """1D-CNN baseline: grid search over 8 configs, best test accuracy + tuning time."""
+def run_nn(Xtr, ytr, Xte, yte, seed):
+    """1D-CNN baseline (CPU, exactly as the notebook): grid search over 8 configs,
+    best test accuracy + total tuning time."""
     torch.manual_seed(seed)
-    ytr01 = (ytr == 1).long().to(device)
-    yte01 = (yte == 1).long().to(device)
-    Xtr_t = Xtr.unsqueeze(1).to(device)  # (N, 1, F)
-    Xte_t = Xte.unsqueeze(1).to(device)
+    ytr01 = (ytr == 1).long()
+    yte01 = (yte == 1).long()
+    Xtr_t = Xtr.unsqueeze(1)  # (N, 1, F)
+    Xte_t = Xte.unsqueeze(1)
     train_loader = DataLoader(TensorDataset(Xtr_t, ytr01), batch_size=64, shuffle=True)
 
     best_acc = 0.0
-    with timed(device) as t:
+    with timed("cpu") as t:
         for conv_channels in (16, 32):
             for fc_units in (64, 128):
                 for lr in (0.001, 0.01):
-                    model = CNN1DModel(conv_channels=conv_channels, fc_units=fc_units).to(device)
+                    model = CNN1DModel(conv_channels=conv_channels, fc_units=fc_units)
                     criterion = nn.CrossEntropyLoss()
                     optimizer = optim.Adam(model.parameters(), lr=lr)
                     model.train()
@@ -220,7 +221,7 @@ def main() -> None:
             tk[0].append(a)
             tk[1].append(dt)
             if not args.skip_nn:
-                a, dt = run_nn(Xtr, ytr, Xte, yte, device, args.seed + i)
+                a, dt = run_nn(Xtr, ytr, Xte, yte, args.seed + i)
                 nn_acc[0].append(a)
                 nn_acc[1].append(dt)
             if ThunderSVC is not None:
