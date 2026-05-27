@@ -48,29 +48,34 @@ documented.
 
 ## Reproducing Paper Tables 2-4
 
-Minimal, lean scripts for the paper's three benchmark tables live next to this
-README. They are TorchKM-focused: the ThunderSVM and 1D-CNN columns from the
-paper are omitted (they need a from-source CUDA build / a separate training
-loop), and the directly pip-installable scikit-learn baselines are kept.
+Scripts for the paper's three benchmark tables live next to this README. They
+reproduce the source notebooks' protocol per method. Competing baselines that
+need extra setup are optional: ThunderSVM is imported on demand (build it, then
+`cd thundersvm/python/` or pass `--thundersvm-path`) and skipped with guidance
+if unavailable; the 1D-CNN baseline (Table 3) uses PyTorch.
 
-All three follow the paper protocol (Appendix B.1): a 50-point grid of `C`
-values log-uniform over `[1e-3, 1e3]`, 10-fold cross-validation, and end-to-end
-wall-clock timing with a CUDA warmup. `--repeats` defaults to a small smoke
-value; pass the paper count (50 for Table 2, 10 for Tables 3-4) for full runs.
-Use `--device cuda` on a GPU; timings on other hardware will differ.
+Each method is tuned by 10-fold cross-validation over a 50-point regularization
+grid, with end-to-end wall-clock timing and a CUDA warmup. The grid is in the
+lambda parameterization, transferred to LIBSVM C via `C = 1/(2*n*lambda)`:
+Table 2 uses `lambda in [1e-3, 1e3]`, Table 3 uses `lambda in [1e-5, 1e-1]`.
+`--repeats` defaults to a small smoke value; pass the paper count (50 for
+Table 2, 10 for Tables 3-4). Use `--device cuda` on a GPU; timings differ on
+other hardware.
 
 | Script | Table | Data | Reports |
 | --- | --- | --- | --- |
-| `table2_simulation.py` | 2 | synthetic (`torchkm.data_gen`) | objective value + time, TorchKM vs scikit-learn SVC |
-| `table3_benchmarks.py` | 3 | a7a, a8a, w7a | accuracy + time, TorchKM (exact RBF SVM) |
+| `table2_simulation.py` | 2 | synthetic (`torchkm.data_gen`) | objective + time: scikit-learn, ThunderSVM, TorchKM |
+| `table3_benchmarks.py` | 3 | a7a, a8a, w7a | accuracy + time: 1D-CNN, TorchKM (exact RBF SVM), ThunderSVM |
 | `table4_nystrom.py` | 4 | a9a, w8a, ijcnn1, covtype, MNIST8m (4-vs-6) | accuracy + time, TorchKM Nystrom vs scikit-learn Nystrom |
 
 ```bash
 # Table 2 (no external data needed)
-python benchmarks/table2_simulation.py --repeats 50 --device cuda
+python benchmarks/table2_simulation.py --repeats 50 --device cuda \
+    --thundersvm-path /path/to/thundersvm/python
 
 # Table 3 (LIBSVM files in DATA_DIR, train + ".t" test file each)
-python benchmarks/table3_benchmarks.py --data-dir DATA_DIR --repeats 10 --device cuda
+python benchmarks/table3_benchmarks.py --data-dir DATA_DIR --repeats 10 --device cuda \
+    --thundersvm-path /path/to/thundersvm/python
 
 # Table 4 (Nystrom; covtype/mnist8m are single files and get a split)
 python benchmarks/table4_nystrom.py --data-dir DATA_DIR --datasets a9a w8a ijcnn1 \
