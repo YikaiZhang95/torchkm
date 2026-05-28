@@ -258,7 +258,6 @@ If you use TorchKM in academic work, please cite:
 @article{zhang2026torchkm,
   title   = {TorchKM: GPU-Accelerated Kernel Machines with Fast Model Selection in PyTorch},
   author  = {Zhang, Yikai and Jia, Gaoxiang and Ding, Jie and Wang, Boxiang},
-  journal = {Journal of Machine Learning Research (MLOSS track)},
   year    = {2026},
   note    = {Software paper submission}
 }
