@@ -45,7 +45,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from torchkm.cvksvm import cvksvm
 from torchkm.functions import kernelMult, rbf_kernel, sigest
 
-from _common import get_device, mean_se, timed, warmup
+from _common import free_cuda, get_device, mean_se, timed, warmup
 
 NFOLDS = 10
 NLAM = 50
@@ -83,6 +83,7 @@ def run_torchkm(Xtr, ytr, Xte, yte, sig, Kmat, ulam, device, max_iter, is_exact)
     result = torch.mv(Kmat_new, alpmat[1:, best_ind]) + alpmat[0, best_ind]
     ypred = torch.where(result > 0, 1.0, -1.0)
     acc = float((ypred == yte).float().mean())
+    del model, Kmat_new
     return acc, t.dt
 
 
@@ -220,6 +221,8 @@ def main() -> None:
             a, dt = run_torchkm(Xtr, ytr, Xte, yte, sig, Kmat, ulam, device, args.max_iter, int(args.exact))
             tk[0].append(a)
             tk[1].append(dt)
+            del Kmat
+            free_cuda(device)
             if not args.skip_nn:
                 a, dt = run_nn(Xtr, ytr, Xte, yte, args.seed + i)
                 nn_acc[0].append(a)
@@ -235,6 +238,8 @@ def main() -> None:
             return fmt(mean_se(pair[0]), mean_se(pair[1])[0])
 
         print(f"{name:>6} {Xtr.shape[0]:>8} | {cell(nn_acc)} | {cell(tk)} | {cell(th)}")
+        del Xtr, ytr, Xte, yte, Xtr_np, ytr_np, Xte_np, yte_np
+        free_cuda(device)
 
 
 if __name__ == "__main__":

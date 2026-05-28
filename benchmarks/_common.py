@@ -39,6 +39,12 @@ def synchronize(device: str) -> None:
         torch.cuda.synchronize()
 
 
+def free_cuda(device: str) -> None:
+    """Release cached CUDA blocks between datasets/methods to limit peak memory."""
+    if str(device).startswith("cuda"):
+        torch.cuda.empty_cache()
+
+
 class timed:
     """Context manager for CUDA-safe wall-clock timing (seconds)."""
 
