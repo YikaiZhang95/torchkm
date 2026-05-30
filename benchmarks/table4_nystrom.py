@@ -56,11 +56,51 @@ NUM_LANDMARKS = 2000
 # Per-dataset settings -- match the source notebook cells exactly.
 # ulam_log = (start, end) for torch.logspace; maxit, k, eps follow the notebook.
 DATASETS = {
-    "a9a":     dict(train="a9a",     test="a9a.t",     classes=None,  ulam_log=(-1, -7), maxit=10_000_000, k=300, eps=1e-3),
-    "w8a":     dict(train="w8a",     test="w8a.t",     classes=None,  ulam_log=(3,  -3), maxit=1_000_000,  k=300, eps=1e-3),
-    "ijcnn1":  dict(train="ijcnn1",  test="ijcnn1.t",  classes=None,  ulam_log=(3,  -3), maxit=1_000_000,  k=300, eps=1e-3),
-    "covtype": dict(train="covtype.libsvm.binary.scale", test=None, classes=None, ulam_log=(3, -3), maxit=1_000_000, k=30,  eps=1e-3),
-    "mnist8m": dict(train="mnist8m.scale",               test=None, classes=(4, 6), ulam_log=(3, -3), maxit=1_000_000, k=300, eps=1e-8),
+    "a9a": dict(
+        train="a9a",
+        test="a9a.t",
+        classes=None,
+        ulam_log=(-1, -7),
+        maxit=10_000_000,
+        k=300,
+        eps=1e-3,
+    ),
+    "w8a": dict(
+        train="w8a",
+        test="w8a.t",
+        classes=None,
+        ulam_log=(3, -3),
+        maxit=1_000_000,
+        k=300,
+        eps=1e-3,
+    ),
+    "ijcnn1": dict(
+        train="ijcnn1",
+        test="ijcnn1.t",
+        classes=None,
+        ulam_log=(3, -3),
+        maxit=1_000_000,
+        k=300,
+        eps=1e-3,
+    ),
+    "covtype": dict(
+        train="covtype.libsvm.binary.scale",
+        test=None,
+        classes=None,
+        ulam_log=(3, -3),
+        maxit=1_000_000,
+        k=30,
+        eps=1e-3,
+    ),
+    "mnist8m": dict(
+        train="mnist8m.scale",
+        test=None,
+        classes=(4, 6),
+        ulam_log=(3, -3),
+        maxit=1_000_000,
+        k=300,
+        eps=1e-8,
+    ),
 }
 
 
@@ -131,9 +171,19 @@ def run_torchkm(Xtr, ytr, Xte, yte, cfg, device, seed):
 
     with timed(device) as t:
         model = cvknyssvm(
-            Xmat=Xtr, X_test=Xte, y=ytr, nlam=NLAM, ulam=ulam, foldid=foldid,
-            nfolds=NFOLDS, eps=cfg["eps"], maxit=cfg["maxit"], gamma=1e-8,
-            num_landmarks=NUM_LANDMARKS, k=cfg["k"], device=device,
+            Xmat=Xtr,
+            X_test=Xte,
+            y=ytr,
+            nlam=NLAM,
+            ulam=ulam,
+            foldid=foldid,
+            nfolds=NFOLDS,
+            eps=cfg["eps"],
+            maxit=cfg["maxit"],
+            gamma=1e-8,
+            num_landmarks=NUM_LANDMARKS,
+            k=cfg["k"],
+            device=device,
         )
         model.fit()
 
@@ -179,7 +229,12 @@ def run_sklearn(Xtr, ytr, Xte, yte, device):
         sig_w = sigest(landmarks)
         Z_train = _nystrom_transform(Xtr, landmarks, sig_w, k).numpy()
         cv_results = [
-            cross_val_score(svm.LinearSVC(C=float(1.0 / (2 * nn_obs * float(lam)))), Z_train, ytr_np, cv=NFOLDS).mean()
+            cross_val_score(
+                svm.LinearSVC(C=float(1.0 / (2 * nn_obs * float(lam)))),
+                Z_train,
+                ytr_np,
+                cv=NFOLDS,
+            ).mean()
             for lam in ulam
         ]
         lam_best = float(ulam[int(np.argmax(cv_results))])
@@ -190,7 +245,9 @@ def run_sklearn(Xtr, ytr, Xte, yte, device):
         sig_w = sigest(landmarks)
         Z_train = _nystrom_transform(Xtr, landmarks, sig_w, k).numpy()
         Z_test = _nystrom_transform(Xte, landmarks, sig_w, k).numpy()
-        model = svm.LinearSVC(C=float(1.0 / (2 * nn_obs * lam_best))).fit(Z_train, ytr_np)
+        model = svm.LinearSVC(C=float(1.0 / (2 * nn_obs * lam_best))).fit(
+            Z_train, ytr_np
+        )
 
     acc = float((model.predict(Z_test) == yte_np).mean())
     return acc, t.dt
@@ -206,16 +263,24 @@ def fmt(acc_se, time_mean):
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--data-dir", required=True, help="dir holding the LIBSVM files")
-    ap.add_argument("--datasets", nargs="+", default=list(DATASETS), choices=list(DATASETS))
-    ap.add_argument("--repeats", type=int, default=1, help="runs per dataset (paper: 10)")
+    ap.add_argument(
+        "--datasets", nargs="+", default=list(DATASETS), choices=list(DATASETS)
+    )
+    ap.add_argument(
+        "--repeats", type=int, default=1, help="runs per dataset (paper: 10)"
+    )
     ap.add_argument("--device", default=None, help="cuda / cpu (default: auto)")
     ap.add_argument("--seed", type=int, default=52)
     ap.add_argument("--skip-sklearn", action="store_true")
-    ap.add_argument("--max-iter", type=int, default=None, help="override per-dataset maxit")
+    ap.add_argument(
+        "--max-iter", type=int, default=None, help="override per-dataset maxit"
+    )
     args = ap.parse_args()
 
     device = get_device(args.device)
-    print(f"device={device}  repeats={args.repeats}  folds={NFOLDS}  landmarks={NUM_LANDMARKS}")
+    print(
+        f"device={device}  repeats={args.repeats}  folds={NFOLDS}  landmarks={NUM_LANDMARKS}"
+    )
     print()
     free_cuda(device)
     warmup(device)

@@ -50,7 +50,8 @@ def load_pair(data_dir, train_f, test_f):
     from sklearn.datasets import load_svmlight_files
 
     Xtr, ytr, Xte, yte = load_svmlight_files(
-        (os.path.join(data_dir, train_f), os.path.join(data_dir, test_f)), dtype=np.float64
+        (os.path.join(data_dir, train_f), os.path.join(data_dir, test_f)),
+        dtype=np.float64,
     )
     ytr = np.where(ytr > 0, 1.0, -1.0)
     yte = np.where(yte > 0, 1.0, -1.0)
@@ -65,8 +66,16 @@ def run_torchkm(Xtr, ytr, Xte, yte, sig, Kmat, ulam, device, max_iter, is_exact)
     """Exact RBF kernel SVM via cvksvm. Returns (test accuracy, fit time)."""
     with timed(device) as t:
         model = cvksvm(
-            Kmat=Kmat, y=ytr, nlam=NLAM, ulam=ulam, nfolds=NFOLDS,
-            eps=1e-3, maxit=max_iter, gamma=1e-8, is_exact=is_exact, device=device,
+            Kmat=Kmat,
+            y=ytr,
+            nlam=NLAM,
+            ulam=ulam,
+            nfolds=NFOLDS,
+            eps=1e-3,
+            maxit=max_iter,
+            gamma=1e-8,
+            is_exact=is_exact,
+            device=device,
         )
         model.fit()
 
@@ -99,11 +108,27 @@ def run_thunder(SVC, Xtr_np, ytr_np, Xte_np, yte_np, sig, ulam, device):
         warnings.simplefilter("ignore", category=FitFailedWarning)
         warnings.simplefilter("ignore", category=UserWarning)
         cv = [
-            float(np.nanmean(cross_val_score(SVC(kernel="rbf", C=float(1.0 / (2 * nn_obs * float(l))), gamma=sig, tol=1e-8), Xtr_np, ytr_np, cv=NFOLDS)))
+            float(
+                np.nanmean(
+                    cross_val_score(
+                        SVC(
+                            kernel="rbf",
+                            C=float(1.0 / (2 * nn_obs * float(l))),
+                            gamma=sig,
+                            tol=1e-8,
+                        ),
+                        Xtr_np,
+                        ytr_np,
+                        cv=NFOLDS,
+                    )
+                )
+            )
             for l in ulam
         ]
         lam_best = float(ulam[int(np.nanargmax(cv))])
-        model = SVC(kernel="rbf", C=float(1.0 / (2 * nn_obs * lam_best)), gamma=sig, tol=1e-8).fit(Xtr_np, ytr_np)
+        model = SVC(
+            kernel="rbf", C=float(1.0 / (2 * nn_obs * lam_best)), gamma=sig, tol=1e-8
+        ).fit(Xtr_np, ytr_np)
     acc = float((model.predict(Xte_np) == yte_np).mean())
     return acc, t.dt
 
@@ -126,17 +151,25 @@ def fmt(acc_se, time_mean):
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--data-dir", required=True, help="dir holding the LIBSVM files")
-    ap.add_argument("--repeats", type=int, default=1, help="runs per dataset (paper: 10)")
+    ap.add_argument(
+        "--repeats", type=int, default=1, help="runs per dataset (paper: 10)"
+    )
     ap.add_argument("--device", default=None, help="cuda / cpu (default: auto)")
     ap.add_argument("--seed", type=int, default=52)
-    ap.add_argument("--max-iter", type=int, default=100000, help="cvksvm maxit (notebook: 100000)")
-    ap.add_argument("--exact", action="store_true", help="TorchKM exact CV (is_exact=1; default 0)")
+    ap.add_argument(
+        "--max-iter", type=int, default=100000, help="cvksvm maxit (notebook: 100000)"
+    )
+    ap.add_argument(
+        "--exact", action="store_true", help="TorchKM exact CV (is_exact=1; default 0)"
+    )
     ap.add_argument("--skip-thunder", action="store_true")
     ap.add_argument("--thundersvm-path", default=None, help="path to thundersvm/python")
     args = ap.parse_args()
 
     device = get_device(args.device)
-    print(f"device={device}  repeats={args.repeats}  folds={NFOLDS}  grid=50 lambda in [1e-5,1e-1]")
+    print(
+        f"device={device}  repeats={args.repeats}  folds={NFOLDS}  grid=50 lambda in [1e-5,1e-1]"
+    )
 
     ThunderSVC = None
     if not args.skip_thunder:
@@ -170,13 +203,26 @@ def main() -> None:
             torch.manual_seed(args.seed + i)
             sig = sigest(Xtr)
             Kmat = rbf_kernel(Xtr, sig)
-            a, dt = run_torchkm(Xtr, ytr, Xte, yte, sig, Kmat, ulam, device, args.max_iter, int(args.exact))
+            a, dt = run_torchkm(
+                Xtr,
+                ytr,
+                Xte,
+                yte,
+                sig,
+                Kmat,
+                ulam,
+                device,
+                args.max_iter,
+                int(args.exact),
+            )
             tk[0].append(a)
             tk[1].append(dt)
             del Kmat
             free_cuda(device)
             if ThunderSVC is not None:
-                a, dt = run_thunder(ThunderSVC, Xtr_np, ytr_np, Xte_np, yte_np, sig, ulam, device)
+                a, dt = run_thunder(
+                    ThunderSVC, Xtr_np, ytr_np, Xte_np, yte_np, sig, ulam, device
+                )
                 th[0].append(a)
                 th[1].append(dt)
                 free_cuda(device)
@@ -193,4 +239,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
