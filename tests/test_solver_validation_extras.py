@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Constructor validation for the solver classes not already covered by
 ``test_solver_validation.py`` (which handles ``cvksvm`` / ``cvkqr``).
 

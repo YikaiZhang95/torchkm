@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Internal-contract tests for the scikit-learn-style estimator wrappers.
 
 These cover code paths that aren't visible from the public ``fit`` /

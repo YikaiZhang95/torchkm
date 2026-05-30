@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """GPU smoke tests.
 
 Every test in this module is gated by ``pytest.mark.cuda`` and skipped

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 import numpy as np
 import torch
 from sklearn.datasets import make_circles

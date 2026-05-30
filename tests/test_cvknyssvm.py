@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 import unittest
 import torch
 import numpy

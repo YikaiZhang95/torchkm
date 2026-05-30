@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Convergence-related edge cases for the kernel-machine solvers.
 
 These tests probe the solvers under iteration-budget exhaustion, the

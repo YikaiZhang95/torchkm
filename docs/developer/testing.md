@@ -26,8 +26,7 @@ To run tests with coverage:
 python -m pytest -q --cov=torchkm --cov-report=term-missing:skip-covered --cov-report=xml --cov-report=html
 ```
 
-Current coverage: 90.00% on commit `4900d7c`, measured with Python 3.11.14 on
-macOS arm64.
+Current coverage: 98.00% on commit `29fbdf4`, using an NVIDIA L40S.
 
 ## Test categories
 

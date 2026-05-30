@@ -225,11 +225,11 @@ Run coverage locally with:
 python -m pytest -q --cov=torchkm --cov-report=term-missing:skip-covered --cov-report=xml --cov-report=html
 ```
 
-Current coverage: 90.00% on commit `4900d7c`, measured with Python 3.11.14 on
-macOS arm64.
+The GitHub Actions test workflow runs the CPU-safe test suite across Python
+3.10, 3.11, and 3.12. On Python 3.11, CI runs the suite with coverage and
+enforces a minimum coverage threshold of 90%.
 
-The GitHub Actions test workflow runs the test suite and uploads `coverage.xml`
-and `htmlcov/` as artifacts.
+The most recent passing CUDA validation currently reports 214 tests passed and 98% coverage on commit `29fbdf4` using an NVIDIA L40S. 
 
 CUDA smoke tests are marked with `pytest.mark.cuda` and skip automatically when
 CUDA is unavailable. On a CUDA machine, run:

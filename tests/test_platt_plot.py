@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Behavioural tests for ``TorchKMSVC.platt_plot`` and the underlying
 ``PlattScalerTorch`` Newton-with-damping line search.
 
