@@ -138,7 +138,9 @@ def main() -> None:
                 "or pass --thundersvm-path /path/to/thundersvm/python."
             )
     print()
+    free_cuda(device)  # clear any leftover GPU state before starting
     warmup(device)
+    free_cuda(device)
 
     ulam = torch.logspace(-1.0, -5.0, NLAM)
     header = (
@@ -166,6 +168,7 @@ def main() -> None:
                 a, dt = run_thunder(ThunderSVC, Xtr_np, ytr_np, Xte_np, yte_np, sig, ulam, device)
                 th[0].append(a)
                 th[1].append(dt)
+                free_cuda(device)
 
         def cell(pair):
             if not pair[0]:

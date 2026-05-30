@@ -41,8 +41,12 @@ def synchronize(device: str) -> None:
 
 def free_cuda(device: str) -> None:
     """Release cached CUDA blocks between datasets/methods to limit peak memory."""
+    import gc
+
+    gc.collect()
     if str(device).startswith("cuda"):
         torch.cuda.empty_cache()
+        torch.cuda.ipc_collect()
 
 
 class timed:
