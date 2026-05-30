@@ -64,6 +64,25 @@ DATASETS = {
 }
 
 
+def _open_libsvm(path):
+    """Open a LIBSVM file as a binary stream, handling .bz2 / .xz / plain.
+
+    LIBSVM ships ijcnn1, covtype, mnist8m only compressed; this lets the script
+    read them straight from --data-dir without a separate decompress step.
+    """
+    if os.path.exists(path):
+        return open(path, "rb")
+    if os.path.exists(path + ".bz2"):
+        import bz2
+
+        return bz2.open(path + ".bz2", "rb")
+    if os.path.exists(path + ".xz"):
+        import lzma
+
+        return lzma.open(path + ".xz", "rb")
+    raise FileNotFoundError(f"none of {path}, {path}.bz2, {path}.xz exists")
+
+
 def load_dataset(data_dir, cfg, seed):
     """Load LIBSVM data per the notebook recipe: load_svmlight_files for pairs,
     train_test_split for single files; class filter for MNIST; densify; to torch."""
@@ -72,11 +91,13 @@ def load_dataset(data_dir, cfg, seed):
     train_path = os.path.join(data_dir, cfg["train"])
     if cfg["test"] is not None:
         test_path = os.path.join(data_dir, cfg["test"])
-        Xtr, ytr, Xte, yte = load_svmlight_files((train_path, test_path), dtype=np.float64)
+        with _open_libsvm(train_path) as ftr, _open_libsvm(test_path) as fte:
+            Xtr, ytr, Xte, yte = load_svmlight_files((ftr, fte), dtype=np.float64)
     else:
         from sklearn.model_selection import train_test_split
 
-        X, y = load_svmlight_file(train_path, dtype=np.float64)
+        with _open_libsvm(train_path) as f:
+            X, y = load_svmlight_file(f, dtype=np.float64)
         Xtr, Xte, ytr, yte = train_test_split(
             X, y, test_size=0.2, stratify=y, random_state=seed
         )
