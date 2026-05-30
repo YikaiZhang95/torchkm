@@ -1,0 +1,12 @@
+# Flexible development/example requirements.
+# Package metadata in setup.cfg is the source of truth for installation.
+# Exact paper/CUDA environments should be recorded separately in benchmark
+# or CUDA validation artifacts, not enforced here.
+
+numpy>=1.23,<3
+pandas>=1.5,<3
+pytest>=8,<10
+scikit-learn>=1.1,<2
+scipy>=1.9,<2
+seaborn>=0.12,<1
+torch>=2.0,<3
