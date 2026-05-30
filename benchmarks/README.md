@@ -49,10 +49,9 @@ documented.
 ## Reproducing Paper Tables 2-4
 
 Scripts for the paper's three benchmark tables live next to this README. They
-reproduce the source notebooks' protocol per method. Competing baselines that
-need extra setup are optional: ThunderSVM is imported on demand (build it, then
-`cd thundersvm/python/` or pass `--thundersvm-path`) and skipped with guidance
-if unavailable; the 1D-CNN baseline (Table 3) uses PyTorch.
+reproduce the source notebooks' protocol per method. ThunderSVM is imported on
+demand (build it, then `cd thundersvm/python/` or pass `--thundersvm-path`) and
+skipped with guidance if unavailable.
 
 Each method is tuned by 10-fold cross-validation over a 50-point regularization
 grid, with end-to-end wall-clock timing and a CUDA warmup. The grid is in the
@@ -65,7 +64,7 @@ other hardware.
 | Script | Table | Data | Reports |
 | --- | --- | --- | --- |
 | `table2_simulation.py` | 2 | synthetic (`torchkm.data_gen`) | objective + time: scikit-learn, ThunderSVM, TorchKM |
-| `table3_benchmarks.py` | 3 | a7a, a8a, w7a | accuracy + time: 1D-CNN, TorchKM (exact RBF SVM), ThunderSVM |
+| `table3_benchmarks.py` | 3 | a7a, a8a, w7a | accuracy + time: TorchKM (exact RBF SVM), ThunderSVM |
 | `table4_nystrom.py` | 4 | a9a, w8a, ijcnn1, covtype, MNIST8m (4-vs-6) | accuracy + time, TorchKM Nystrom vs scikit-learn Nystrom |
 
 ```bash

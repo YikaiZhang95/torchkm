@@ -1,13 +1,13 @@
-"""Reproduce Table 3: neural network vs TorchKM vs ThunderSVM on a7a/a8a/w7a.
+"""Reproduce Table 3: TorchKM vs ThunderSVM on a7a/a8a/w7a.
 
 Table 3 reports test accuracy and end-to-end run time on three LIBSVM
-classification datasets, averaged over 10 runs (the paper). This script follows
-the source notebook exactly for each method.
+classification datasets. This script follows the source notebook exactly for
+each method.
 
   * Data: ``load_svmlight_files((train, test))`` so features align; labels mapped
     to {-1, +1}; densified to torch float tensors.
   * Lambda grid: ``torch.logspace(-1, -5, 50)`` (the notebook's grid for these
-    datasets), transferred to C = 1/(2*n*lambda) for the libsvm-style baselines.
+    datasets), transferred to C = 1/(2*n*lambda) for the libsvm-style baseline.
   * TorchKM: exact RBF kernel SVM via ``cvksvm`` directly -- sig = sigest(X),
     Kmat = rbf_kernel(X, sig), then cvksvm(eps=1e-3, maxit=--max-iter, gamma=1e-8,
     is_exact=0) with 10-fold CV. Time covers the solver fit (kernel build is
@@ -15,9 +15,6 @@ the source notebook exactly for each method.
     accuracy at the CV-selected lambda.
   * ThunderSVM: RBF SVC with gamma=sig, tol=1e-8, tuned by 10-fold cross_val_score
     over the grid. Time covers the CV sweep plus the final fit.
-  * Neural network: a 1D-CNN (two conv layers + ReLU + adaptive avg pool) with an
-    8-point grid over (conv_channels, fc_units, lr), 10 epochs each. Reports the
-    best test accuracy and the total tuning time, exactly as the notebook does.
 
 Data: download the LIBSVM files into --data-dir (train + ".t" test file each):
     https://www.csie.ntu.edu.tw/~cjlin/libsvmtools/datasets/binary/{a7a,a8a,w7a}
@@ -38,9 +35,6 @@ import sys
 
 import numpy as np
 import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
 
 from torchkm.cvksvm import cvksvm
 from torchkm.functions import kernelMult, rbf_kernel, sigest
@@ -103,60 +97,6 @@ def run_thunder(SVC, Xtr_np, ytr_np, Xte_np, yte_np, sig, ulam, device):
     return acc, t.dt
 
 
-class CNN1DModel(nn.Module):
-    def __init__(self, in_channels=1, conv_channels=32, fc_units=64, num_classes=2):
-        super().__init__()
-        self.conv = nn.Sequential(
-            nn.Conv1d(in_channels, conv_channels, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv1d(conv_channels, conv_channels * 2, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.AdaptiveAvgPool1d(1),
-        )
-        self.fc = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(conv_channels * 2, fc_units),
-            nn.ReLU(),
-            nn.Linear(fc_units, num_classes),
-        )
-
-    def forward(self, x):
-        return self.fc(self.conv(x))
-
-
-def run_nn(Xtr, ytr, Xte, yte, seed):
-    """1D-CNN baseline (CPU, exactly as the notebook): grid search over 8 configs,
-    best test accuracy + total tuning time."""
-    torch.manual_seed(seed)
-    ytr01 = (ytr == 1).long()
-    yte01 = (yte == 1).long()
-    Xtr_t = Xtr.unsqueeze(1)  # (N, 1, F)
-    Xte_t = Xte.unsqueeze(1)
-    train_loader = DataLoader(TensorDataset(Xtr_t, ytr01), batch_size=64, shuffle=True)
-
-    best_acc = 0.0
-    with timed("cpu") as t:
-        for conv_channels in (16, 32):
-            for fc_units in (64, 128):
-                for lr in (0.001, 0.01):
-                    model = CNN1DModel(conv_channels=conv_channels, fc_units=fc_units)
-                    criterion = nn.CrossEntropyLoss()
-                    optimizer = optim.Adam(model.parameters(), lr=lr)
-                    model.train()
-                    for _ in range(10):
-                        for bx, by in train_loader:
-                            optimizer.zero_grad()
-                            loss = criterion(model(bx), by)
-                            loss.backward()
-                            optimizer.step()
-                    model.eval()
-                    with torch.no_grad():
-                        pred = model(Xte_t).max(1).indices
-                        acc = float((pred == yte01).float().mean())
-                    best_acc = max(best_acc, acc)
-    return best_acc, t.dt
-
-
 def load_thundersvm(path):
     if path:
         sys.path.insert(0, path)
@@ -181,7 +121,6 @@ def main() -> None:
     ap.add_argument("--max-iter", type=int, default=100000, help="cvksvm maxit (notebook: 100000)")
     ap.add_argument("--exact", action="store_true", help="TorchKM exact CV (is_exact=1; default 0)")
     ap.add_argument("--skip-thunder", action="store_true")
-    ap.add_argument("--skip-nn", action="store_true")
     ap.add_argument("--thundersvm-path", default=None, help="path to thundersvm/python")
     args = ap.parse_args()
 
@@ -203,8 +142,8 @@ def main() -> None:
 
     ulam = torch.logspace(-1.0, -5.0, NLAM)
     header = (
-        f"{'data':>6} {'n_train':>8} | {'NN acc / t(s)':>18} | "
-        f"{'TorchKM acc / t(s)':>18} | {'ThunderSVM acc / t(s)':>21}"
+        f"{'data':>6} {'n_train':>8} | "
+        f"{'TorchKM acc / t(s)':>21} | {'ThunderSVM acc / t(s)':>21}"
     )
     print(header)
     print("-" * len(header))
@@ -213,7 +152,7 @@ def main() -> None:
         Xtr, ytr, Xte, yte = load_pair(args.data_dir, train_f, test_f)
         Xtr_np, ytr_np = Xtr.numpy(), ytr.numpy()
         Xte_np, yte_np = Xte.numpy(), yte.numpy()
-        nn_acc, tk, th = ([], []), ([], []), ([], [])
+        tk, th = ([], []), ([], [])
         for i in range(args.repeats):
             torch.manual_seed(args.seed + i)
             sig = sigest(Xtr)
@@ -223,10 +162,6 @@ def main() -> None:
             tk[1].append(dt)
             del Kmat
             free_cuda(device)
-            if not args.skip_nn:
-                a, dt = run_nn(Xtr, ytr, Xte, yte, args.seed + i)
-                nn_acc[0].append(a)
-                nn_acc[1].append(dt)
             if ThunderSVC is not None:
                 a, dt = run_thunder(ThunderSVC, Xtr_np, ytr_np, Xte_np, yte_np, sig, ulam, device)
                 th[0].append(a)
@@ -237,10 +172,11 @@ def main() -> None:
                 return fmt(None, None)
             return fmt(mean_se(pair[0]), mean_se(pair[1])[0])
 
-        print(f"{name:>6} {Xtr.shape[0]:>8} | {cell(nn_acc)} | {cell(tk)} | {cell(th)}")
+        print(f"{name:>6} {Xtr.shape[0]:>8} | {cell(tk)} | {cell(th)}")
         del Xtr, ytr, Xte, yte, Xtr_np, ytr_np, Xte_np, yte_np
         free_cuda(device)
 
 
 if __name__ == "__main__":
     main()
+
