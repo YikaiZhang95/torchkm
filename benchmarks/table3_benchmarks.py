@@ -82,16 +82,27 @@ def run_torchkm(Xtr, ytr, Xte, yte, sig, Kmat, ulam, device, max_iter, is_exact)
 
 
 def run_thunder(SVC, Xtr_np, ytr_np, Xte_np, yte_np, sig, ulam, device):
-    """RBF ThunderSVM tuned by 10-fold CV. Returns (test accuracy, time)."""
+    """RBF ThunderSVM tuned by 10-fold CV. Returns (test accuracy, time).
+
+    ThunderSVM sometimes returns zero support vectors at the most-regularized
+    end of the grid (its internal csr_matrix(zero-size) call then crashes).
+    scikit-learn catches that per fold and yields NaN, so we use nanmean/
+    nanargmax for selection and silence the FitFailedWarning spam.
+    """
+    import warnings
+
+    from sklearn.exceptions import FitFailedWarning
     from sklearn.model_selection import cross_val_score
 
     nn_obs = Xtr_np.shape[0]
-    with timed(device) as t:
+    with timed(device) as t, warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=FitFailedWarning)
+        warnings.simplefilter("ignore", category=UserWarning)
         cv = [
-            cross_val_score(SVC(kernel="rbf", C=float(1.0 / (2 * nn_obs * float(l))), gamma=sig, tol=1e-8), Xtr_np, ytr_np, cv=NFOLDS).mean()
+            float(np.nanmean(cross_val_score(SVC(kernel="rbf", C=float(1.0 / (2 * nn_obs * float(l))), gamma=sig, tol=1e-8), Xtr_np, ytr_np, cv=NFOLDS)))
             for l in ulam
         ]
-        lam_best = float(ulam[int(np.argmax(cv))])
+        lam_best = float(ulam[int(np.nanargmax(cv))])
         model = SVC(kernel="rbf", C=float(1.0 / (2 * nn_obs * lam_best)), gamma=sig, tol=1e-8).fit(Xtr_np, ytr_np)
     acc = float((model.predict(Xte_np) == yte_np).mean())
     return acc, t.dt
