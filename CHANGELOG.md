@@ -4,6 +4,8 @@ All notable changes to TorchKM are documented in this file.
 
 ## [Unreleased]
 
+## [4.3.0] - 2026-06-03
+
 ### Added
 - `docs/developer/cuda_testing.md` describes how to validate the CUDA
   code paths on a GPU workstation and how to commit the log bundle
@@ -71,7 +73,8 @@ All notable changes to TorchKM are documented in this file.
   - Platt-scaling calibration via `PlattScalerTorch`.
   - CPU + CUDA device selection with automatic fallback.
 
-[Unreleased]: https://github.com/YikaiZhang95/torchkm/compare/v4.2.3...HEAD
+[Unreleased]: https://github.com/YikaiZhang95/torchkm/compare/v4.3.0...HEAD
+[4.3.0]: https://github.com/YikaiZhang95/torchkm/compare/v4.2.3...v4.3.0
 [4.2.3]: https://github.com/YikaiZhang95/torchkm/compare/v4.2.2...v4.2.3
 [4.2.2]: https://github.com/YikaiZhang95/torchkm/compare/v4.2.1...v4.2.2
 [4.2.1]: https://github.com/YikaiZhang95/torchkm/compare/v4.1.0...v4.2.1
