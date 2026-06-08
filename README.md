@@ -1,4 +1,4 @@
-# TorchKM: Fast Kernel Machines in PyTorch
+# TorchKM: GPU-accelerated PyTorch-based Library for Kernel Machines
 
 ![PyPI](https://img.shields.io/pypi/v/torchkm)
 ![Python](https://img.shields.io/pypi/pyversions/torchkm)
@@ -7,11 +7,13 @@
 [![tests](https://github.com/YikaiZhang95/torchkm/actions/workflows/tests.yml/badge.svg)](https://github.com/YikaiZhang95/torchkm/actions/workflows/tests.yml)
 [![docs](https://github.com/YikaiZhang95/torchkm/actions/workflows/docs.yml/badge.svg)](https://github.com/YikaiZhang95/torchkm/actions/workflows/docs.yml)
 
-**A fast, GPU-native, calibrated classifier for tabular data that your code — or your AI agent — can call, and verify.**
+**TorchKM** is a GPU-accelerated PyTorch-based library for **kernel machines** including kernel SVM with a focus on fast and integrated **train + tune** workflows.
 
-You give it a table of rows and labels. It trains *and* tunes a kernel model in one call, on your GPU, and hands back a **calibrated probability** for each prediction. The result isn't a heuristic — it's the **exact, provably best solution** for the objective you asked for. That makes it something a program (or an LLM agent) can call as a trusted tool instead of guessing.
+**It delivers GPU-native and calibrated classifier for tabular data that your code, or your AI agent, can call, and verify.**
 
-If you've used `scikit-learn`, the API will feel immediately familiar — just much faster, and built for the GPU.
+You give it a table of rows and labels. It trains and tunes a kernel model in one call, on your GPU, and hands back a **calibrated probability** for each prediction. The result is the exact and provably optimal solution for the objective you asked for. That makes it what a program (or an LLM agent) can call as a trusted tool.
+
+It uses a **scikit-learn–style API**, for easy integration into existing Python workflows. If you've used `scikit-learn`, the API will feel immediately familiar, just much faster, and built for the GPU.
 
 ![Ask in plain language, get a fast calibrated answer](docs/assets/torchkm-demo.gif)
 
@@ -42,9 +44,9 @@ That's the whole loop: `fit` → `predict_proba`. No separate grid search, no ma
 
 Paste this one line into your coding agent and let it wire up the rest:
 
-> **"Install `torchkm` and use `TorchKMSVC` to train a calibrated kernel classifier on my tabular data — call `fit` to train and tune, then return `predict_proba` for new rows."**
+> **"Install `torchkm` and use `TorchKMSVC` to train a calibrated kernel classifier on my tabular data. Call `fit` to train and tune, then return `predict_proba` for new rows."**
 
-Because the call surface is tiny and the output is a real probability, an agent can use TorchKM as a reliable tool inside a larger workflow — classify a batch, read the confidence, decide what to do next — instead of hallucinating a label.
+Because the call surface is tiny and the output is a real probability, an agent can use TorchKM as a reliable tool inside a larger workflow: classify a batch, read the confidence, decide what to do next without hallucinating a label.
 
 ---
 
@@ -64,18 +66,18 @@ Because the call surface is tiny and the output is a real probability, an agent 
 | A neural net for small tabular data | Overkill, finicky to train, poorly calibrated, no guarantees. | A convex model with a single global optimum, calibrated out of the box, strong on small/mid data. |
 | Raw scores / uncalibrated models | Your agent or rule engine can't reason about "how sure." | Calibrated probabilities you can threshold and trust. |
 
-On small-to-mid tabular datasets (roughly hundreds to a few hundred thousand rows), well-tuned kernel methods are still some of the most accurate models there are — and they come with a calibrated probability and a convex, reproducible solution. TorchKM makes the *tuning* — usually the slow part — cheap.
+On small-to-mid tabular datasets (roughly hundreds to a few hundred thousand rows), well-tuned kernel methods are still some of the most accurate models there are, and they come with a calibrated probability and a convex, reproducible solution. TorchKM makes the *tuning*, usually the slow part, very efficient.
 
 ## Where people use it
 
 <details>
 <summary><b>Click to expand: example application areas across domains</b></summary>
 
-Anywhere you have a table of rows and want an accurate, **calibrated** yes/no (or a conditional quantile) — especially when the dataset is small-to-mid sized and you care that the model is well-tuned and trustworthy:
+Anywhere you have a table of rows and want an accurate, **calibrated** yes/no (or a conditional quantile), especially when the dataset is small-to-mid sized and you care that the model is well-tuned and trustworthy:
 
 **Healthcare & life sciences**
 - Disease / readmission / adverse-event risk from clinical and lab features, where a *calibrated* probability matters more than a raw score.
-- Bioinformatics classification (gene expression, omics, sequence-derived features) — a classic stronghold of kernel methods on wide, small-sample data.
+- Bioinformatics classification (gene expression, omics, sequence-derived features): a classic stronghold of kernel methods on wide, small-sample data.
 - Drug-response and compound-activity (active/inactive) screening.
 
 **Finance & risk**
@@ -123,7 +125,7 @@ Anywhere you have a table of rows and want an accurate, **calibrated** yes/no (o
 
 ## What's inside
 
-scikit-learn-style estimators — same `fit` / `predict` / `predict_proba` interface across all of them:
+scikit-learn-style estimators: same `fit` / `predict` / `predict_proba` interface across all of them:
 
 | Estimator | Task |
 | --- | --- |
@@ -146,7 +148,7 @@ Key benefits, in one place:
 
 ## How it's so fast
 
-In a normal workflow the slow part isn't fitting one model — it's refitting it for every cross-validation fold and every tuning value. TorchKM avoids that: it reuses one kernel computation across all folds and settings (an exact cross-validation formula plus a single eigendecomposition reused along the regularization path). You still get the **exact** solution — just without paying for it 500 times.
+In a normal workflow the slow part isn't fitting one model. It's refitting the model for every cross-validation fold and every tuning value. TorchKM avoids that: it reuses one kernel computation across all folds and settings (an exact cross-validation formula plus a single eigendecomposition reused along the regularization path). You still get the **exact** solution, without paying for it 500 times.
 
 ![Full train + tune in seconds](docs/assets/torchkm-speed.svg)
 
@@ -244,7 +246,7 @@ If you use TorchKM in academic work, please cite:
   title   = {TorchKM: GPU-Accelerated Kernel Machines with Fast Model Selection in PyTorch},
   author  = {Zhang, Yikai and Jia, Gaoxiang and Ding, Jie and Wang, Boxiang},
   year    = {2026},
-  note    = {Software paper submission}
+  url    = {https://arxiv.org/pdf/2606.06742}
 }
 ```
 
