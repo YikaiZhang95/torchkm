@@ -1,4 +1,4 @@
-# TorchKM: GPU-accelerated PyTorch-based Library for Kernel Machines
+# TorchKM: A GPU-Oriented Library for Kernel Learning and Model Selection
 
 ![PyPI](https://img.shields.io/pypi/v/torchkm)
 ![Python](https://img.shields.io/pypi/pyversions/torchkm)
@@ -243,7 +243,7 @@ If you use TorchKM in academic work, please cite:
 
 ```bibtex
 @article{zhang2026torchkm,
-  title   = {TorchKM: GPU-Accelerated Kernel Machines with Fast Model Selection in PyTorch},
+  title   = {TorchKM: A GPU-Oriented Library for Kernel Learning and Model Selection},
   author  = {Zhang, Yikai and Jia, Gaoxiang and Ding, Jie and Wang, Boxiang},
   year    = {2026},
   url    = {https://arxiv.org/pdf/2606.06742}
