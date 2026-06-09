@@ -2,7 +2,7 @@
 
 All notable changes to TorchKM are documented in this file.
 
-## [Unreleased]
+## [4.3.1] - 2026-06-08
 
 ### Added
 - `torchkm.__version__`, resolved from the installed distribution metadata
