@@ -89,6 +89,9 @@ jobs:
             echo "### nvidia-smi"
             nvidia-smi || true
             echo
+            echo "### torchkm"
+            python -c "import torchkm; print('version:', torchkm.__version__); print('file:', torchkm.__file__)"
+            echo
             echo "### pip freeze"
             python -m pip freeze
           } > artifacts/runner-snapshot.txt
