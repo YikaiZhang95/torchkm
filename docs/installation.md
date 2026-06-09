@@ -51,9 +51,16 @@ TorchKM is designed to run on CPU when CUDA is not available. This is useful for
 
 ```python
 import torch
+import torchkm
 from torchkm.estimators import TorchKMSVC
 
+print("TorchKM:", torchkm.__version__)
+print("TorchKM location:", torchkm.__file__)
 print("PyTorch:", torch.__version__)
 print("CUDA available:", torch.cuda.is_available())
 print("TorchKMSVC:", TorchKMSVC)
 ```
+
+`torchkm.__version__` is resolved from the installed distribution metadata, so it
+always matches what `pip freeze` reports. Printing it alongside `torchkm.__file__`
+makes it easy to reconcile a result against the exact build that produced it.
