@@ -116,8 +116,8 @@ Anywhere you have a table of rows and want an accurate, **calibrated** yes/no (o
 | ![fraud](docs/assets/torchkm-demo-fraud.gif) | ![readmission](docs/assets/torchkm-demo-readmit.gif) |
 | **Security — phishing** | **Industry — predictive maintenance** |
 | ![phishing](docs/assets/torchkm-demo-phishing.gif) | ![maintenance](docs/assets/torchkm-demo-maintenance.gif) |
-| **Marketing — churn** | |
-| ![churn](docs/assets/torchkm-demo-churn.gif) | |
+| **Marketing — churn** | **Life sciences — tumor vs normal** |
+| ![churn](docs/assets/torchkm-demo-churn.gif) | ![bioinformatics](docs/assets/torchkm-demo-bio.gif) |
 
 </details>
 
