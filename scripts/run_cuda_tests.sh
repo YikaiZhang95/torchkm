@@ -70,6 +70,9 @@ echo "==> Capturing runner-snapshot.txt"
     echo "## torch / CUDA"
     python -c "import torch; print('torch:', torch.__version__); print('cuda:', torch.version.cuda); print('device count:', torch.cuda.device_count()); [print('device', i, ':', torch.cuda.get_device_name(i)) for i in range(torch.cuda.device_count())]"
     echo
+    echo "## torchkm"
+    python -c "import torchkm; print('version:', torchkm.__version__); print('file:', torchkm.__file__)"
+    echo
     echo "## pip freeze"
     python -m pip freeze
 } > "${RUN_DIR}/runner-snapshot.txt"
