@@ -4,6 +4,13 @@ All notable changes to TorchKM are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- `torchkm.__version__`, resolved from the installed distribution metadata
+  via `importlib.metadata` (no second hard-coded version). The CUDA
+  snapshot in `scripts/run_cuda_tests.sh` and the self-hosted workflow now
+  record `torchkm.__version__` and `torchkm.__file__`, so a run's
+  `pip freeze` and checked-out build can always be reconciled.
+
 ## [4.3.0] - 2026-06-03
 
 ### Added
