@@ -9,6 +9,13 @@ import torchkm
 
 
 def test_version_attribute_is_nonempty_string():
+    # A missing attribute here almost always means a stale install is shadowing
+    # the source tree (a non-editable ``pip install`` that predates this change,
+    # or the published wheel), so surface the imported path to make that obvious.
+    assert hasattr(torchkm, "__version__"), (
+        f"torchkm imported from {torchkm.__file__!r} exposes no __version__ "
+        "- reinstall the checkout with `pip install -e .`"
+    )
     assert isinstance(torchkm.__version__, str)
     assert torchkm.__version__
 
