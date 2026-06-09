@@ -63,6 +63,9 @@ RUN_DIR=$(ls -dt benchmarks/cuda-runs/*/ | head -n1)
     echo "## nvidia-smi"
     nvidia-smi
     echo
+    echo "## torchkm"
+    python -c "import torchkm; print('version:', torchkm.__version__); print('file:', torchkm.__file__)"
+    echo
     echo "## pip freeze"
     python -m pip freeze
 } > "${RUN_DIR}runner-snapshot.txt"
@@ -82,7 +85,7 @@ python -m pytest -m cuda -v 2>&1 | tee "${RUN_DIR}cuda-marked-tests.log"
 The protocol should leave the following files under `${RUN_DIR}`:
 
 ```
-runner-snapshot.txt        # nvidia-smi + pip freeze + commit + ref + date
+runner-snapshot.txt        # nvidia-smi + torchkm version + pip freeze + commit + ref + date
 cuda-test-output.log       # stdout from the full pytest run
 cuda-marked-tests.log      # stdout from `pytest -m cuda -v`
 coverage-cuda.xml          # cobertura-format coverage report
