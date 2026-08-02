@@ -2,6 +2,21 @@
 
 All notable changes to TorchKM are documented in this file.
 
+## [Unreleased]
+
+### Added
+- `cvksvm`, `cvkdwd`, and `cvklogit` now track a per-lambda `converged`
+  boolean and emit an aggregated `ConvergenceWarning`
+  (`sklearn.exceptions.ConvergenceWarning` when scikit-learn is
+  installed, re-exported as `torchkm.ConvergenceWarning`) when the
+  solver hits the `maxit` iteration cap without satisfying the
+  convergence/KKT tolerance — including a separate warning when the
+  cross-validation path hits its `nlam * maxit` cap. Previously
+  `TorchKMSVC`/`TorchKMDWD`/`TorchKMLogit.fit()` completed silently on
+  non-converged solutions.
+- `TorchKMSVC`, `TorchKMDWD`, and `TorchKMLogit` expose the per-lambda
+  convergence status as the fitted attribute `converged_`.
+
 ## [4.3.1] - 2026-06-08
 
 ### Added

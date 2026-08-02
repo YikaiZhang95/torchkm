@@ -192,6 +192,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             "best_ind_",
             "best_C_",
             "cv_mis_",
+            "converged_",
             "n_samples_fit_",
             "_low_rank_backend_",
             "low_rank_basis_dim_",
@@ -335,6 +336,10 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             foldid_backend=foldid_backend,
         )
         backend.fit()
+
+        # Per-lambda convergence status (None for backends that do not track it)
+        conv = getattr(backend, "converged", None)
+        self.converged_ = None if conv is None else conv.detach().cpu().numpy().copy()
 
         # CV selection: backend.cv expects y on CPU shape (n,)
         cv_mis_t = backend.cv(backend.pred, y_train_t)  # returns tensor length nlam
