@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: MIT
+import warnings
+
 import torch
 
+from .exceptions import ConvergenceWarning
 from .functions import *
 
 
@@ -43,6 +46,7 @@ class cvklogit:
         )
         self.anlam = 0
         self.npass = torch.zeros(self.nlam, dtype=torch.int32).to(self.device)
+        self.converged = torch.zeros(self.nlam, dtype=torch.bool).to(self.device)
         self.cvnpass = torch.zeros(self.nlam, dtype=torch.int32).to(self.device)
         self.pred = torch.zeros((self.nobs, self.nlam), dtype=torch.double).to(
             self.device
@@ -62,6 +66,7 @@ class cvklogit:
         cvnpass = torch.zeros(nlam, dtype=torch.int32).to(self.device)
         alpvec = torch.zeros(nobs + 1, dtype=torch.double).to(self.device)
         pred = torch.zeros((self.nobs, self.nlam), dtype=torch.double).to(self.device)
+        converged = torch.zeros(nlam, dtype=torch.bool).to(self.device)
         jerr = 0
         eps2 = 1.0e-5
         one = torch.ones((), dtype=torch.double, device=self.device)
@@ -132,6 +137,7 @@ class cvklogit:
 
                 # Check convergence
                 if torch.max(dif_step**2) < (self.eps * mul * mul):
+                    converged[l] = True
                     break
 
                 if torch.sum(npass) > self.maxit:
@@ -286,8 +292,29 @@ class cvklogit:
         self.alpmat = alpmat
         self.npass = npass
         self.cvnpass = cvnpass
+        self.converged = converged
         self.jerr = jerr
         self.pred = pred
+        self._warn_not_converged()
+
+    def _warn_not_converged(self):
+        n_not_converged = int((~self.converged).sum().item())
+        if n_not_converged > 0:
+            warnings.warn(
+                f"cvklogit did not converge for {n_not_converged} of {self.nlam} "
+                f"lambda values within maxit={self.maxit} iterations. The "
+                "solution may be inaccurate. Consider increasing maxit or "
+                "loosening the tolerance (eps).",
+                ConvergenceWarning,
+            )
+        if int(torch.sum(self.cvnpass).item()) > self.nmaxit:
+            warnings.warn(
+                f"cvklogit cross-validation hit the iteration cap "
+                f"(nlam * maxit = {self.nmaxit}); CV predictions, and any "
+                "regularization value selected from them, may be inaccurate. "
+                "Consider increasing maxit.",
+                ConvergenceWarning,
+            )
 
     def _cv_batched_lambda(
         self,

@@ -7,6 +7,7 @@ from .estimators import (
     TorchKMLogit,
     TorchKMSVC,
 )
+from .exceptions import ConvergenceWarning
 from .functions import data_gen, sigest, rbf_kernel, kernelMult, standardize
 
 # Resolve the version from the installed distribution metadata rather than
@@ -24,6 +25,7 @@ __all__ = [
     "TorchKMDWD",
     "TorchKMLogit",
     "TorchKMKQR",
+    "ConvergenceWarning",
     "data_gen",
     "sigest",
     "rbf_kernel",
