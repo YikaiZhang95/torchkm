@@ -2,7 +2,7 @@
 
 All notable changes to TorchKM are documented in this file.
 
-## [Unreleased]
+## [4.3.2] - 2026-08-02
 
 ### Added
 - `cvksvm`, `cvkdwd`, and `cvklogit` now track a per-lambda `converged`

@@ -20,9 +20,9 @@ authors:
 repository-code: "https://github.com/YikaiZhang95/torchkm"
 url: "https://yikaizhang95.github.io/torchkm/"
 license: MIT
-version: 4.3.1
+version: 4.3.2
 # date-released is in YYYY-MM-DD; update on each tagged release:
-date-released: "2026-06-08"
+date-released: "2026-08-02"
 keywords:
   - machine-learning
   - kernel-methods
