@@ -232,7 +232,8 @@ class cvkqr:
         eigens += self.gamma
         Usum = torch.sum(Umat, dim=0)
         einv = 1 / eigens
-        eU = (einv * Umat).T
+        # K^{-1} = U diag(einv) U^T is applied on the fly in the projection
+        # step; no extra n x n matrix is materialised.
 
         vareps = 1.0e-8
 
@@ -424,7 +425,9 @@ class cvkqr:
                                     if torch.sum(elbowid).item() > 1:
                                         theta = torch.mv(Kmat, alptmp[1:])
                                         theta[elbowid] += r[elbowid]
-                                        alptmp[1:] = torch.mv(Umat, torch.mv(eU, theta))
+                                        alptmp[1:] = torch.mv(
+                                            Umat, einv * torch.mv(Umat.T, theta)
+                                        )
 
                                     dif_step = dif_step + alptmp - alp_old
                                     r = y - (alptmp[0] + torch.mv(Kmat, alptmp[1:]))
@@ -687,7 +690,9 @@ class cvkqr:
                                     if torch.sum(elbowid).item() > 1:
                                         theta = torch.mv(Kmat, alptmp[1:])
                                         theta[elbowid] += loor[elbowid]
-                                        alptmp[1:] = torch.mv(Umat, torch.mv(eU, theta))
+                                        alptmp[1:] = torch.mv(
+                                            Umat, einv * torch.mv(Umat.T, theta)
+                                        )
 
                                     dif_step = dif_step + alptmp - alp_old
                                     loor = yn - (alptmp[0] + torch.mv(Kmat, alptmp[1:]))

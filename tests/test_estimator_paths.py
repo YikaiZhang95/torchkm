@@ -238,16 +238,21 @@ def test_low_rank_validation_errors():
             device="cpu",
         ).fit(X, y)
 
-    with pytest.raises(ValueError, match="rbf_sigma"):
-        TorchKMSVC(
-            kernel="rbf",
-            low_rank=True,
-            rbf_sigma=1.0,
-            Cs=Cs,
-            nC=2,
-            cv=2,
-            device="cpu",
-        ).fit(X, y)
+    # An explicit bandwidth is honoured on the Nyström path, so every library in
+    # a benchmark can be given the same kernel.
+    clf = TorchKMSVC(
+        kernel="rbf",
+        low_rank=True,
+        rbf_sigma=1.0,
+        Cs=Cs,
+        nC=2,
+        cv=2,
+        device="cpu",
+        num_landmarks=20,
+        nys_k=10,
+        max_iter=20,
+    ).fit(X, y)
+    assert clf._low_rank_backend_.sig_w_ == pytest.approx(1.0)
 
     with pytest.raises(ValueError, match="num_landmarks"):
         TorchKMSVC(

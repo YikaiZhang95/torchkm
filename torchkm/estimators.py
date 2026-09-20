@@ -7,6 +7,7 @@ import numpy as np
 import torch
 
 from .functions import sigest, rbf_kernel as rbf_kernel_train, kernelMult
+from .memory import exact_mode_oom_message
 
 from .cvksvm import cvksvm
 from .cvkdwd import cvkdwd
@@ -205,6 +206,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             "platt_scores_",
             "platt_y_",
             "_platt_device_",
+            "peak_gpu_memory_bytes_",
         )
         for attr in fitted_attrs:
             if hasattr(self, attr):
@@ -261,6 +263,27 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         num_landmarks: Optional[int] = None,
         nys_k: Optional[int] = None,
     ):
+        try:
+            return self._fit_impl(
+                X, y, low_rank=low_rank, num_landmarks=num_landmarks, nys_k=nys_k
+            )
+        except torch.cuda.OutOfMemoryError as err:
+            if self.low_rank:
+                raise
+            n = int(_as_numpy(X).shape[0])
+            raise torch.cuda.OutOfMemoryError(
+                exact_mode_oom_message(n, getattr(self, "_device_str_", "cuda"))
+            ) from err
+
+    def _fit_impl(
+        self,
+        X: Any,
+        y: Any,
+        *,
+        low_rank: Optional[bool],
+        num_landmarks: Optional[int],
+        nys_k: Optional[int],
+    ):
         self._apply_fit_low_rank_options(low_rank, num_landmarks, nys_k)
         self._clear_fit_state()
 
@@ -276,6 +299,10 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
 
         dev = _pick_device_str(self.device)
         self._device_str_ = dev
+        if dev == "cuda":
+            # Peak-memory accounting for the whole fit (kernel build, solver,
+            # calibration); read back into ``peak_gpu_memory_bytes_``.
+            torch.cuda.reset_peak_memory_stats(dev)
 
         # lambdas
         uC_t = _make_ulam(self.nC, self.Cs, self.C_max, self.C_min)
@@ -319,7 +346,9 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 self.X_fit_ = None
                 self.kernel_state_ = {}
             else:
-                K_train, kernel_state = self._compute_K_train(X_train_t)
+                # Build the kernel on the target device: no host-side n x n
+                # copy and no host-to-device transfer of the full matrix.
+                K_train, kernel_state = self._compute_K_train(X_train_t.to(dev))
                 self.X_fit_ = X_np
                 self.kernel_state_ = kernel_state
 
@@ -396,6 +425,10 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
 
             self.platt_scores_ = oof_scores.detach().cpu().numpy()
             self.platt_y_ = np.asarray(y_np).copy()
+
+        self.peak_gpu_memory_bytes_ = (
+            int(torch.cuda.max_memory_allocated(dev)) if dev == "cuda" else None
+        )
 
         # free big GPU kernel tensor ASAP
         del backend
@@ -693,11 +726,6 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 "low_rank=True currently supports only kernel='rbf', because cvknyssvm "
                 "internally uses an RBF Nyström map."
             )
-        if self.rbf_sigma is not None:
-            raise ValueError(
-                "low_rank=True with the binary classifier backends does not support "
-                "rbf_sigma; leave rbf_sigma=None so the Nyström backend estimates it."
-            )
         if int(self.num_landmarks) < 1:
             raise ValueError("num_landmarks must be positive.")
         if int(self.nys_k) < 1:
@@ -739,6 +767,8 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 num_landmarks=int(self.num_landmarks),
                 k=int(self.nys_k),
                 device=dev,
+                random_state=self.random_state,
+                sigma=self.rbf_sigma,
             )
 
             return backend_cls(**kwargs)
@@ -842,7 +872,9 @@ class TorchKMSVC(_TorchKMBaseBinaryClassifier):
     platt_device : {"cpu", "cuda"} or torch.device, optional
         Device used for Platt calibration. Defaults to the estimator device.
     random_state : int, optional
-        Seed used for deterministic fold construction.
+        Seed used for deterministic fold construction and, when
+        ``low_rank=True``, for Nyström landmark sampling. ``None`` draws both
+        from the global torch RNG.
     store_path : bool, default=False
         If ``True``, keep the full coefficient and out-of-fold prediction path.
     low_rank : bool, default=False
@@ -883,6 +915,11 @@ class TorchKMSVC(_TorchKMBaseBinaryClassifier):
         Number of landmarks used by the fitted Nyström backend, when available.
     nys_k_ : int
         Effective Nyström rank, when available.
+    peak_gpu_memory_bytes_ : int or None
+        Peak CUDA memory (bytes, as tracked by the PyTorch allocator) used by
+        the whole ``fit`` call: kernel construction, the solver, and Platt
+        calibration. ``None`` when the fit ran on CPU. Exact mode scales as
+        ``n^2``; see :mod:`torchkm.memory` and the "Operating envelope" page.
 
     Notes
     -----
@@ -1054,6 +1091,7 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
             "nys_k_",
             "alpmat_path_",
             "pred_path_",
+            "peak_gpu_memory_bytes_",
         )
         for attr in fitted_attrs:
             if hasattr(self, attr):
@@ -1163,6 +1201,27 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
         num_landmarks: Optional[int] = None,
         nys_k: Optional[int] = None,
     ):
+        try:
+            return self._fit_impl(
+                X, y, low_rank=low_rank, num_landmarks=num_landmarks, nys_k=nys_k
+            )
+        except torch.cuda.OutOfMemoryError as err:
+            if self.low_rank:
+                raise
+            n = int(_as_numpy(X).shape[0])
+            raise torch.cuda.OutOfMemoryError(
+                exact_mode_oom_message(n, getattr(self, "_device_str_", "cuda"))
+            ) from err
+
+    def _fit_impl(
+        self,
+        X: Any,
+        y: Any,
+        *,
+        low_rank: Optional[bool],
+        num_landmarks: Optional[int],
+        nys_k: Optional[int],
+    ):
         self._apply_fit_low_rank_options(low_rank, num_landmarks, nys_k)
         self._clear_fit_state()
 
@@ -1185,6 +1244,8 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
 
         dev = _pick_device_str(self.device)
         self._device_str_ = dev
+        if dev == "cuda":
+            torch.cuda.reset_peak_memory_stats(dev)
 
         uC_t = _make_ulam(self.nC, self.Cs, self.C_max, self.C_min)
         ulam_t = 1.0 / (2 * X_np.shape[0] * uC_t)
@@ -1218,7 +1279,8 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
             self.X_fit_ = None
             self.kernel_state_ = {}
         else:
-            K_train, kernel_state = self._compute_K_train(X_train_t)
+            # Build the kernel on the target device (see the classifier path).
+            K_train, kernel_state = self._compute_K_train(X_train_t.to(dev))
             self.X_fit_ = X_np
             self.kernel_state_ = kernel_state
         if K_train is not None:
@@ -1263,6 +1325,10 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
         else:
             self.alpmat_path_ = None
             self.pred_path_ = None
+
+        self.peak_gpu_memory_bytes_ = (
+            int(torch.cuda.max_memory_allocated(dev)) if dev == "cuda" else None
+        )
 
         if not self.low_rank:
             del backend

@@ -23,8 +23,14 @@ class cvknyssvm:
         num_landmarks=2000,
         k=1000,
         device="cuda",
+        random_state=None,
+        sigma=None,
     ):
         self.device = device
+        self.random_state = random_state
+        # RBF bandwidth for the landmark kernel; ``None`` estimates it from the
+        # landmarks with ``sigest`` (the paper's Table 4 protocol).
+        self.sigma = sigma
         self.nobs = Xmat.shape[0]
 
         # --- Check Kmat ---
@@ -122,14 +128,24 @@ class cvknyssvm:
         k = self.k
         nfolds = self.nfolds
 
-        torch.manual_seed(0)
         num_landmarks = min(num_landmarks, nobs)
 
-        indices = torch.randperm(nobs)[:num_landmarks]
+        # Landmark sampling is driven by ``random_state`` through a local
+        # generator so repeated fits can vary the landmarks and the global
+        # torch RNG is left untouched. ``random_state=None`` draws from the
+        # global RNG like any other unseeded torch call.
+        generator = None
+        if self.random_state is not None:
+            generator = torch.Generator(device="cpu")
+            generator.manual_seed(int(self.random_state))
+        indices = torch.randperm(nobs, generator=generator)[:num_landmarks]
         Xmat_work = Xmat.float()
         landmarks = Xmat_work[indices]
 
-        sig_w = sigest(landmarks)
+        if self.sigma is not None:
+            sig_w = float(self.sigma)
+        else:
+            sig_w = sigest(landmarks, generator=generator)
         W = rbf_kernel(landmarks, sig_w)
 
         evals, evecs = torch.linalg.eigh(W)

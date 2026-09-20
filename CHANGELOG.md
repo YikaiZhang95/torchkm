@@ -2,6 +2,39 @@
 
 All notable changes to TorchKM are documented in this file.
 
+## [Unreleased]
+
+### Added
+- `torchkm.memory`: `exact_mode_memory_estimate`, `max_exact_n`, and the
+  out-of-memory message the estimators raise in exact mode (predicted
+  requirement, device total, largest feasible `n`, and the `low_rank=True`
+  alternative). Both helpers are exported from `torchkm`.
+- Fitted attribute `peak_gpu_memory_bytes_` on every estimator: the PyTorch
+  allocator peak over the whole `fit` (`None` on CPU).
+- `random_state` now also seeds Nyström landmark sampling in `TorchKMSVC`,
+  `TorchKMDWD` and `TorchKMLogit`; the low-level `cvknyssvm`, `cvknysdwd` and
+  `cvknyslogit` take `random_state` and `sigma`. `sigest` takes an optional
+  `generator`.
+- `rbf_sigma` is honoured on the Nyström path of the binary classifiers.
+- Benchmark suite for the JMLR revision under `benchmarks/`: shared protocol
+  helpers (peak memory from the PyTorch allocator and NVML, AUC and balanced
+  accuracy, JSON results with environment snapshots), `bench_memory_envelope.py`,
+  `bench_gpu_libraries.py` (scikit-learn, ThunderSVM, cuML, Falkon, linear
+  baselines), `bench_covtype_rank.py`, `bench_kqr.py` and `bench_dwd.py` with
+  R baselines, `bench_solver_quality.py`, and `make_tables.py`.
+- User guide page on the exact-mode operating envelope; `is_exact` documented.
+
+### Changed
+- Exact-mode solvers no longer materialise the `n x n` matrix
+  `diag(1/eigenvalues) U^T`; the projection applies it on the fly. Peak
+  memory drops by `8 n^2` bytes.
+- The training kernel is built on the target device instead of on the host,
+  and `rbf_kernel` / `kernelMult` exponentiate in place.
+- The Nyström backends no longer call `torch.manual_seed(0)` inside `fit`, so
+  repeated fits can vary the landmarks and the global RNG is left untouched.
+- `table2_simulation.py` also reports test accuracy, AUC and peak memory and
+  writes JSON.
+
 ## [4.3.2] - 2026-08-02
 
 ### Added

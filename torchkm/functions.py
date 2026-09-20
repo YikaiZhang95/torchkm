@@ -55,13 +55,16 @@ def data_gen(nn, nm, pp, p1, p2, mu, ro, sdn=None, means=None):
     return X, y, means
 
 
-def sigest(x, frac=0.5):
+def sigest(x, frac=0.5, generator=None):
     """
     PyTorch equivalent of the R function sigest.
 
     Parameters:
     - x (torch.Tensor): Input tensor of shape (m, n), where m is the number of samples and n is the number of features.
     - frac (float): Fraction of samples to use for computing the distance.
+    - generator (torch.Generator, optional): CPU generator used to draw the
+      random pairs. Pass one for a reproducible estimate that leaves the global
+      torch RNG untouched; ``None`` uses the global RNG.
 
     Returns:
     - sigma_estimate (float): Estimated sigma based on quantiles of squared distances.
@@ -74,8 +77,8 @@ def sigest(x, frac=0.5):
     n = int(frac * m)
 
     # Randomly sample `n` indices (two sets)
-    index1 = torch.randint(0, m, (n,), dtype=torch.long)
-    index2 = torch.randint(0, m, (n,), dtype=torch.long)
+    index1 = torch.randint(0, m, (n,), dtype=torch.long, generator=generator)
+    index2 = torch.randint(0, m, (n,), dtype=torch.long, generator=generator)
 
     # Compute the squared differences between the randomly paired rows
     temp = x[index1] - x[index2]
@@ -113,8 +116,9 @@ def rbf_kernel(x, sigma):
     pairwise_dists.addmm_(x, x.t(), beta=1.0, alpha=-2.0)
     pairwise_dists.clamp_min_(0.0)
 
-    # Compute the RBF kernel matrix
-    K = torch.exp(pairwise_dists.mul_(-2.0 * sigma))
+    # Compute the RBF kernel matrix in place: the distance buffer becomes K,
+    # so no second n x n (or n x m) temporary is allocated.
+    K = pairwise_dists.mul_(-2.0 * sigma).exp_()
 
     return K
 
@@ -162,7 +166,8 @@ def kernelMult(X, X_new, sigma):
     pairwise_dists.addmm_(X, X_new.t(), beta=1.0, alpha=-2.0)
     pairwise_dists.clamp_min_(0.0)
 
-    # Compute the RBF kernel matrix
-    K = torch.exp(pairwise_dists.mul_(-2.0 * sigma))
+    # Compute the RBF kernel matrix in place: the distance buffer becomes K,
+    # so no second n x n (or n x m) temporary is allocated.
+    K = pairwise_dists.mul_(-2.0 * sigma).exp_()
 
     return K

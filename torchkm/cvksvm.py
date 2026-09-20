@@ -255,9 +255,9 @@ class cvksvm:
         eigens += self.gamma
         Usum = torch.sum(Umat, dim=0)
         einv = 1 / eigens
-        # eU = torch.mm(torch.diag(einv), Umat.T)
-        eU = (einv * Umat).T
-        # Kinv1 = torch.mm(Umat, eU)
+        # The regularised inverse K^{-1} = U diag(einv) U^T is applied on the
+        # fly in the projection step below instead of materialising an
+        # extra n x n matrix (see docs/user_guide/operating_envelope.md).
 
         vareps = 1.0e-8
 
@@ -472,7 +472,9 @@ class cvksvm:
                                         theta[elbowid] += y[elbowid] * (
                                             1.0 - r[elbowid]
                                         )
-                                        alptmp[1:] = torch.mv(Umat, torch.mv(eU, theta))
+                                        alptmp[1:] = torch.mv(
+                                            Umat, einv * torch.mv(Umat.T, theta)
+                                        )
 
                                     dif_step = dif_step + alptmp - alp_old
                                     r = y * (alptmp[0] + torch.mv(Kmat, alptmp[1:]))
@@ -778,7 +780,9 @@ class cvksvm:
                                         theta[elbowid] += yn[elbowid] * (
                                             1.0 - loor[elbowid]
                                         )
-                                        alptmp[1:] = torch.mv(Umat, torch.mv(eU, theta))
+                                        alptmp[1:] = torch.mv(
+                                            Umat, einv * torch.mv(Umat.T, theta)
+                                        )
 
                                     dif_step = dif_step + alptmp - alp_old
                                     loor = yn * (alptmp[0] + torch.mv(Kmat, alptmp[1:]))

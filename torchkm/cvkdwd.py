@@ -237,10 +237,6 @@ class cvkdwd:
         Kmat = Kmat.double().to(self.device)
         eigens += self.gamma
         Usum = torch.sum(Umat, dim=0)
-        einv = 1 / eigens
-        # eU = torch.mm(torch.diag(einv), Umat.T)
-        eU = (einv * Umat).T
-        # Kinv1 = torch.mm(Umat, eU)
         qval = 1.0
         mbd = (qval + 1.0) * (qval + 1.0) / qval
         minv = 1.0 / mbd

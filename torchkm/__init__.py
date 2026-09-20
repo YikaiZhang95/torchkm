@@ -9,6 +9,7 @@ from .estimators import (
 )
 from .exceptions import ConvergenceWarning
 from .functions import data_gen, sigest, rbf_kernel, kernelMult, standardize
+from .memory import exact_mode_memory_estimate, max_exact_n
 
 # Resolve the version from the installed distribution metadata rather than
 # duplicating the literal in setup.cfg. This keeps ``torchkm.__version__``,
@@ -26,6 +27,8 @@ __all__ = [
     "TorchKMLogit",
     "TorchKMKQR",
     "ConvergenceWarning",
+    "exact_mode_memory_estimate",
+    "max_exact_n",
     "data_gen",
     "sigest",
     "rbf_kernel",

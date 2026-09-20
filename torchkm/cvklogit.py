@@ -82,10 +82,6 @@ class cvklogit:
         Kmat = Kmat.double().to(self.device)
         eigens += self.gamma
         Usum = torch.sum(Umat, dim=0)
-        einv = 1 / eigens
-        # eU = torch.mm(torch.diag(einv), Umat.T)
-        eU = (einv * Umat).T
-        # Kinv1 = torch.mm(Umat, eU)
 
         vareps = 1.0e-8
 
