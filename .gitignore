@@ -31,3 +31,7 @@ htmlcov/
 # IDE
 .vscode/
 .idea/
+
+# benchmark artefacts
+benchmarks/results/*_splits/
+benchmarks/results/**/*.tmp

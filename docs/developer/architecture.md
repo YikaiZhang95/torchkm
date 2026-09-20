@@ -28,9 +28,10 @@ The low-level solvers implement the computational routines used by the estimator
 | `torchkm.kernels` | Basic kernel functions |
 | `torchkm.functions` | Kernel and numerical utility functions |
 | `torchkm.platt` | Probability calibration utilities |
+| `torchkm.memory` | Exact-mode memory envelope: peak estimate, largest feasible `n`, out-of-memory message |
 | `tests/` | Unit and integration tests |
 | `examples/` | User-facing examples |
-| `benchmarks/` | Benchmark protocol notes and, when added, benchmark scripts |
+| `benchmarks/` | Benchmark scripts (`bench_*.py`, the paper's `table*.py`), shared protocol helpers, R baselines, archived results |
 
 ## Design principles
 

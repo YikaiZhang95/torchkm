@@ -1,5 +1,34 @@
 # JMLR MLOSS revision plan for TorchKM
 
+## Status
+
+Implemented on this branch (CPU-verified; GPU numbers still to be produced
+on the L40S):
+
+- Phase 0 harness: `benchmarks/_common.py` (peak memory from the PyTorch
+  allocator and NVML, accuracy / balanced accuracy / AUC, JSON results with
+  environment snapshots, dataset registry with subsampling, shared folds,
+  time-capped CV sweeps), `benchmarks/_libraries.py` (runners for TorchKM,
+  scikit-learn, ThunderSVM, cuML, Falkon, linear baselines),
+  `benchmarks/make_tables.py`, `benchmarks/environment/`,
+  `benchmarks/results/README.md`; stale docs rewritten.
+- Phase 1 package changes: `torchkm/memory.py` (estimate, `max_exact_n`, OOM
+  message), `peak_gpu_memory_bytes_`, the `eU` copy removed from all six exact
+  solvers, kernel built on device with in-place exponentiation, Nyström
+  seeding from `random_state` (and an explicit `sigma`), `is_exact` and the
+  operating envelope documented; 16 new tests.
+- Scripts for Phases 1 to 3: `bench_memory_envelope.py`,
+  `bench_gpu_libraries.py`, `bench_covtype_rank.py`, `bench_solver_quality.py`,
+  `bench_kqr.py` + `r/bench_kqr.R`, `bench_dwd.py` + `r/bench_dwd.R`;
+  `table2_simulation.py` reports accuracy, AUC, memory and JSON. Every Python
+  script has a `--smoke` mode that passed on CPU.
+
+Still to do: run the scripts on the GPU workstation (commands on the
+reproduction page), run the R scripts (untested here: no R in this
+environment; check the `fastkqr` / `kerndwd` argument names against the
+installed versions), calibrate `EXACT_MODE_COPIES` from the envelope sweep,
+the float32 stretch goal, and Phase 4 (manuscript and response letter).
+
 Working plan for answering the JMLR MLOSS decision letter (`rev.txt`). The
 letter accepts the engineering and returns the manuscript on the empirical
 case. This document maps every point in the letter to concrete work in the

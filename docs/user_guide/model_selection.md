@@ -57,6 +57,27 @@ clf.cv_mis_
 | `random_state` | Random seed for deterministic fold construction |
 | `device` | `"cpu"`, `"cuda"`, or `None` for automatic selection |
 
+## What "exact" means, and the `is_exact` flag
+
+Two different things are exact in TorchKM, and the `is_exact` argument
+controls neither of them:
+
+- **Exact cross-validation.** Every fold's solution is obtained from the same
+  kernel matrix and the same eigendecomposition through a modified response
+  vector (Wang and Zou, 2022), not by refitting on the reduced data. The fold
+  solutions are the ones a refit would give, up to solver tolerance. This holds
+  for every setting of `is_exact`.
+- **Exact SVM solutions.** The hinge loss is replaced by a sequence of smoothed
+  losses whose minimisers converge to the SVM solution (finite smoothing);
+  the solver stops once the KKT conditions of the original problem hold to
+  `tol`. Again independent of `is_exact`.
+
+`is_exact=1` adds a final projection step in `cvksvm` and `cvkqr` that lands
+the solution on the elbow set exactly, and switches the cross-validation loop
+from the batched per-lambda implementation to a per-fold loop. It is slower
+and rarely changes predictions; the default `is_exact=0` is what the paper's
+benchmarks and the benchmark scripts use.
+
 ## Notes
 
 - Larger `nC` gives a finer regularization grid but increases computation.

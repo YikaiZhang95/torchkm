@@ -1,0 +1,23 @@
+# conda environment for the TorchKM benchmark suite (GPU comparison libraries).
+# Match `cuda-version` to the driver on the machine; see README.md.
+name: torchkm-bench
+channels:
+  - rapidsai
+  - conda-forge
+  - nvidia
+dependencies:
+  - python=3.11
+  - cuda-version=12.4
+  - cuml=25.06
+  - numpy
+  - scipy
+  - scikit-learn
+  - pandas
+  - psutil
+  - r-base
+  - pip
+  - pip:
+      - torch
+      - falkon
+      - nvidia-ml-py
+      - pytest

@@ -45,6 +45,7 @@ nav:
       - Kernel Logistic Regression: user_guide/logistic_regression.md
       - Model Selection: user_guide/model_selection.md
       - Nyström Approximation: user_guide/nystrom.md
+      - Operating Envelope: user_guide/operating_envelope.md
       - Probability Calibration: user_guide/probability_calibration.md
       - Kernel Quantile Regression: user_guide/quantile_regression.md
       - Device and Precision: user_guide/device_and_precision.md
