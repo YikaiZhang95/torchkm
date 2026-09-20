@@ -78,6 +78,25 @@ from the batched per-lambda implementation to a per-fold loop. It is slower
 and rarely changes predictions; the default `is_exact=0` is what the paper's
 benchmarks and the benchmark scripts use.
 
+### The stopping rule and `KKTeps`
+
+After each smoothing stage the solver checks the KKT conditions of the
+original hinge-loss problem and stops when
+`sum(KKT**2) / max(lambda, 1)**2 < KKTeps`. Each entry of the KKT residual
+has natural scale `1/n`, so the squared norm shrinks like `1/n` as the sample
+grows and the default `KKTeps=1e-3` becomes easy to satisfy: at `n` in the
+thousands and weak regularization (small `lambda`, large `C`) the solver can
+stop after a few passes with an objective noticeably above the optimum.
+`benchmarks/bench_solver_quality.py` measures this against libsvm's solution
+at a fixed `lambda`. Pass a tighter tolerance when the exact optimum matters:
+
+```python
+clf = TorchKMSVC(kernel="rbf", Cs=Cs, cv=5, device=device, KKTeps=1e-6)
+```
+
+The cost is a few more solver passes per regularization value, each an
+`O(n^2)` matrix-vector product; the eigendecomposition is not repeated.
+
 ## Notes
 
 - Larger `nC` gives a finer regularization grid but increases computation.

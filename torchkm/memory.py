@@ -24,9 +24,10 @@ from typing import Optional, Union
 import torch
 
 #: Number of ``n x n`` matrices' worth of memory that exact mode holds at its
-#: peak (kernel matrix, eigenvector matrix, eigensolver workspace). Calibrate
-#: with ``benchmarks/bench_memory_envelope.py``.
-EXACT_MODE_COPIES: float = 3.5
+#: peak (kernel matrix, eigenvector matrix, eigensolver workspace). A CPU
+#: sweep (LAPACK ``syevd``, PyTorch 2.14) measured 4.2; calibrate the CUDA
+#: value with ``benchmarks/bench_memory_envelope.py``.
+EXACT_MODE_COPIES: float = 4.0
 
 DeviceLike = Union[str, torch.device, None]
 

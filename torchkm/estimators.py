@@ -119,6 +119,8 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         max_iter: int = 1000,
         solver_gamma: float = 1e-8,
         is_exact: int = 0,  # only used by cvksvm/cvkdwd
+        KKTeps: float = 1e-3,
+        delta_len: int = 8,  # only used by cvksvm
         device: Optional[Union[str, torch.device]] = None,
         # RBF
         rbf_sigma: Optional[float] = None,
@@ -148,6 +150,8 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         self.max_iter = max_iter
         self.solver_gamma = solver_gamma
         self.is_exact = is_exact
+        self.KKTeps = KKTeps
+        self.delta_len = delta_len
         self.device = device
 
         self.rbf_sigma = rbf_sigma
@@ -786,6 +790,8 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 maxit=int(self.max_iter),
                 gamma=float(self.solver_gamma),
                 is_exact=int(self.is_exact),
+                delta_len=int(self.delta_len),
+                KKTeps=float(self.KKTeps),
                 device=dev,
             )
 
@@ -800,6 +806,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 eps=float(self.tol),
                 maxit=int(self.max_iter),
                 gamma=float(self.solver_gamma),
+                KKTeps=float(self.KKTeps),
                 device=dev,
             )
 
@@ -814,6 +821,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 eps=float(self.tol),
                 maxit=int(self.max_iter),
                 gamma=float(self.solver_gamma),
+                KKTeps=float(self.KKTeps),
                 device=dev,
             )
 
@@ -855,6 +863,15 @@ class TorchKMSVC(_TorchKMBaseBinaryClassifier):
         Small numerical regularizer passed to the solver.
     is_exact : int, default=0
         Solver option used by the exact SVM backend.
+    KKTeps : float, default=1e-3
+        Tolerance of the KKT stopping rule applied after each smoothing
+        stage (``sum(KKT**2) / max(lambda, 1)**2 < KKTeps``). The squared
+        KKT residual scales like ``1/n``, so the default is loose for large
+        ``n`` and weak regularization; ``1e-6`` or smaller recovers the
+        exact optimum at a modest cost in solver passes. See the model
+        selection page of the user guide.
+    delta_len : int, default=8
+        Number of smoothing stages of the finite-smoothing SVM solver.
     device : {"cpu", "cuda"} or torch.device, optional
         Device used for computation. If ``None``, CUDA is used when available;
         otherwise CPU is used. Requests for CUDA fall back to CPU when CUDA is

@@ -40,11 +40,15 @@ constant and 10% headroom for the CUDA context:
 
 | Device memory | Largest \(n\) for exact mode (predicted) |
 |---|---|
-| 8 GB | ≈ 16,000 |
-| 16 GB | ≈ 22,700 |
-| 24 GB | ≈ 27,800 |
-| 48 GB | ≈ 39,000 |
-| 80 GB | ≈ 50,700 |
+| 8 GB | ≈ 15,000 |
+| 16 GB | ≈ 21,200 |
+| 24 GB | ≈ 26,000 |
+| 48 GB | ≈ 36,700 |
+| 80 GB | ≈ 47,400 |
+
+A CPU sweep of the same code path (LAPACK eigensolver) measured 4.2 resident
+copies, which is where the default constant of 4 comes from; the CUDA
+eigensolver's workspace differs, so the GPU sweep is the number to quote.
 
 Every exact-mode estimator (`TorchKMSVC`, `TorchKMDWD`, `TorchKMLogit`,
 `TorchKMKQR`) shares the same decomposition, so the envelope is the same for

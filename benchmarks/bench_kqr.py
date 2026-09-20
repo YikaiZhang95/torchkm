@@ -172,6 +172,8 @@ def run_torchkm_kqr(data, sig, Cs, foldid, tau, args, dev, seed, *, low_rank: bo
         tol=float(args.tol),
         random_state=int(seed),
     )
+    if getattr(args, "kkt_eps", None) is not None:
+        kw["KKTeps"] = float(args.kkt_eps)
     if low_rank:
         kw.update(
             low_rank=True, num_landmarks=int(args.landmarks), nys_k=int(args.rank)

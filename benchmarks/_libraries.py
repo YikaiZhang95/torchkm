@@ -158,6 +158,9 @@ def run_torchkm(
         "max_iter": args.max_iter,
         "tol": args.tol,
     }
+    if getattr(args, "kkt_eps", None) is not None:
+        kwargs["KKTeps"] = float(args.kkt_eps)
+        params["KKTeps"] = float(args.kkt_eps)
     if low_rank:
         kwargs.update(low_rank=True, num_landmarks=int(landmarks), nys_k=int(rank))
         params.update(num_landmarks=int(landmarks), nys_k=int(rank))

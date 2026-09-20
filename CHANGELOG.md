@@ -16,6 +16,14 @@ All notable changes to TorchKM are documented in this file.
   `cvknyslogit` take `random_state` and `sigma`. `sigest` takes an optional
   `generator`.
 - `rbf_sigma` is honoured on the Nyström path of the binary classifiers.
+- `KKTeps` (and `delta_len` for the SVM) are exposed on `TorchKMSVC`,
+  `TorchKMDWD` and `TorchKMLogit`. The solvers' KKT stopping rule compares an
+  absolute squared residual norm, whose natural scale shrinks like `1/n`, so
+  the default `KKTeps=1e-3` can stop the SVM solver a few passes in at
+  `n` in the thousands and weak regularization (objective up to 33% above the
+  libsvm optimum at n=3000, lambda=1e-3 in `bench_solver_quality.py`);
+  `KKTeps=1e-6` closes the gap at the same run time. Documented on the model
+  selection page; the default is unchanged pending a scale-aware rule.
 - Benchmark suite for the JMLR revision under `benchmarks/`: shared protocol
   helpers (peak memory from the PyTorch allocator and NVML, AUC and balanced
   accuracy, JSON results with environment snapshots), `bench_memory_envelope.py`,

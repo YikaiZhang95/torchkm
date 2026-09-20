@@ -77,6 +77,8 @@ def make_estimator(name: str, Cs, args, dev, seed, *, low_rank: bool):
         tol=float(args.tol),
         random_state=int(seed),
     )
+    if getattr(args, "kkt_eps", None) is not None:
+        common["KKTeps"] = float(args.kkt_eps)
     if low_rank:
         common.update(
             low_rank=True, num_landmarks=int(args.landmarks), nys_k=int(args.rank)

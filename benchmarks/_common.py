@@ -883,6 +883,12 @@ def add_common_args(ap: argparse.ArgumentParser, *, repeats: int = 1) -> None:
     ap.add_argument("--seed", type=int, default=52)
     ap.add_argument("--max-iter", type=int, default=100_000, help="TorchKM solver cap")
     ap.add_argument("--tol", type=float, default=1e-5, help="TorchKM solver tolerance")
+    ap.add_argument(
+        "--kkt-eps",
+        type=float,
+        default=None,
+        help="TorchKM KKT stopping tolerance (default: the estimator default, 1e-3)",
+    )
     ap.add_argument("--out", default=None, help="write JSON results here")
     ap.add_argument(
         "--time-cap",
