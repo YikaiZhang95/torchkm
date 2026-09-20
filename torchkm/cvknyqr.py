@@ -37,6 +37,7 @@ class cvknyqr:
         mproj=2,
         KKTeps=1e-3,
         KKTeps2=1e-3,
+        kkt_scaled=False,
         num_landmarks=2000,
         k=1000,
         sigma=None,
@@ -84,6 +85,7 @@ class cvknyqr:
         self.mproj = int(mproj)
         self.KKTeps = float(KKTeps)
         self.KKTeps2 = float(KKTeps2)
+        self.kkt_scaled = bool(kkt_scaled)
         self.num_landmarks = int(num_landmarks)
         self.k = int(k)
         self.sigma = sigma
@@ -193,6 +195,7 @@ class cvknyqr:
             mproj=self.mproj,
             KKTeps=self.KKTeps,
             KKTeps2=self.KKTeps2,
+            kkt_scaled=self.kkt_scaled,
             device=self.device,
         )
         backend.fit()

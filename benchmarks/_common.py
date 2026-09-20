@@ -889,6 +889,11 @@ def add_common_args(ap: argparse.ArgumentParser, *, repeats: int = 1) -> None:
         default=None,
         help="TorchKM KKT stopping tolerance (default: the estimator default, 1e-3)",
     )
+    ap.add_argument(
+        "--kkt-scaled",
+        action="store_true",
+        help="TorchKM scale-aware KKT rule (n * sum(KKT^2) < KKTeps)",
+    )
     ap.add_argument("--out", default=None, help="write JSON results here")
     ap.add_argument(
         "--time-cap",

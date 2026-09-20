@@ -60,3 +60,65 @@ def test_tighter_kkteps_lowers_the_svm_objective_at_weak_regularization():
     assert tight <= loose + 1e-12
     # The loose default stops well short of the optimum in this regime.
     assert loose - tight > 1e-3
+
+
+def test_scale_aware_rule_reaches_the_optimum_with_the_default_tolerance():
+    """``kkt_scaled=True`` at KKTeps=1e-3 behaves like a tight absolute tolerance."""
+    X, y = make_classification(
+        n_samples=2500, n_features=20, n_informative=10, random_state=1
+    )
+    y = np.where(y == 0, -1.0, 1.0)
+    torch.manual_seed(0)
+    Xt = torch.as_tensor(X, dtype=torch.double)
+    sig = float(sigest(Xt))
+    K = rbf_kernel(Xt, sig)
+    y_t = torch.as_tensor(y, dtype=torch.double)
+    lam = 1e-3
+    C = 1.0 / (2.0 * X.shape[0] * lam)
+
+    def fit(**kw):
+        clf = TorchKMSVC(
+            kernel="rbf",
+            rbf_sigma=sig,
+            Cs=[C],
+            nC=1,
+            cv=2,
+            device="cpu",
+            max_iter=100_000,
+            random_state=0,
+            **kw,
+        ).fit(X, y)
+        alpha = torch.as_tensor(clf.alpha_, dtype=torch.double)
+        return _objective(K, y_t, alpha, clf.intercept_, lam)
+
+    loose = fit()
+    scaled = fit(kkt_scaled=True)
+    tight = fit(KKTeps=1e-6)
+    assert scaled <= loose + 1e-12
+    assert loose - scaled > 1e-3
+    # Same relative accuracy as the tight absolute rule (which equals
+    # KKTeps_scaled = n * 1e-6 = 2.5e-3 here), within solver noise.
+    assert abs(scaled - tight) < 5e-3
+
+
+def test_kkt_scaled_is_passed_to_the_kqr_backends():
+    from sklearn.datasets import make_regression
+
+    from torchkm.estimators import TorchKMKQR
+
+    Xr, yr = make_regression(n_samples=60, n_features=4, noise=0.3, random_state=0)
+    for low_rank in (False, True):
+        reg = TorchKMKQR(
+            kernel="rbf",
+            nC=2,
+            cv=2,
+            device="cpu",
+            max_iter=30,
+            kkt_scaled=True,
+            low_rank=low_rank,
+            num_landmarks=20,
+            nys_k=10,
+            random_state=0,
+        ).fit(Xr, yr)
+        assert reg.kkt_scaled is True
+        assert np.isfinite(reg.predict(Xr[:3])).all()

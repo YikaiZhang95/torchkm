@@ -121,6 +121,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         is_exact: int = 0,  # only used by cvksvm/cvkdwd
         KKTeps: float = 1e-3,
         delta_len: int = 8,  # only used by cvksvm
+        kkt_scaled: bool = False,
         device: Optional[Union[str, torch.device]] = None,
         # RBF
         rbf_sigma: Optional[float] = None,
@@ -152,6 +153,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         self.is_exact = is_exact
         self.KKTeps = KKTeps
         self.delta_len = delta_len
+        self.kkt_scaled = kkt_scaled
         self.device = device
 
         self.rbf_sigma = rbf_sigma
@@ -792,6 +794,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 is_exact=int(self.is_exact),
                 delta_len=int(self.delta_len),
                 KKTeps=float(self.KKTeps),
+                kkt_scaled=bool(self.kkt_scaled),
                 device=dev,
             )
 
@@ -872,6 +875,9 @@ class TorchKMSVC(_TorchKMBaseBinaryClassifier):
         selection page of the user guide.
     delta_len : int, default=8
         Number of smoothing stages of the finite-smoothing SVM solver.
+    kkt_scaled : bool, default=False
+        Use the scale-aware KKT rule (``n * sum(KKT**2) < KKTeps``), under which
+        ``KKTeps`` means the same relative accuracy at every ``n``.
     device : {"cpu", "cuda"} or torch.device, optional
         Device used for computation. If ``None``, CUDA is used when available;
         otherwise CPU is used. Requests for CUDA fall back to CPU when CUDA is
@@ -1035,6 +1041,7 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
         mproj: int = 2,
         KKTeps: float = 1e-3,
         KKTeps2: float = 1e-3,
+        kkt_scaled: bool = False,
         device: Optional[Union[str, torch.device]] = None,
         rbf_sigma: Optional[float] = None,
         sigest_frac: float = 0.5,
@@ -1063,6 +1070,7 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
         self.mproj = mproj
         self.KKTeps = KKTeps
         self.KKTeps2 = KKTeps2
+        self.kkt_scaled = kkt_scaled
         self.device = device
         self.rbf_sigma = rbf_sigma
         self.sigest_frac = sigest_frac
@@ -1183,6 +1191,7 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
                 mproj=int(self.mproj),
                 KKTeps=float(self.KKTeps),
                 KKTeps2=float(self.KKTeps2),
+                kkt_scaled=bool(self.kkt_scaled),
                 num_landmarks=int(self.num_landmarks),
                 k=int(self.nys_k),
                 sigma=self.rbf_sigma,
@@ -1206,6 +1215,7 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
             mproj=int(self.mproj),
             KKTeps=float(self.KKTeps),
             KKTeps2=float(self.KKTeps2),
+            kkt_scaled=bool(self.kkt_scaled),
             device=device,
         )
 

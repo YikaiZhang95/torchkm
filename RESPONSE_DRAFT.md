@@ -136,17 +136,23 @@ solver minimises the same objective at the same fixed λ on the same kernel
 (`benchmarks/bench_solver_quality.py`), instead of at whatever λ each library
 selected.
 
-Doing that check exposed a solver issue, which the revision fixes and
-reports rather than hides. At n = 3,000 with the default KKT tolerance,
-TorchKM's objective sat above libsvm's optimum by 33% at λ = 1e-3, 2.5% at
-λ = 1e-2 and 1e-5 at λ = 1e-1, after only 2 to 5 solver passes: the stopping
-rule compares an absolute squared KKT norm whose natural scale shrinks like
-1/n, so the default threshold becomes loose at large n and weak
-regularization. With `KKTeps = 1e-6` the largest gap is 4e-3 at unchanged run
-time. The tolerance is now a constructor parameter, every benchmark takes
-`--kkt-eps`, and all GPU runs will use the tight setting so the reported
-times reflect converged solutions. The claim "TorchKM attains the lowest
-objective values" is withdrawn.
+Doing that check exposed a solver issue, which the revision reports rather
+than hides. At n = 3,000 with the default tolerances, TorchKM's objective sat
+above libsvm's optimum by 33% at λ = 1e-3 and 36% at λ = 1e-4 after a handful
+of solver passes, while the stopping rules reported convergence: the KKT
+threshold is absolute (its natural scale shrinks like 1/n) and the inner
+step tolerance stops the smoothed proximal-gradient iterations early when
+the problem is ill-conditioned, which it is at weak regularization. Two
+facts bound the consequence. The tuned model's test accuracy was identical
+to libsvm's in every cell, so no predictive result depends on this. And
+tighter tolerances recover the optimum: `KKTeps=1e-6` alone brings λ ≥ 1e-3
+to within 4e-3, and `tol=1e-8` with it brings λ ≥ 1e-4 to within 1% at about
+three times the solver passes; λ = 1e-5 is not solved to better than 6%, so
+the paper states the range over which solutions are exact to tolerance. The
+tolerances are constructor parameters, a scale-aware KKT rule is available,
+every benchmark takes them as flags, and the main tables report TorchKM at
+both the default and the converged setting with the time cost. The claim
+"TorchKM attains the lowest objective values" is withdrawn.
 
 Language: "consistently superior accuracy", "attains the best accuracy" and
 "lowest objective values" go. With standard errors on every mean (Tables 3

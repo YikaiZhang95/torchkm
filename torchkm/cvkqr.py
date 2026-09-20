@@ -60,6 +60,13 @@ class cvkqr:
     KKTeps2 : float, default=1e-3
         Tolerance for KKT conditions in secondary checks.
 
+    kkt_scaled : bool, default=False
+        Scale-aware KKT stopping rule: compare ``n * sum(KKT**2)`` (the squared
+        residual in units of its natural scale ``1/n``) with ``KKTeps`` instead of
+        the absolute ``sum(KKT**2)``. With the default rule the threshold gets
+        easier to meet as ``n`` grows; with ``kkt_scaled=True`` a given ``KKTeps``
+        means the same relative accuracy at every ``n``.
+
     device : {'cuda', 'cpu'}, default=None
         Device to perform computations on. Defaults to 'cuda' if available, else 'cpu'.
 
@@ -136,6 +143,7 @@ class cvkqr:
         KKTeps=1e-3,
         KKTeps2=1e-3,
         device=None,
+        kkt_scaled=False,
     ):
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -187,6 +195,11 @@ class cvkqr:
         self.mproj = mproj
         self.KKTeps = KKTeps
         self.KKTeps2 = KKTeps2
+        self.kkt_scaled = bool(kkt_scaled)
+        # Each KKT entry has natural scale 1/n; the scale-aware rule compares
+        # the squared norm in units of (1/n)^2 so KKTeps means the same relative
+        # accuracy at every n (see docs/user_guide/model_selection.md).
+        self._kkt_scale = float(self.nobs) if self.kkt_scaled else 1.0
         self.nfolds = nfolds
         self.nmaxit = self.nlam * self.maxit
         self.foldid = foldid
@@ -349,7 +362,7 @@ class cvkqr:
                 dvec[1:] = al * torch.mv(Kmat, alpvec[1:])
                 KKT = cvec / float(nobs) + dvec
                 uo = max(al, 1.0)
-                KKT_norm = torch.sum(KKT**2) / (uo**2)
+                KKT_norm = self._kkt_scale * torch.sum(KKT**2) / (uo**2)
 
                 if KKT_norm < self.KKTeps:
                     dif_norm = torch.max(dif_step**2)
@@ -457,7 +470,10 @@ class cvkqr:
                             KKT = cvec / float(nobs) + dvec
                             uo = max(al, 1.0)
 
-                            if torch.sum(KKT**2) / (uo**2) < self.KKTeps:
+                            if (
+                                self._kkt_scale * torch.sum(KKT**2) / (uo**2)
+                                < self.KKTeps
+                            ):
                                 alpvec = alptmp.clone()
                                 break
 
@@ -609,7 +625,7 @@ class cvkqr:
                     dvec_cv[1:] = al * torch.mv(Kmat, looalp[1:])
                     KKT = cvec_cv / float(nobs) + dvec_cv
                     uo = max(al, 1.0)
-                    KKT_norm = torch.sum(KKT**2) / (uo**2)
+                    KKT_norm = self._kkt_scale * torch.sum(KKT**2) / (uo**2)
 
                     if KKT_norm < self.KKTeps2:
                         if self.is_exact == 0:
@@ -884,7 +900,7 @@ class cvkqr:
                 dvec_nf[1:] = al * torch.mv(Kmat, looalp[1:])
                 KKT = cvec_nf / float(nobs) + dvec_nf
                 uo = max(al, 1.0)
-                KKT_norm = torch.sum(KKT**2) / (uo**2)
+                KKT_norm = self._kkt_scale * torch.sum(KKT**2) / (uo**2)
 
                 if KKT_norm < self.KKTeps2:
                     active[nf] = False

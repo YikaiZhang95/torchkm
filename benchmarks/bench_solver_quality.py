@@ -79,6 +79,7 @@ def torchkm_solution(data, sig, lam, args, dev, seed):
         is_exact=int(args.is_exact),
         random_state=seed,
         **({} if args.kkt_eps is None else {"KKTeps": float(args.kkt_eps)}),
+        **({"kkt_scaled": True} if getattr(args, "kkt_scaled", False) else {}),
     )
     with timed(dev) as t:
         clf.fit(data["Xtr"], data["ytr"])

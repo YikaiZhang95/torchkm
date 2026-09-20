@@ -61,6 +61,13 @@ class cvksvm:
     KKTeps2 : float, default=1e-3
         Tolerance for KKT conditions in secondary checks.
 
+    kkt_scaled : bool, default=False
+        Scale-aware KKT stopping rule: compare ``n * sum(KKT**2)`` (the squared
+        residual in units of its natural scale ``1/n``) with ``KKTeps`` instead of
+        the absolute ``sum(KKT**2)``. With the default rule the threshold gets
+        easier to meet as ``n`` grows; with ``kkt_scaled=True`` a given ``KKTeps``
+        means the same relative accuracy at every ``n``.
+
     device : {'cuda', 'cpu'}, default='cuda'
         Device to perform computations on. Default is GPU ('cuda') for improved performance.
 
@@ -143,6 +150,7 @@ class cvksvm:
         KKTeps=1e-3,
         KKTeps2=1e-3,
         device=None,
+        kkt_scaled=False,
     ):
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -208,6 +216,11 @@ class cvksvm:
         self.mproj = mproj
         self.KKTeps = KKTeps
         self.KKTeps2 = KKTeps2
+        self.kkt_scaled = bool(kkt_scaled)
+        # Each KKT entry has natural scale 1/n; the scale-aware rule compares
+        # the squared norm in units of (1/n)^2 so KKTeps means the same relative
+        # accuracy at every n (see docs/user_guide/model_selection.md).
+        self._kkt_scale = float(self.nobs) if self.kkt_scaled else 1.0
         self.nfolds = nfolds
         self.nmaxit = self.nlam * self.maxit
         self.foldid = foldid
@@ -382,7 +395,7 @@ class cvksvm:
                 )
                 KKT = zvec / float(nobs) + 2.0 * al * alpvec[1:]
                 uo = max(al, 1.0)
-                KKT_norm = torch.sum(KKT**2) / (uo**2)
+                KKT_norm = self._kkt_scale * torch.sum(KKT**2) / (uo**2)
                 if KKT_norm < self.KKTeps:
                     # Check convergence
                     dif_norm = torch.max(dif_step**2)
@@ -502,7 +515,10 @@ class cvksvm:
                             KKT = zvec / nobs + 2.0 * al * alptmp[1:]
                             uo = max(al, 1.0)
 
-                            if torch.sum(KKT**2) / (uo**2) < self.KKTeps:
+                            if (
+                                self._kkt_scale * torch.sum(KKT**2) / (uo**2)
+                                < self.KKTeps
+                            ):
                                 alpvec = alptmp.clone()
                                 converged[l] = True
                                 break
@@ -676,7 +692,7 @@ class cvksvm:
                     )
                     KKT = zvec / float(nobs) + 2.0 * al * looalp[1:]
                     uo = max(al, 1.0)
-                    KKT_norm = torch.sum(KKT**2) / (uo**2)
+                    KKT_norm = self._kkt_scale * torch.sum(KKT**2) / (uo**2)
 
                     if KKT_norm < self.KKTeps2:
                         # Check convergence
@@ -997,7 +1013,7 @@ class cvksvm:
                 )
                 KKT = zvec / float(nobs) + 2.0 * al * looalp[1:]
                 uo = max(al, 1.0)
-                KKT_norm = torch.sum(KKT**2) / (uo**2)
+                KKT_norm = self._kkt_scale * torch.sum(KKT**2) / (uo**2)
 
                 if KKT_norm < self.KKTeps2:
                     active[nf] = False

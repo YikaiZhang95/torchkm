@@ -30,7 +30,15 @@ All notable changes to TorchKM are documented in this file.
   `bench_gpu_libraries.py` (scikit-learn, ThunderSVM, cuML, Falkon, linear
   baselines), `bench_covtype_rank.py`, `bench_kqr.py` and `bench_dwd.py` with
   R baselines, `bench_solver_quality.py`, and `make_tables.py`.
-- User guide page on the exact-mode operating envelope; `is_exact` documented.
+- `kkt_scaled=True` on the SVM and quantile-regression solvers and estimators:
+  a scale-aware KKT stopping rule (`n * sum(KKT**2) < KKTeps`).
+- User guide pages on the exact-mode operating envelope and on multiclass
+  classification through scikit-learn's one-vs-rest / one-vs-one wrappers
+  (with tests); `is_exact`, `KKTeps` and `tol` documented on the model
+  selection page.
+- `benchmarks/run_campaign.sh` (the full revision campaign with its exact
+  settings) and `benchmarks/make_figures.py` (the paper figures from the
+  archived JSON results).
 
 ### Changed
 - Exact-mode solvers no longer materialise the `n x n` matrix

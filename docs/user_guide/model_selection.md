@@ -97,6 +97,26 @@ clf = TorchKMSVC(kernel="rbf", Cs=Cs, cv=5, device=device, KKTeps=1e-6)
 The cost is a few more solver passes per regularization value, each an
 `O(n^2)` matrix-vector product; the eigendecomposition is not repeated.
 
+The inner step tolerance `tol` (the solver's `eps`) matters as much at weak
+regularization: the smoothed problems are ill-conditioned when `lambda` is
+small (large `C`), the proximal-gradient steps become short before the
+optimum is reached, and the step criterion stops the loop. On a 3,000-sample
+problem `tol=1e-8` with `KKTeps=1e-6` recovered the libsvm optimum to better
+than 1% down to `lambda = 1e-4` at about three times the solver passes; at
+`lambda = 1e-5` no setting tried got closer than 6%. Test accuracy of the
+cross-validated model was the same under every setting. If the solution
+itself matters (objective values, dual coefficients) rather than the
+predictions, use `tol=1e-8, KKTeps=1e-6` and keep the grid's weak end at or
+above `lambda = 1e-4`, that is `C_max` of about `1 / (2 n 1e-4)`.
+
+`kkt_scaled=True` switches to a scale-aware rule that compares
+`n * sum(KKT**2)` with `KKTeps`, so a given tolerance means the same relative
+accuracy at every `n`: with the default `KKTeps=1e-3` each residual entry is
+within about 3% of its natural unit `1/n`. It is available on the SVM and
+quantile-regression solvers (`cvksvm`, `cvkqr`, `cvknyqr`) and the
+corresponding estimators; `benchmarks/bench_solver_quality.py --kkt-scaled`
+measures it against the absolute rule.
+
 ## Notes
 
 - Larger `nC` gives a finer regularization grid but increases computation.
