@@ -48,7 +48,10 @@ and peak GPU memory, as JSON plus a Markdown table written next to it.
 pip install pykeops
 pip install --no-build-isolation git+https://github.com/EigenPro/EigenPro-pytorch.git
 pip install cuml-cu12 --extra-index-url=https://pypi.nvidia.com
-pip install falkon        # wheels: https://falkonml.github.io/falkon/install.html
+# Falkon: not on PyPI; wheels for torch 2.4-2.7 / CUDA 11.8-12.8 keyed by the exact
+# torch and CUDA version, else build from source with nvcc (see the script docstring)
+TAG=$(python -c "import torch; print('torch-%s_cu%s' % (torch.__version__.split('+')[0], torch.version.cuda.replace('.', '')))")
+pip install falkon -f https://falkon.dibris.unige.it/$TAG.html
 python benchmarks/q1_full_kernel.py --data-dir ~/libsvm_data --out revision_results/q1.json
 ```
 

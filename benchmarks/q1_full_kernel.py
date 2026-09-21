@@ -55,7 +55,13 @@ Install on the GPU machine (TorchKM's own environment plus):
   pip install --no-build-isolation git+https://github.com/EigenPro/EigenPro-pytorch.git
       # (its setup.py imports torch, so the build must see the installed torch)
   pip install cuml-cu12 --extra-index-url=https://pypi.nvidia.com
-  pip install falkon    # wheels: https://falkonml.github.io/falkon/install.html
+  # Falkon is not on PyPI: wheels for torch 2.4-2.7 / CUDA 11.8-12.8 on its own
+  # index, keyed by the exact torch and CUDA version; otherwise build from source
+  # (needs nvcc matching torch's CUDA): pip install --no-build-isolation
+  # git+https://github.com/FalkonML/falkon.git
+  TAG=$(python -c "import torch; print('torch-%s_cu%s' % (torch.__version__.split('+')[0],
+                                                         torch.version.cuda.replace('.', '')))")
+  pip install falkon -f https://falkon.dibris.unige.it/$TAG.html
 
 Run (re-running with the same --out resumes; finished cells are skipped):
   python benchmarks/q1_full_kernel.py --data-dir ~/libsvm_data --out results/q1.json
