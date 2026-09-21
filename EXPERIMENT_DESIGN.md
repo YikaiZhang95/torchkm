@@ -31,50 +31,62 @@ campaign can be split across sessions and re-run per step.
 
 ---
 
-## Q1. Compare against the GPU kernel libraries (cuML, Falkon; KeOps, EigenPro)
+## Q1. Compare against the GPU kernel libraries (cuML, Falkon, KeOps, EigenPro)
 
-**Claim to support.** On problems that fit exact mode, TorchKM returns a tuned
-kernel SVM with the same test accuracy as cuML/ThunderSVM/libsvm at a small
-fraction of the tuning time; on the Nyström path it is competitive with Falkon
-at equal centres, and Falkon at 5 to 10× the centres shows what a larger
-budget buys.
+**Claim to support.** With every method on the full kernel (no Nyström
+centres anywhere), TorchKM returns a tuned kernel machine whose test accuracy
+equals the SMO solver's, at a fraction of the tuning time of libraries that
+fit once per (parameter, fold). Its memory cost is the n × n kernel, which
+the other full-kernel solvers pay as well (cuML's kernel cache, Falkon's
+M = n preconditioner), except the matrix-free KeOps solve.
 
-**Experiments.**
+**Experiment (E1, `benchmarks/q1_full_kernel.py`).** One script, one table.
 
-| Id | Suite | Libraries | Repeats | Cap | Command |
-|---|---|---|---|---|---|
-| E1a | exact (ijcnn1-30k, MNIST 3v8, MNIST 4v9, covtype-30k, w7a) | TorchKM exact, logistic regression, LinearSVC | 10 | — | `bench_gpu_libraries.py --suite exact --libraries torchkm linear --kkt-eps 1e-6 --repeats 10` |
-| E1b | exact | cuML SVC, ThunderSVM (float32 inputs, their native precision) | 3 | 2 h | `--libraries cuml_svc thundersvm --repeats 3 --time-cap 7200 --float32-baselines` |
-| E1c | exact | cuML SVC, budget-matched 10-value grid | 3 | — | `--libraries cuml_svc --grid-size 10` |
-| E1d | exact | scikit-learn SVC (CPU reference) | 1 | 2 h | `--libraries sklearn_svc --repeats 1 --time-cap 7200` |
-| E1e | exact | TorchKM at the converged-solution setting (`--kkt-eps 1e-6 --tol 1e-8`), same folds and seeds as E1a | 10 | — | `--libraries torchkm --kkt-eps 1e-6 --tol 1e-8 --repeats 10` |
-| E3b | imbalanced (w8a, ijcnn1 full) | Falkon at M = 2,000 and 10,000 | 3 | 2 h | `--suite imbalanced --libraries falkon --falkon-centers 2000 10000` |
-| E4b | scale (covtype, MNIST8m 4v6) | Falkon at M = 2,000, 10,000, 20,000 | 3 | 4 h | `--suite scale --libraries falkon --falkon-centers 2000 10000 20000 --time-cap 14400` |
+| Element | Setting |
+|---|---|
+| Datasets | a7a, a8a, a9a, w7a, MNIST 3v8, MNIST 4v9, ijcnn1 (30k stratified subsample), covtype (30k subsample, 20k test): the paper's sets at sizes where the full kernel fits one 48 GB GPU |
+| Methods | TorchKM (`TorchKMSVC`, hinge, `is_exact=0`, `KKTeps=1e-6`); cuML `SVC` (hinge, SMO); Falkon (`M = n`, squared loss, preconditioned CG, 20 iterations); KeOps (kernel ridge regression, matrix-free CG on a `LazyTensor`, relative tolerance 1e-6, cap 500 iterations); EigenPro 2 (`eigenpro2.KernelModel`, squared loss, all rows as centres, preconditioned SGD) |
+| Kernel | RBF with one `sigest` bandwidth per repeat, shared by every method |
+| Grid | 50 log-uniform C in [1e-3, 1e3]; λ = 1/(2nC) for the ridge solvers; epochs 1..50 for EigenPro |
+| Selection | 5-fold stratified CV on identical folds, then one fit on the full training set |
+| Precision | float64 for every method |
+| Repeats | 3 seeds (52, 53, 54): folds and bandwidth redrawn; mean ± SE |
+| Timing | CV sweep + final fit + test predictions, CUDA synchronised; library start-up untimed |
+| Memory | NVML process peak; PyTorch allocator peak where the library uses PyTorch |
+| Cap | 2 h per method × dataset × repeat; a capped sweep selects among the values completed and is marked |
+
+Command: `python benchmarks/q1_full_kernel.py --data-dir ~/libsvm_data --out revision_results/q1.json`
+(writes `q1.md` next to the JSON; re-running with the same `--out` resumes).
 
 **Design notes.**
-- cuML runs the identical fold × grid loop (500 fits per repeat). E1c repeats
-  it on a 10-value grid so the table shows both the like-for-like number and
-  what a practitioner would actually pay.
-- Falkon is a squared-loss (KRR) classifier; the table says so, and its λ grid
-  is the same λ = 1/(2nC) because its objective has the same
-  (loss + λ·penalty) form.
-- KeOps: related-work paragraph, no run. It is a kernel-operation engine, not
-  a model-selection library, and TorchKM materialises K by design (it
-  eigendecomposes it). Future work: a KeOps/Falkon-style backend for building
-  the Nyström features.
-- EigenPro: cited. A runner (`_libraries.py`, same signature as `run_falkon`)
-  is a small addition if the reviewers ask for a third GPU KRR solver.
+- cuML runs the identical fold × grid loop: 251 SMO fits per repeat, the
+  like-for-like cost of tuning an SMO library.
+- Falkon at M = n is exact kernel ridge regression: its preconditioner is the
+  Cholesky factor of the full kernel, so its memory grows like n² too. Its
+  loss is squared, not hinge; the table says so.
+- KeOps is a kernel-operation engine; the kernel method run with it is kernel
+  ridge regression solved by conjugate gradient with O(n) memory. KeOps'
+  `LazyTensor.solve` is the same loop without an iteration cap, so the script
+  uses its own 12-line CG with a cap and reports how many solves hit it.
+- EigenPro has no regularization parameter (early stopping regularizes), so
+  its 50-value grid is the epoch count, read from one 50-epoch run per fold.
+  Its LOBPCG preconditioner setup returned NaN eigenpairs in float64, so the
+  script substitutes an exact eigendecomposition of the same 2,000-row
+  subsample kernel; the iteration itself is untouched.
+- ThunderSVM and scikit-learn remain in the exact-suite runs of
+  `bench_gpu_libraries.py` (E1b to E1d in `run_campaign.sh`) as the SMO
+  reference columns; those use the 10-fold protocol of the other experiments.
 
-**Paper.** Table 2 (exact suite): rows = datasets with n, p, class prior;
-columns = linear baseline, scikit-learn, ThunderSVM, cuML, TorchKM; cells =
-accuracy or AUC ± SE, time ± SE, peak memory. Table 3 (Nyström suite): Falkon
-at each M, TorchKM at 2,000 and 5,000 landmarks. Table 1 gains cuML, Falkon
-and KeOps columns and rows for exact CV and for KQR/DWD.
+**Paper.** Table 2: one row per dataset with n, p and class prior; per method
+accuracy ± SE, time ± SE, peak memory. The caption states the loss (hinge or
+squared) and the tuned parameter of each column.
 
-**Expected outcome.** Accuracy equal within 2 SE across the SMO solvers (same
-kernel, same grid); TorchKM time 5 to 50× lower than cuML on the full grid.
-If cuML on the full grid is within 2× of TorchKM on some dataset, that is
-reported as such; the integrated-CV advantage is what is being measured.
+**Expected outcome.** Accuracy equal within 2 SE between TorchKM and cuML
+(same objective, same kernel, same grid) and within about one point for the
+ridge solvers; TorchKM's time well below cuML's 251-fit sweep and below the
+250 CG solves of Falkon and KeOps; TorchKM and Falkon peak memory of order
+8n² bytes times a small constant, KeOps far lower. If any library is within
+2× of TorchKM on time on some dataset, that is reported as such.
 
 ---
 

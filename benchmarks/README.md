@@ -35,6 +35,27 @@ for s in bench_memory_envelope bench_gpu_libraries bench_covtype_rank bench_kqr 
 done
 ```
 
+## Q1 in one script: every method on the full kernel
+
+`q1_full_kernel.py` answers the first reviewer question on its own: TorchKM
+(`is_exact=0`), cuML `SVC`, Falkon with M = n, kernel ridge regression on a
+KeOps `LazyTensor`, and EigenPro 2, all without any Nyström approximation, on
+the same 5 folds, the same 50-value grid, in float64, three seeds per
+dataset. It reports test accuracy, wall-clock time of the whole tuning run
+and peak GPU memory, as JSON plus a Markdown table written next to it.
+
+```bash
+pip install pykeops git+https://github.com/EigenPro/EigenPro-pytorch.git
+pip install cuml-cu12 --extra-index-url=https://pypi.nvidia.com
+pip install falkon        # wheels: https://falkonml.github.io/falkon/install.html
+python benchmarks/q1_full_kernel.py --data-dir ~/libsvm_data --out revision_results/q1.json
+```
+
+A method whose import fails is reported as unavailable and the rest still
+run; re-running with the same `--out` resumes; `--smoke` checks the script on
+a CPU in about a minute. The docstring at the top of the script states the
+protocol and what each method solves.
+
 ## Paper-scale runs
 
 See the reproduction page for the full command list. In short: LIBSVM files in

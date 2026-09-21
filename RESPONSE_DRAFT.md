@@ -10,25 +10,32 @@ every run are on `docs/examples/reproduce_paper_benchmarks.md`.
 
 ## 1. The comparison omits the GPU kernel libraries a reader would weigh TorchKM against
 
-**Ready to run.** `benchmarks/bench_gpu_libraries.py` runs one protocol for
-every library: the same RBF bandwidth, the same 50-value `C` grid, identical
-stratified folds, end-to-end timing (kernel or feature construction, the full
-cross-validation sweep, the final refit), peak memory from the PyTorch
-allocator and from NVML, and accuracy, balanced accuracy and AUC.
+**Ready to run.** `benchmarks/q1_full_kernel.py` runs one protocol for
+TorchKM, cuML, Falkon, KeOps and EigenPro with every method on the full
+kernel (no Nyström centres anywhere): the same RBF bandwidth, the same
+50-value grid, identical stratified 5-fold splits, float64 throughout,
+end-to-end timing of the cross-validation sweep plus the final fit and the
+test predictions, peak GPU memory from NVML, and test accuracy. Three seeds
+per dataset give standard errors. Datasets: the paper's a7a, a8a, a9a, w7a,
+MNIST 3v8 and 4v9, ijcnn1 and covtype (30k subsamples), the sizes at which
+every full-kernel method fits one 48 GB GPU.
 
-- **cuML `SVC`** on the exact path (the direct GPU SMO competitor), tuned by
-  the same fold loop; a per-cell time cap marks sweeps that do not finish.
-- **Falkon** on the Nyström path at M = 2,000 centres (matched to TorchKM's
-  landmarks) and at M = 10,000 and 20,000 to show accuracy at a larger
-  budget. Falkon minimises a squared loss; the text will say so.
-- **ThunderSVM 0.3.4** and **scikit-learn** stay as before.
-- **KeOps** goes into related work: it is a kernel-operation engine, not a
-  model-selection library, and TorchKM materialises K by design because it
-  eigendecomposes it. A KeOps or Falkon-style backend for building Nyström
-  features is named as future work. **EigenPro** is cited; a runner is a
-  small addition if the reviewers want a third GPU KRR solver.
-- Table 1 gains columns for cuML, Falkon and KeOps and rows for exact CV and
-  for the losses beyond hinge (KQR, DWD, logistic).
+- **cuML `SVC`** is the direct competitor: the same hinge objective, solved
+  by SMO, tuned by the same fold loop (251 fits per repeat).
+- **Falkon** with M = n centres is exact kernel ridge regression
+  (preconditioned conjugate gradient); its loss is squared, which the table
+  states.
+- **KeOps** is a kernel-operation engine rather than a model-selection
+  library; the kernel method run with it is kernel ridge regression solved
+  matrix-free by conjugate gradient on a `LazyTensor` kernel, with O(n)
+  memory. The text says what KeOps is and what it is not.
+- **EigenPro 2** (all training rows as centres, preconditioned SGD) has no
+  regularization parameter; its 50-value grid is the number of epochs,
+  chosen on the same folds.
+- **ThunderSVM** and **scikit-learn** stay as SMO references in the
+  exact-suite runs of `bench_gpu_libraries.py`.
+- Table 1 gains columns for cuML, Falkon, KeOps and EigenPro and rows for
+  exact CV and for the losses beyond hinge (KQR, DWD, logistic).
 
 ## 2. The benchmark suite is thinner than it appears
 
