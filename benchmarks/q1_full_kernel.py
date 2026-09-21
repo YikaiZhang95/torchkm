@@ -617,6 +617,7 @@ def main() -> None:
         "--smoke", action="store_true", help="tiny synthetic CPU-sized check"
     )
     args = ap.parse_args()
+    sys.stdout.reconfigure(line_buffering=True)  # progress lines reach the log at once
 
     if args.smoke:
         args.datasets, args.folds, args.grid_size, args.repeats = ["synthetic"], 3, 4, 1
