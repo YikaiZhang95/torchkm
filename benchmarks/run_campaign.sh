@@ -123,8 +123,12 @@ run E7 dwd.json $PY $B/bench_dwd.py --data-dir "$DATA" $KKT \
 
 # ---------------------------------------------------------------------------
 # E9 Table 2 with accuracy, AUC and memory (Q5); E10 solver quality at fixed lambda.
+# E9: TorchKM (+ ThunderSVM) at 20 repeats; the CPU scikit-learn column is E9b on the
+# two small cells only (the paper measured 4 h per fit at n=10k, p=1000).
 run E9 table2.json $PY $B/table2_simulation.py --repeats 20 --matched-kernel \
-    --max-iter 100000 $THUNDER
+    --max-iter 100000 --skip-sklearn $THUNDER
+run E9b table2_sklearn.json $PY $B/table2_simulation.py --repeats 3 --matched-kernel \
+    --max-iter 100000 --skip-thunder --sizes 10000,10 10000,100
 SQ="--sizes 10000,10 10000,100 10000,1000 20000,100 --lambdas 1e-1 1e-2 1e-3 1e-4 1e-5 --repeats 3"
 run E10a solver_quality_default.json $PY $B/bench_solver_quality.py $SQ $THUNDER
 run E10b solver_quality_kkt1e-6.json $PY $B/bench_solver_quality.py $SQ \
@@ -150,7 +154,7 @@ fi
 # Tables and figures from whatever finished.
 for f in exact_torchkm exact_gpu_smo exact_cuml_grid10 exact_sklearn exact_torchkm_tight \
          scaling_torchkm scaling_baselines imbalanced_torchkm imbalanced_falkon scale_torchkm \
-         scale_falkon scale_linear covtype_rank kqr kqr_large dwd table2 solver_quality_default \
+         scale_falkon scale_linear covtype_rank kqr kqr_large dwd table2 table2_sklearn solver_quality_default \
          solver_quality_kkt1e-6 solver_quality_scaled solver_quality_tol1e-8 envelope; do
     [[ -s "$OUT/$f.json" ]] && $PY $B/make_tables.py "$OUT/$f.json" > "$OUT/$f.md"
 done

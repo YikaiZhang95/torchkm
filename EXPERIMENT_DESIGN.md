@@ -322,10 +322,15 @@ replaced by one sentence and a pointer.
 ## Running the campaign
 
 ```bash
-DATA=~/libsvm THUNDERSVM=~/thundersvm/python bash benchmarks/run_campaign.sh
-# or a subset:
-ONLY="E8 E1a E5" DATA=~/libsvm bash benchmarks/run_campaign.sh
+DATA=~/libsvm THUNDERSVM=~/thundersvm/python bash benchmarks/run_gpu_first.sh   # priority tiers
+DATA=~/libsvm bash benchmarks/run_campaign.sh                                    # dependency order
+ONLY="E8 E1a E5" DATA=~/libsvm bash benchmarks/run_campaign.sh                   # a subset
 ```
+
+`run_gpu_first.sh` runs tier 1 (envelope, solver quality, exact suite, covtype
+curve: hours), then tier 2 (scaling, imbalanced, scale, KQR, DWD, Table 2: up
+to a day), then tier 3 (the cuML, ThunderSVM, scikit-learn, Falkon and linear
+sweeps: days). `TIERS="1"` stops after the first.
 
 Outputs land in `benchmarks/results/<UTC timestamp>/` with one JSON and one
 log per step, the R CSV rows, Markdown tables from `make_tables.py`, and the
