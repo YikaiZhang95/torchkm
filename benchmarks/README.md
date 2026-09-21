@@ -52,6 +52,7 @@ pip install cuml-cu12 --extra-index-url=https://pypi.nvidia.com
 # torch and CUDA version, else build from source with nvcc (see the script docstring)
 TAG=$(python -c "import torch; print('torch-%s_cu%s' % (torch.__version__.split('+')[0], torch.version.cuda.replace('.', '')))")
 pip install falkon -f https://falkon.dibris.unige.it/$TAG.html
+# add --trusted-host falkon.dibris.unige.it if pip cannot verify that server's certificate
 python benchmarks/q1_full_kernel.py --data-dir ~/libsvm_data --out revision_results/q1.json
 ```
 
