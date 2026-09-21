@@ -14,7 +14,11 @@ cd "$DATA"
 
 fetch() {  # fetch <subdir> <file>
     local url="$BASE/$1/$2"
-    if [[ -s "$2" ]]; then echo "have $2"; return; fi
+    local plain="${2%.bz2}"; plain="${plain%.xz}"
+    # skip if the file is present in any form: as named, decompressed, or compressed
+    for f in "$2" "$plain" "$plain.bz2" "$plain.xz"; do
+        if [[ -s "$f" ]]; then echo "have $f"; return; fi
+    done
     echo "get  $2"
     if command -v wget >/dev/null; then wget -q -c -O "$2.part" "$url" && mv "$2.part" "$2"
     else curl -sS -L -C - -o "$2.part" "$url" && mv "$2.part" "$2"; fi
