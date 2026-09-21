@@ -52,7 +52,8 @@ Methods
 
 Install on the GPU machine (TorchKM's own environment plus):
   pip install pykeops
-  pip install git+https://github.com/EigenPro/EigenPro-pytorch.git
+  pip install --no-build-isolation git+https://github.com/EigenPro/EigenPro-pytorch.git
+      # (its setup.py imports torch, so the build must see the installed torch)
   pip install cuml-cu12 --extra-index-url=https://pypi.nvidia.com
   pip install falkon    # wheels: https://falkonml.github.io/falkon/install.html
 

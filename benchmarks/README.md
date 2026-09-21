@@ -45,7 +45,8 @@ dataset. It reports test accuracy, wall-clock time of the whole tuning run
 and peak GPU memory, as JSON plus a Markdown table written next to it.
 
 ```bash
-pip install pykeops git+https://github.com/EigenPro/EigenPro-pytorch.git
+pip install pykeops
+pip install --no-build-isolation git+https://github.com/EigenPro/EigenPro-pytorch.git
 pip install cuml-cu12 --extra-index-url=https://pypi.nvidia.com
 pip install falkon        # wheels: https://falkonml.github.io/falkon/install.html
 python benchmarks/q1_full_kernel.py --data-dir ~/libsvm_data --out revision_results/q1.json
