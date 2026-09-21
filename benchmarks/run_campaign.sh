@@ -30,6 +30,7 @@ ONLY="${ONLY:-}"
 THUNDER=""
 if [[ -n "${THUNDERSVM:-}" ]]; then THUNDER="--thundersvm-path ${THUNDERSVM}"; fi
 B=benchmarks
+PY="${PYTHON:-python}"   # the notebook sets PYTHON=sys.executable so the kernel env is used
 mkdir -p "$OUT"
 
 run() {  # run <id> <out.json> <command...>
@@ -46,91 +47,91 @@ run() {  # run <id> <out.json> <command...>
     echo "commit: $(git rev-parse HEAD)"; echo "date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "device: $DEVICE"; echo "kkt: $KKT"; echo
     echo '```'; nvidia-smi 2>/dev/null || echo "no nvidia-smi"; echo '```'
-    echo '```'; python -m pip freeze; echo '```'
+    echo '```'; $PY -m pip freeze; echo '```'
 } > "$OUT/README.md"
 
 # ---------------------------------------------------------------------------
 # E8 memory envelope (Q4). Paper protocol (50 C values, 10 folds); stops at OOM.
-run E8 envelope.json python $B/bench_memory_envelope.py $KKT --repeats 3 \
+run E8 envelope.json $PY $B/bench_memory_envelope.py $KKT --repeats 3 \
     --sizes 5000 10000 15000 20000 25000 30000 35000 40000 45000 50000 \
     --nystrom-sizes 10000 50000 100000 250000 500000 1000000 --p 100
-run E8b envelope_all_estimators.json python $B/bench_memory_envelope.py $KKT \
+run E8b envelope_all_estimators.json $PY $B/bench_memory_envelope.py $KKT \
     --estimators svm dwd logit kqr --sizes 5000 10000 20000 --skip-nystrom \
     --grid-size 10 --folds 5
 
 # ---------------------------------------------------------------------------
 # E1 exact-range suite (Q1, Q2b, Q2e, item 5): kernel-natural problems, n <= 30k.
-run E1a exact_torchkm.json python $B/bench_gpu_libraries.py --data-dir "$DATA" \
+run E1a exact_torchkm.json $PY $B/bench_gpu_libraries.py --data-dir "$DATA" \
     --suite exact --libraries torchkm linear $KKT --repeats 10
-run E1b exact_gpu_smo.json python $B/bench_gpu_libraries.py --data-dir "$DATA" \
+run E1b exact_gpu_smo.json $PY $B/bench_gpu_libraries.py --data-dir "$DATA" \
     --suite exact --libraries cuml_svc thundersvm --repeats 3 --time-cap 7200 \
     --float32-baselines $THUNDER
-run E1c exact_cuml_grid10.json python $B/bench_gpu_libraries.py --data-dir "$DATA" \
+run E1c exact_cuml_grid10.json $PY $B/bench_gpu_libraries.py --data-dir "$DATA" \
     --suite exact --libraries cuml_svc --repeats 3 --grid-size 10 --float32-baselines
-run E1d exact_sklearn.json python $B/bench_gpu_libraries.py --data-dir "$DATA" \
+run E1d exact_sklearn.json $PY $B/bench_gpu_libraries.py --data-dir "$DATA" \
     --suite exact --libraries sklearn_svc --repeats 1 --time-cap 7200
 # E1e: TorchKM at the converged-solution setting; same folds and seeds as E1a,
 # so the table can show accuracy (expected identical) and the time cost.
-run E1e exact_torchkm_tight.json python $B/bench_gpu_libraries.py --data-dir "$DATA" \
+run E1e exact_torchkm_tight.json $PY $B/bench_gpu_libraries.py --data-dir "$DATA" \
     --suite exact --libraries torchkm $TIGHT --repeats 10
 
 # ---------------------------------------------------------------------------
 # E2 Adult scaling study (Q2a, Q4): a1a..a9a, exact while it fits, Nystrom always.
-run E2a scaling_torchkm.json python $B/bench_gpu_libraries.py --data-dir "$DATA" \
+run E2a scaling_torchkm.json $PY $B/bench_gpu_libraries.py --data-dir "$DATA" \
     --suite scaling --libraries torchkm torchkm_nystrom linear $KKT --repeats 10
-run E2b scaling_baselines.json python $B/bench_gpu_libraries.py --data-dir "$DATA" \
+run E2b scaling_baselines.json $PY $B/bench_gpu_libraries.py --data-dir "$DATA" \
     --suite scaling --libraries sklearn_svc cuml_svc thundersvm --repeats 3 \
     --time-cap 7200 --float32-baselines $THUNDER
 
 # ---------------------------------------------------------------------------
 # E3 imbalanced sets (Q2c): w8a, ijcnn1 full; AUC is the headline.
-run E3a imbalanced_torchkm.json python $B/bench_gpu_libraries.py --data-dir "$DATA" \
+run E3a imbalanced_torchkm.json $PY $B/bench_gpu_libraries.py --data-dir "$DATA" \
     --suite imbalanced --libraries torchkm_nystrom linear $KKT --repeats 10 \
     --landmarks 2000 5000
-run E3b imbalanced_falkon.json python $B/bench_gpu_libraries.py --data-dir "$DATA" \
+run E3b imbalanced_falkon.json $PY $B/bench_gpu_libraries.py --data-dir "$DATA" \
     --suite imbalanced --libraries falkon --repeats 3 --falkon-centers 2000 10000 \
     --time-cap 7200
 
 # ---------------------------------------------------------------------------
 # E4 scale tests (Q2d): covtype 581k, MNIST8m 4v6 1.27M, Nystrom path.
-run E4a scale_torchkm.json python $B/bench_gpu_libraries.py --data-dir "$DATA" \
+run E4a scale_torchkm.json $PY $B/bench_gpu_libraries.py --data-dir "$DATA" \
     --suite scale --libraries torchkm_nystrom $KKT --repeats 5 --landmarks 2000 5000
-run E4b scale_falkon.json python $B/bench_gpu_libraries.py --data-dir "$DATA" \
+run E4b scale_falkon.json $PY $B/bench_gpu_libraries.py --data-dir "$DATA" \
     --suite scale --libraries falkon --repeats 3 --falkon-centers 2000 10000 20000 \
     --time-cap 14400
-run E4c scale_linear.json python $B/bench_gpu_libraries.py --data-dir "$DATA" \
+run E4c scale_linear.json $PY $B/bench_gpu_libraries.py --data-dir "$DATA" \
     --suite scale --libraries linear --repeats 3 --time-cap 7200
 
 # ---------------------------------------------------------------------------
 # E5 covtype budget curve (Q2f, item 3).
-run E5 covtype_rank.json python $B/bench_covtype_rank.py --data-dir "$DATA" $KKT \
+run E5 covtype_rank.json $PY $B/bench_covtype_rank.py --data-dir "$DATA" $KKT \
     --landmarks 2000 5000 10000 --ranks 30 300 1000 full --with-falkon --repeats 3
 
 # ---------------------------------------------------------------------------
 # E6 kernel quantile regression (Q3): exports splits for the R side.
-run E6 kqr.json python $B/bench_kqr.py --data-dir "$DATA" $KKT \
+run E6 kqr.json $PY $B/bench_kqr.py --data-dir "$DATA" $KKT \
     --datasets synthetic cadata abalone cpusmall space_ga --taus 0.1 0.5 0.9 \
     --repeats 5 --synthetic-n 10000 --export-splits "$OUT/kqr_splits"
-run E6b kqr_large.json python $B/bench_kqr.py --data-dir "$DATA" $KKT \
+run E6b kqr_large.json $PY $B/bench_kqr.py --data-dir "$DATA" $KKT \
     --datasets YearPredictionMSD --methods torchkm_kqr_nystrom linear_qr \
     --taus 0.1 0.5 0.9 --repeats 3 --time-cap 7200
 
 # ---------------------------------------------------------------------------
 # E7 kernel DWD (Q3): exports splits for kerndwd.
-run E7 dwd.json python $B/bench_dwd.py --data-dir "$DATA" $KKT \
+run E7 dwd.json $PY $B/bench_dwd.py --data-dir "$DATA" $KKT \
     --datasets gisette ijcnn1_30k mnist_3v8 --repeats 5 --export-splits "$OUT/dwd_splits"
 
 # ---------------------------------------------------------------------------
 # E9 Table 2 with accuracy, AUC and memory (Q5); E10 solver quality at fixed lambda.
-run E9 table2.json python $B/table2_simulation.py --repeats 20 --matched-kernel \
+run E9 table2.json $PY $B/table2_simulation.py --repeats 20 --matched-kernel \
     --max-iter 100000 $THUNDER
 SQ="--sizes 10000,10 10000,100 10000,1000 20000,100 --lambdas 1e-1 1e-2 1e-3 1e-4 1e-5 --repeats 3"
-run E10a solver_quality_default.json python $B/bench_solver_quality.py $SQ $THUNDER
-run E10b solver_quality_kkt1e-6.json python $B/bench_solver_quality.py $SQ \
+run E10a solver_quality_default.json $PY $B/bench_solver_quality.py $SQ $THUNDER
+run E10b solver_quality_kkt1e-6.json $PY $B/bench_solver_quality.py $SQ \
     --kkt-eps 1e-6 --solvers torchkm
-run E10c solver_quality_scaled.json python $B/bench_solver_quality.py $SQ \
+run E10c solver_quality_scaled.json $PY $B/bench_solver_quality.py $SQ \
     --kkt-scaled --solvers torchkm
-run E10d solver_quality_tol1e-8.json python $B/bench_solver_quality.py $SQ \
+run E10d solver_quality_tol1e-8.json $PY $B/bench_solver_quality.py $SQ \
     --kkt-eps 1e-6 --tol 1e-8 --solvers torchkm
 
 # ---------------------------------------------------------------------------
@@ -151,9 +152,9 @@ for f in exact_torchkm exact_gpu_smo exact_cuml_grid10 exact_sklearn exact_torch
          scaling_torchkm scaling_baselines imbalanced_torchkm imbalanced_falkon scale_torchkm \
          scale_falkon scale_linear covtype_rank kqr kqr_large dwd table2 solver_quality_default \
          solver_quality_kkt1e-6 solver_quality_scaled solver_quality_tol1e-8 envelope; do
-    [[ -s "$OUT/$f.json" ]] && python $B/make_tables.py "$OUT/$f.json" > "$OUT/$f.md"
+    [[ -s "$OUT/$f.json" ]] && $PY $B/make_tables.py "$OUT/$f.json" > "$OUT/$f.md"
 done
-[[ -s "$OUT/kqr_r.csv" ]] && python $B/make_tables.py "$OUT/kqr.json" --r-csv "$OUT/kqr_r.csv" > "$OUT/kqr_with_r.md"
-[[ -s "$OUT/dwd_r.csv" ]] && python $B/make_tables.py "$OUT/dwd.json" --r-csv "$OUT/dwd_r.csv" > "$OUT/dwd_with_r.md"
-python $B/make_figures.py --results "$OUT" --out "$OUT/figures" || true
+[[ -s "$OUT/kqr_r.csv" ]] && $PY $B/make_tables.py "$OUT/kqr.json" --r-csv "$OUT/kqr_r.csv" > "$OUT/kqr_with_r.md"
+[[ -s "$OUT/dwd_r.csv" ]] && $PY $B/make_tables.py "$OUT/dwd.json" --r-csv "$OUT/dwd_r.csv" > "$OUT/dwd_with_r.md"
+$PY $B/make_figures.py --results "$OUT" --out "$OUT/figures" || true
 echo "campaign finished: $OUT"
