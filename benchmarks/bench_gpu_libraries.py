@@ -74,6 +74,7 @@ from _common import (
     make_folds,
     protocol_dict,
     smoke_settings,
+    stratified_subsample,
     synthetic_dataset,
     warmup,
 )
@@ -181,6 +182,12 @@ def main() -> None:
         "--force-exact", action="store_true", help="ignore the memory-envelope check"
     )
     ap.add_argument("--synthetic-n", type=int, default=300, help="--smoke dataset size")
+    ap.add_argument(
+        "--max-train",
+        type=int,
+        default=None,
+        help="stratified-subsample every training set larger than this (e.g. 20000 to stay at the paper's exact-mode sizes)",
+    )
     args = smoke_settings(ap.parse_args())
 
     if args.thundersvm_path:
@@ -234,6 +241,12 @@ def main() -> None:
             data = synthetic_dataset(args.synthetic_n, 10, args.seed)
         else:
             data = load_dataset(ds, args.data_dir, seed=args.seed)
+        if args.max_train and data["n_train"] > args.max_train:
+            data["Xtr"], data["ytr"] = stratified_subsample(
+                data["Xtr"], data["ytr"], args.max_train, args.seed
+            )
+            data["n_train"] = int(data["Xtr"].shape[0])
+            data["pos_frac"] = float(np.mean(data["ytr"] > 0))
         info = dict(
             dataset=ds,
             group=DATASETS.get(ds, {}).get("group", "synthetic"),
@@ -241,6 +254,7 @@ def main() -> None:
             n_test=data["n_test"],
             p=data["p"],
             train_pos_frac=data["pos_frac"],
+            max_train=args.max_train,
         )
         print(
             f"\n== {ds}: n_train={data['n_train']:,} n_test={data['n_test']:,} "
