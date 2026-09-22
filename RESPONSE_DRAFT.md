@@ -18,7 +18,9 @@ end-to-end timing of the cross-validation sweep plus the final fit and the
 test predictions, peak GPU memory from NVML, and test accuracy. Three seeds
 per dataset give standard errors. Datasets: the paper's a7a, a8a, a9a, w7a,
 MNIST 3v8 and 4v9, ijcnn1 and covtype (30k subsamples), the sizes at which
-every full-kernel method fits one 48 GB GPU.
+every full-kernel method fits one 48 GB GPU, plus Table 2's six simulation
+cells (n = 10,000 and 20,000; p = 10, 100, 1000) so that the simulation is
+compared across the same five libraries.
 
 - **cuML `SVC`** is the direct competitor: the same hinge objective, solved
   by SMO, tuned by the same fold loop (251 fits per repeat).

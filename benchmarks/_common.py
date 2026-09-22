@@ -709,19 +709,24 @@ def load_dataset(
 
 
 def synthetic_dataset(
-    n: int, p: int, seed: int, *, name: str = "synthetic"
+    n: int, p: int, seed: int, *, name: str = "synthetic", n_test: Optional[int] = None
 ) -> Dict[str, Any]:
     """Gaussian-mixture classification data from ``torchkm.data_gen`` (paper Table 2).
 
-    The mixture has fast kernel-spectrum decay, which favours spectral and
-    Nyström methods; it is a mechanism illustration, not a neutral benchmark.
+    ``seed`` draws the mixture centres (5 per class, shift ``mu=2``, noise
+    ``ro=3``) and the training rows; the test rows (``n_test``, default
+    ``max(n // 5, 200)``) are then drawn from the *same* centres so that test
+    accuracy measures generalisation within one mixture. The mixture has fast
+    kernel-spectrum decay, which favours spectral and Nyström methods; it is a
+    mechanism illustration, not a neutral benchmark.
     """
     from torchkm import data_gen, standardize
 
     nm, mu, ro = 5, 2.0, 3.0
-    Xtr, ytr, _ = data_gen(n, nm, p, p // 2, p // 2, mu, ro, seed)
+    Xtr, ytr, means = data_gen(n, nm, p, p // 2, p // 2, mu, ro, seed)
+    # means given: no reseeding, the generator continues past the training rows
     Xte, yte, _ = data_gen(
-        max(n // 5, 200), nm, p, p // 2, p // 2, mu, ro, seed + 10_000
+        n_test or max(n // 5, 200), nm, p, p // 2, p // 2, mu, ro, means=means
     )
     Xtr, Xte = standardize(Xtr).numpy().astype(np.float64), standardize(
         Xte

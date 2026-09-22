@@ -34,6 +34,16 @@ Protocol (identical for every method)
               per-process figures) and the PyTorch allocator peak where the
               library allocates through PyTorch
 
+Datasets
+  real        a7a, a8a, a9a, w7a, MNIST 3v8, MNIST 4v9, ijcnn1 (30k stratified
+              subsample), covtype (30k subsample, 20k test): the paper's sets at
+              sizes where the full kernel fits one 48 GB GPU (--data-dir)
+  simulation  Table 2's Gaussian mixture (torchkm.data_gen: 5 centres per class,
+              shift 2, noise 3, standardised) at Table 2's cells, named
+              sim_<n>x<p>: n = 10,000 and 20,000 rows, p = 10, 100, 1000. The
+              data are redrawn for every repeat (seed 52 + repeat); the test set
+              is n/10 rows from the same mixture. Any sim_<n>x<p> works
+
 Methods
   torchkm     TorchKMSVC, hinge loss: one eigendecomposition of the kernel,
               the whole lambda path and the exact CV formula; is_exact=0 (the
@@ -77,7 +87,8 @@ Install on the GPU machine (TorchKM's own environment plus):
 
 Run (re-running with the same --out resumes; finished cells are skipped):
   python benchmarks/q1_full_kernel.py --data-dir ~/libsvm_data --out results/q1.json
-  python benchmarks/q1_full_kernel.py --smoke    # CPU check on synthetic data
+  python benchmarks/q1_full_kernel.py --datasets sim_10000x100 --repeats 1   # one cell
+  python benchmarks/q1_full_kernel.py --smoke    # CPU check on a tiny simulation
 """
 
 from __future__ import annotations
@@ -116,8 +127,23 @@ DATASETS = [
     "mnist_4v9",
     "ijcnn1_30k",
     "covtype_30k",
+    # Table 2's simulation cells (Gaussian mixture), redrawn per repeat
+    "sim_10000x10",
+    "sim_10000x100",
+    "sim_10000x1000",
+    "sim_20000x10",
+    "sim_20000x100",
+    "sim_20000x1000",
 ]
 METHODS = ["torchkm", "cuml", "falkon", "keops", "eigenpro"]
+
+
+def parse_sim(name: str) -> Optional[tuple]:
+    """``sim_<n>x<p>`` -> (n, p); None for a real dataset."""
+    if not name.startswith("sim_"):
+        return None
+    n, p = name[4:].split("x")
+    return int(n), int(p)
 
 
 # ---------------------------------------------------------------------------
@@ -657,7 +683,12 @@ def main() -> None:
     sys.stdout.reconfigure(line_buffering=True)  # progress lines reach the log at once
 
     if args.smoke:
-        args.datasets, args.folds, args.grid_size, args.repeats = ["synthetic"], 3, 4, 1
+        args.datasets, args.folds, args.grid_size, args.repeats = (
+            ["sim_600x10"],
+            3,
+            4,
+            1,
+        )
         args.keops_maxiter, args.time_cap = 50, 0
     dev = (
         "cuda"
@@ -703,16 +734,19 @@ def main() -> None:
     )
 
     for ds in args.datasets:
-        if ds == "synthetic":
-            data = synthetic_dataset(600, 10, args.seed)
-        else:
-            data = load_dataset(ds, args.data_dir, seed=args.seed)
-        print(
-            f"\n== {ds}: n_train={data['n_train']:,} n_test={data['n_test']:,} "
-            f"p={data['p']} positive fraction={data['pos_frac']:.3f}"
-        )
+        sim = parse_sim(ds)
+        data = None if sim else load_dataset(ds, args.data_dir, seed=args.seed)
         for r in range(args.repeats):
             seed = args.seed + r
+            if sim:  # Table 2 protocol: fresh data for every repeat
+                data = synthetic_dataset(
+                    sim[0], sim[1], seed, name=ds, n_test=sim[0] // 10
+                )
+            if r == 0:
+                print(
+                    f"\n== {ds}: n_train={data['n_train']:,} n_test={data['n_test']:,} "
+                    f"p={data['p']} positive fraction={data['pos_frac']:.3f}"
+                )
             torch.manual_seed(seed)
             sig = float(sigest(torch.from_numpy(data["Xtr"])))
             foldid = make_folds(data["ytr"], args.folds, seed)

@@ -42,7 +42,10 @@ done
 KeOps `LazyTensor`, and EigenPro 2, all without any Nyström approximation, on
 the same 5 folds, the same 50 values of λ from 1e-2 down to 2e-5 (C = 1/(2nλ)
 for the SVM solvers), in float64, three seeds per dataset. It reports test accuracy, wall-clock time of the whole tuning run
-and peak GPU memory, as JSON plus a Markdown table written next to it.
+and peak GPU memory, as JSON plus a Markdown table written next to it. The
+default dataset list is the paper's real sets that fit the full kernel plus
+Table 2's six simulation cells (`sim_<n>x<p>`, Gaussian mixture redrawn per
+repeat, test set n/10 from the same mixture).
 
 ```bash
 pip install pykeops
