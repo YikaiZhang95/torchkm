@@ -14,7 +14,7 @@ script.
 | Hardware | NVIDIA L40S 48 GB, AMD EPYC 9334, 768 GB RAM; the paper's machine | Numbers comparable with the submitted tables |
 | Software | `benchmarks/environment/environment.yml`; versions recorded in every JSON | Reproducibility |
 | Kernel | RBF, one bandwidth per repeat from `sigest` on the training features; TorchKM uses exp(−2σd²), the libsvm-style baselines `gamma = 2σ`, Falkon the equivalent Gaussian width | Every library sees the same kernel |
-| Regularization grid | 50 log-uniform C in [1e−3, 1e3]; λ = 1/(2nC) for TorchKM and Falkon | The paper's grid |
+| Regularization grid | 50 log-uniform C in [1e−3, 1e3]; λ = 1/(2nC) for TorchKM and Falkon | The paper's grid; Q1 uses a fixed λ grid instead (see Q1) |
 | Model selection | 10-fold stratified CV, folds seeded per repeat and identical across libraries (`_common.make_folds`) | Paired comparisons |
 | Repeats | 10 for TorchKM and the linear baselines; 3 for libraries whose grid sweep costs hours; 5 for KQR and DWD; 3 for sweeps. Seeds 52, 53, … | Standard errors without weeks of GPU time |
 | Timing | End to end: kernel/feature construction + full CV sweep + final refit; CUDA warmed up and synchronised | The user's cost of a tuned model |
@@ -47,7 +47,7 @@ M = n preconditioner), except the matrix-free KeOps solve.
 | Datasets | a7a, a8a, a9a, w7a, MNIST 3v8, MNIST 4v9, ijcnn1 (30k stratified subsample), covtype (30k subsample, 20k test): the paper's sets at sizes where the full kernel fits one 48 GB GPU |
 | Methods | TorchKM (`TorchKMSVC`, hinge, `is_exact=0`, `KKTeps=1e-6`); cuML `SVC` (hinge, SMO); Falkon (`M = n`, squared loss, preconditioned CG, 20 iterations); KeOps (kernel ridge regression, matrix-free CG on a `LazyTensor`, relative tolerance 1e-6, cap 500 iterations); EigenPro 2 (`eigenpro2.KernelModel`, squared loss, all rows as centres, preconditioned SGD) |
 | Kernel | RBF with one `sigest` bandwidth per repeat, shared by every method |
-| Grid | 50 log-uniform C in [1e-3, 1e3]; λ = 1/(2nC) for the ridge solvers; epochs 1..50 for EigenPro |
+| Grid | 50 log-uniform λ in [1e-5, 1e-1], identical for every dataset; TorchKM and cuML receive C = 1/(2nλ) with n the rows of the fit; epochs 1..50 for EigenPro |
 | Selection | 5-fold stratified CV on identical folds, then one fit on the full training set |
 | Precision | float64 for every method |
 | Repeats | 3 seeds (52, 53, 54): folds and bandwidth redrawn; mean ± SE |

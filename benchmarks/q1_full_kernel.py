@@ -10,11 +10,12 @@ Protocol (identical for every method)
   kernel      RBF exp(-2 sig d^2); one bandwidth per repeat from sigest on the
               training features, shared by every method (gamma = 2 sig for
               cuML/KeOps, bandwidth 1/(2 sqrt(sig)) for Falkon/EigenPro)
-  grid        50 log-uniform C in [1e-3, 1e3]. The ridge solvers use
-              lambda = 1/(2 n C), n = rows of the fit, the mapping between the
-              libsvm objective C * sum(loss) + ||w||^2/2 and TorchKM's
-              mean(loss) + lambda ||f||^2 / 2. EigenPro has no lambda: its
-              50-value grid is the number of epochs, 1..50 (early stopping)
+  grid        50 log-uniform lambda in [1e-5, 1e-1], the same for every dataset
+              (--lam-max, --lam-min). Every method minimises mean(loss) +
+              lambda ||f||^2 / 2; the SVM solvers (TorchKM, cuML) are given
+              C = 1/(2 n lambda), n = rows of the fit, which is the libsvm form
+              C * sum(loss) + ||w||^2 / 2 of the same problem. EigenPro has no
+              lambda: its 50-value grid is the number of epochs, 1..50
   selection   5-fold stratified CV on the same folds for every method, then
               one fit on the full training set at the selected value
   precision   float64 everywhere
@@ -167,7 +168,7 @@ def result(pm: PeakMemory, dt: float, pred, yte, **fields) -> Dict[str, Any]:
     )
 
 
-def sweep(fit_predict, data, foldid, grid, dev, args, params, label="C"):
+def sweep(fit_predict, data, foldid, grid, dev, args, params, label="lambda"):
     """CV sweep, fit at the selected value, test predictions: one timed region."""
     Xtr, ytr, Xte, yte = data["Xtr"], data["ytr"], data["Xte"], data["yte"]
     w = warm_rows(ytr)
@@ -203,9 +204,13 @@ def sweep(fit_predict, data, foldid, grid, dev, args, params, label="C"):
 # ---------------------------------------------------------------------------
 
 
-def run_torchkm(data, sig, Cs, foldid, dev, args, seed):
+def run_torchkm(data, sig, lams, foldid, dev, args, seed):
     from torchkm.estimators import TorchKMSVC
 
+    # The estimator takes C and forms lambda = 1/(2 n C) itself, n = training
+    # rows; its path runs from small to large lambda, so hand it that order.
+    n = data["Xtr"].shape[0]
+    Cs = 1.0 / (2.0 * n * np.sort(lams))
     clf = TorchKMSVC(
         kernel="rbf",
         rbf_sigma=sig,
@@ -235,12 +240,12 @@ def run_torchkm(data, sig, Cs, foldid, dev, args, seed):
         dt,
         pred,
         data["yte"],
-        selected=float(clf.best_C_),
-        selected_label="C",
+        selected=float(1.0 / (2.0 * n * clf.best_C_)),
+        selected_label="lambda",
         cv_accuracy=1.0 - float(clf.cv_mis_[clf.best_ind_]),
-        cv_curve=(1.0 - np.asarray(clf.cv_mis_, dtype=float)).tolist(),
-        grid_completed=len(Cs),
-        grid_size=len(Cs),
+        cv_curve=(1.0 - np.asarray(clf.cv_mis_, dtype=float))[::-1].tolist(),
+        grid_completed=len(lams),
+        grid_size=len(lams),
         converged_frac=None if conv is None else float(np.mean(conv)),
         params=dict(
             loss="hinge",
@@ -249,20 +254,21 @@ def run_torchkm(data, sig, Cs, foldid, dev, args, seed):
             tol=args.tol,
             max_iter=args.max_iter,
             KKTeps=args.kkt_eps,
+            C="1/(2 n lambda), n = training rows",
             dtype="float64",
         ),
     )
 
 
-def run_cuml(data, sig, Cs, foldid, dev, args, seed):
+def run_cuml(data, sig, lams, foldid, dev, args, seed):
     from cuml.svm import SVC
 
     gamma = 2.0 * sig
 
-    def fit_predict(C, Xa, ya, Xb):
+    def fit_predict(lam, Xa, ya, Xb):
         model = SVC(
             kernel="rbf",
-            C=float(C),
+            C=1.0 / (2.0 * Xa.shape[0] * lam),
             gamma=gamma,
             cache_size=args.svc_cache_mb,
             output_type="numpy",
@@ -273,11 +279,11 @@ def run_cuml(data, sig, Cs, foldid, dev, args, seed):
     params = dict(
         loss="hinge", solver="SMO", gamma=gamma, cache_size_mb=args.svc_cache_mb
     )
-    params["dtype"] = "float64"
-    return sweep(fit_predict, data, foldid, list(map(float, Cs)), dev, args, params)
+    params.update(C="1/(2 n lambda), n = rows of the fit", dtype="float64")
+    return sweep(fit_predict, data, foldid, list(map(float, lams)), dev, args, params)
 
 
-def run_falkon(data, sig, Cs, foldid, dev, args, seed):
+def run_falkon(data, sig, lams, foldid, dev, args, seed):
     import falkon
     from falkon.kernels import GaussianKernel
 
@@ -286,12 +292,11 @@ def run_falkon(data, sig, Cs, foldid, dev, args, seed):
         use_cpu=not dev.startswith("cuda"), keops_active="no", debug=False
     )
 
-    def fit_predict(C, Xa, ya, Xb):
-        n = Xa.shape[0]
+    def fit_predict(lam, Xa, ya, Xb):
         model = falkon.Falkon(
             kernel=kernel,
-            penalty=1.0 / (2.0 * n * C),
-            M=n,  # every training row is a centre: full kernel, no Nystrom
+            penalty=float(lam),
+            M=Xa.shape[0],  # every training row is a centre: full kernel, no Nystrom
             maxiter=args.falkon_maxiter,
             seed=seed,
             options=options,
@@ -305,7 +310,7 @@ def run_falkon(data, sig, Cs, foldid, dev, args, seed):
         maxiter=args.falkon_maxiter,
         dtype="float64",
     )
-    return sweep(fit_predict, data, foldid, list(map(float, Cs)), dev, args, params)
+    return sweep(fit_predict, data, foldid, list(map(float, lams)), dev, args, params)
 
 
 def conjugate_gradient(matvec, b, ridge, tol, maxiter):
@@ -328,7 +333,7 @@ def conjugate_gradient(matvec, b, ridge, tol, maxiter):
     return x, maxiter, True
 
 
-def run_keops(data, sig, Cs, foldid, dev, args, seed):
+def run_keops(data, sig, lams, foldid, dev, args, seed):
     from pykeops.torch import LazyTensor
 
     gamma = 2.0 * sig
@@ -340,14 +345,14 @@ def run_keops(data, sig, Cs, foldid, dev, args, seed):
         K = (-gamma * ((x_i - x_j) ** 2).sum(-1)).exp()
         return lambda v: K @ v
 
-    def fit_predict(C, Xa, ya, Xb):
+    def fit_predict(lam, Xa, ya, Xb):
         xa, xb = torch.from_numpy(Xa).to(dev), torch.from_numpy(Xb).to(dev)
         y = torch.from_numpy(ya).to(dev).reshape(-1, 1)
-        # (K + n lambda I) alpha = y with lambda = 1/(2 n C), i.e. ridge 1/(2C)
+        # (K + n lambda I) alpha = y: the normal equations of mean squared loss + lambda penalty
         alpha, _, capped = conjugate_gradient(
             kernel_matvec(xa, xa),
             y,
-            1.0 / (2.0 * C),
+            float(xa.shape[0] * lam),
             args.keops_tol,
             args.keops_maxiter,
         )
@@ -361,7 +366,7 @@ def run_keops(data, sig, Cs, foldid, dev, args, seed):
         cg_maxiter=args.keops_maxiter,
         dtype="float64",
     )
-    rec = sweep(fit_predict, data, foldid, list(map(float, Cs)), dev, args, params)
+    rec = sweep(fit_predict, data, foldid, list(map(float, lams)), dev, args, params)
     rec["cg_maxiter_hits"] = hits[0]
     return rec
 
@@ -379,7 +384,7 @@ def exact_subsample_eigh(samples, kernel_fn, top_q):
     return vals.flip(0)[:k], vecs.flip(1)[:, :k] / math.sqrt(n_s), kmat.diag().max()
 
 
-def run_eigenpro(data, sig, Cs, foldid, dev, args, seed):
+def run_eigenpro(data, sig, lams, foldid, dev, args, seed):  # lams unused: epochs grid
     import eigenpro2.models as epm
     from eigenpro2.kernels import gaussian
 
@@ -515,7 +520,7 @@ def write_markdown(doc: Dict[str, Any], path: str) -> str:
         f"{gpu}; torch {env.get('torch')}; torchkm {env.get('torchkm')} "
         f"({str(env.get('torchkm_commit'))[:10]}); float64 everywhere.",
         f"{a['folds']}-fold CV on shared stratified folds, {a['grid_size']} grid values "
-        f"(C in [1e-3, 1e3]; epochs 1..{a['grid_size']} for EigenPro), "
+        f"(lambda in [{a['lam_min']:g}, {a['lam_max']:g}]; epochs 1..{a['grid_size']} for EigenPro), "
         f"{a['repeats']} repeats (seeds {a['seed']}..{a['seed'] + a['repeats'] - 1}).",
         "Time = CV sweep + final fit + test predictions. Memory = NVML peak of the process.",
         "Cells are mean +- SE over repeats; 'selected' lists the chosen value per repeat.",
@@ -587,7 +592,11 @@ def main() -> None:
     ap.add_argument("--device", default="cuda", help="cuda (default) or cpu")
     ap.add_argument("--repeats", type=int, default=3, help="seeds per dataset")
     ap.add_argument("--folds", type=int, default=5)
-    ap.add_argument("--grid-size", type=int, default=50)
+    ap.add_argument(
+        "--grid-size", type=int, default=50, help="lambda values (and epochs)"
+    )
+    ap.add_argument("--lam-max", type=float, default=1e-1, help="largest lambda")
+    ap.add_argument("--lam-min", type=float, default=1e-5, help="smallest lambda")
     ap.add_argument("--seed", type=int, default=52)
     ap.add_argument(
         "--time-cap",
@@ -636,16 +645,24 @@ def main() -> None:
 
     from torchkm import sigest
 
-    Cs = np.logspace(3, -3, args.grid_size)  # the paper's grid, largest C first
+    lams = np.logspace(np.log10(args.lam_max), np.log10(args.lam_min), args.grid_size)
     doc: Dict[str, Any] = dict(
         script="q1_full_kernel.py",
         args=vars(args),
+        grid_lambda=lams.tolist(),
         environment=env_snapshot(),
         records=[],
     )
     if os.path.exists(args.out):  # resume: keep finished cells, redo the rest
         with open(args.out) as fh:
-            doc["records"] = json.load(fh).get("records", [])
+            old = json.load(fh)
+        protocol = ("folds", "grid_size", "lam_max", "lam_min", "seed")
+        if any(old.get("args", {}).get(k) != vars(args)[k] for k in protocol):
+            sys.exit(
+                f"{args.out} was written with a different protocol (folds, grid or seed): "
+                "use a new --out or delete it"
+            )
+        doc["records"] = old.get("records", [])
     done = {
         (r["dataset"], r["method"], r["repeat"])
         for r in doc["records"]
@@ -687,7 +704,7 @@ def main() -> None:
                     rec = dict(status="unavailable", note=reasons[m])
                 else:
                     try:
-                        rec = RUN[m](data, sig, Cs, foldid, dev, args, seed)
+                        rec = RUN[m](data, sig, lams, foldid, dev, args, seed)
                     except Exception as err:  # the next cell still runs
                         traceback.print_exc()
                         rec = dict(
