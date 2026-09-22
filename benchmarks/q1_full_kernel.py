@@ -10,12 +10,14 @@ Protocol (identical for every method)
   kernel      RBF exp(-2 sig d^2); one bandwidth per repeat from sigest on the
               training features, shared by every method (gamma = 2 sig for
               cuML/KeOps, bandwidth 1/(2 sqrt(sig)) for Falkon/EigenPro)
-  grid        50 log-uniform lambda in [1e-5, 1e-1], the same for every dataset
-              (--lam-max, --lam-min). Every method minimises mean(loss) +
-              lambda ||f||^2 / 2; the SVM solvers (TorchKM, cuML) are given
-              C = 1/(2 n lambda), n = rows of the fit, which is the libsvm form
-              C * sum(loss) + ||w||^2 / 2 of the same problem. EigenPro has no
-              lambda: its 50-value grid is the number of epochs, 1..50
+  grid        50 log-uniform lambda in [1e-5, 1e-2], the same for every dataset
+              (--lam-max, --lam-min). The SVM solvers (TorchKM, cuML) are given
+              C = 1/(2 n lambda), n = rows of the fit: TorchKM's own mapping
+              between its penalised mean loss and the libsvm objective
+              C * sum(loss) + ||w||^2 / 2. Falkon and KeOps take lambda as the
+              ridge penalty. EigenPro has no lambda: its 50-value grid is the
+              number of epochs, 1..50. A dataset whose selected value lies on
+              an edge of the grid is flagged in the table: widen the range then
   selection   5-fold stratified CV on the same folds for every method, then
               one fit on the full training set at the selected value
   precision   float64 everywhere
@@ -31,7 +33,12 @@ Protocol (identical for every method)
 Methods
   torchkm     TorchKMSVC, hinge loss: one eigendecomposition of the kernel,
               the whole lambda path and the exact CV formula; is_exact=0 (the
-              default), KKTeps from --kkt-eps
+              default), KKTeps from --kkt-eps. "Exceeded maximum delta
+              iterations for lambda i" in the log means the KKT test was still
+              unmet after --delta-len smoothing rounds for the i-th lambda of
+              the path (small to large): the last iterate is kept and the
+              table's note column shows the converged fraction. --delta-len 16
+              gives the solver more rounds
   cuml        cuml.svm.SVC, hinge loss, SMO on the full kernel: one fit per
               (C, fold), 5 x 50 + 1 fits
   falkon      falkon.Falkon, squared loss, M = n centres (every training row,
@@ -222,6 +229,7 @@ def run_torchkm(data, sig, lams, foldid, dev, args, seed):
         tol=args.tol,
         max_iter=args.max_iter,
         KKTeps=args.kkt_eps,
+        delta_len=args.delta_len,
         is_exact=0,
         random_state=seed,
     )
@@ -254,6 +262,7 @@ def run_torchkm(data, sig, lams, foldid, dev, args, seed):
             tol=args.tol,
             max_iter=args.max_iter,
             KKTeps=args.kkt_eps,
+            delta_len=args.delta_len,
             C="1/(2 n lambda), n = training rows",
             dtype="float64",
         ),
@@ -511,6 +520,14 @@ def save_json(doc: Dict[str, Any], path: str) -> None:
     os.replace(path + ".tmp", path)
 
 
+def at_grid_edge(rec: Dict[str, Any], doc: Dict[str, Any]) -> bool:
+    """True when the selected value is the first or last grid value."""
+    if rec.get("selected_label") == "epochs":
+        return rec["selected"] >= rec["grid_size"]
+    lo, hi = min(doc["grid_lambda"]), max(doc["grid_lambda"])
+    return bool(np.isclose(rec["selected"], lo) or np.isclose(rec["selected"], hi))
+
+
 def write_markdown(doc: Dict[str, Any], path: str) -> str:
     env, a = doc["environment"], doc["args"]
     gpu = (env.get("gpu") or {}).get("name") or "no GPU (CPU run)"
@@ -567,6 +584,11 @@ def write_markdown(doc: Dict[str, Any], path: str) -> str:
             )
         if len(ok) < len(recs):
             notes.append(f"{len(recs) - len(ok)} repeat(s) failed")
+        edge = [f"r{r['repeat']}" for r in ok if at_grid_edge(r, doc)]
+        if edge:
+            notes.append(
+                "selected at grid edge (" + ", ".join(edge) + "): widen the range"
+            )
         lines.append(
             f"{head} {acc[0]:.4f} +- {acc[1]:.4f} | {t[0]:.1f} +- {t[1]:.1f} | "
             f"{fmt_bytes(mem[0])} | {label} = {sel} | {'; '.join(notes)} |"
@@ -595,7 +617,7 @@ def main() -> None:
     ap.add_argument(
         "--grid-size", type=int, default=50, help="lambda values (and epochs)"
     )
-    ap.add_argument("--lam-max", type=float, default=1e-1, help="largest lambda")
+    ap.add_argument("--lam-max", type=float, default=1e-2, help="largest lambda")
     ap.add_argument("--lam-min", type=float, default=1e-5, help="smallest lambda")
     ap.add_argument("--seed", type=int, default=52)
     ap.add_argument(
@@ -605,6 +627,7 @@ def main() -> None:
         help="seconds per method x dataset x repeat before a CV sweep stops (0: none)",
     )
     ap.add_argument("--kkt-eps", type=float, default=1e-6, help="TorchKM KKT tolerance")
+    ap.add_argument("--delta-len", type=int, default=8, help="TorchKM smoothing rounds")
     ap.add_argument("--tol", type=float, default=1e-5, help="TorchKM step tolerance")
     ap.add_argument(
         "--max-iter", type=int, default=100_000, help="TorchKM iteration cap"
@@ -718,6 +741,7 @@ def main() -> None:
                     f"t={rec.get('time_s', float('nan')):8.1f}s mem={fmt_bytes(rec.get('gpu_bytes'))}"
                     + (
                         f" {rec.get('selected_label')}={rec.get('selected'):.3g}"
+                        + (" (grid edge)" if at_grid_edge(rec, doc) else "")
                         if "selected" in rec
                         else ""
                     )
