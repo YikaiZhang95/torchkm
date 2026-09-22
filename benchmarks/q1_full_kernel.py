@@ -22,7 +22,8 @@ Protocol (identical for every method)
               ridge penalty. EigenPro has no lambda: its 50-value grid is the
               number of epochs, 1..50. A dataset whose selected value lies on
               an edge of the grid is flagged in the table: widen the range then
-  selection   5-fold stratified CV on the same folds for every method, then
+  selection   10-fold stratified CV (the paper's protocol; --folds) on the same
+              folds for every method, then
               one fit on the full training set at the selected value
   precision   float64 everywhere
   timing      wall clock for everything a user pays for a tuned model: kernel
@@ -44,7 +45,8 @@ Datasets
               data are redrawn for every repeat (seed 52 + repeat); the test set
               is n/10 rows from the same mixture. Any sim_<n>x<p> works
 
-Methods
+Methods (default: torchkm, cuml, falkon; keops and eigenpro are optional extra
+columns, selected with --methods)
   torchkm     TorchKMSVC, hinge loss: one eigendecomposition of the kernel,
               the whole lambda path and the exact CV formula; is_exact=0 (the
               default), KKTeps from --kkt-eps. "Exceeded maximum delta
@@ -136,6 +138,7 @@ DATASETS = [
     "sim_20000x1000",
 ]
 METHODS = ["torchkm", "cuml", "falkon", "keops", "eigenpro"]
+DEFAULT_METHODS = ["torchkm", "cuml", "falkon"]
 
 
 def parse_sim(name: str) -> Optional[tuple]:
@@ -641,10 +644,10 @@ def main() -> None:
     )
     ap.add_argument("--data-dir", default=None, help="directory of LIBSVM files")
     ap.add_argument("--datasets", nargs="+", default=DATASETS)
-    ap.add_argument("--methods", nargs="+", choices=METHODS, default=METHODS)
+    ap.add_argument("--methods", nargs="+", choices=METHODS, default=DEFAULT_METHODS)
     ap.add_argument("--device", default="cuda", help="cuda (default) or cpu")
     ap.add_argument("--repeats", type=int, default=3, help="seeds per dataset")
-    ap.add_argument("--folds", type=int, default=5)
+    ap.add_argument("--folds", type=int, default=10, help="CV folds (paper: 10)")
     ap.add_argument(
         "--grid-size", type=int, default=50, help="lambda values (and epochs)"
     )

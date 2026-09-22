@@ -38,9 +38,9 @@ done
 ## Q1 in one script: every method on the full kernel
 
 `q1_full_kernel.py` answers the first reviewer question on its own: TorchKM
-(`is_exact=0`), cuML `SVC`, Falkon with M = n, kernel ridge regression on a
-KeOps `LazyTensor`, and EigenPro 2, all without any Nyström approximation, on
-the same 5 folds, the same 50 values of λ from 1e-2 down to 2e-5 (C = 1/(2nλ)
+(`is_exact=0`), cuML `SVC` and Falkon with M = n, all without any Nyström
+approximation (kernel ridge regression on a KeOps `LazyTensor` and EigenPro 2
+are optional extra columns via `--methods`), on the same 10 folds, the same 50 values of λ from 1e-2 down to 2e-5 (C = 1/(2nλ)
 for the SVM solvers), in float64, three seeds per dataset. It reports test accuracy, wall-clock time of the whole tuning run
 and peak GPU memory, as JSON plus a Markdown table written next to it. The
 default dataset list is the paper's real sets that fit the full kernel plus
