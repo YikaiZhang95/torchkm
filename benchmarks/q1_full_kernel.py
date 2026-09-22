@@ -10,8 +10,10 @@ Protocol (identical for every method)
   kernel      RBF exp(-2 sig d^2); one bandwidth per repeat from sigest on the
               training features, shared by every method (gamma = 2 sig for
               cuML/KeOps, bandwidth 1/(2 sqrt(sig)) for Falkon/EigenPro)
-  grid        50 log-uniform lambda in [1e-5, 1e-2], the same for every dataset
-              (--lam-max, --lam-min). The SVM solvers (TorchKM, cuML) are given
+  grid        50 log-uniform lambda from 1e-1 down to 1e-5, the paper's grid,
+              the same for every dataset (--lam-max, --lam-min), swept from
+              large to small lambda (TorchKM's path warm-starts each lambda
+              from the previous one). The SVM solvers (TorchKM, cuML) are given
               C = 1/(2 n lambda), n = rows of the fit: TorchKM's own mapping
               between its penalised mean loss and the libsvm objective
               C * sum(loss) + ||w||^2 / 2. Falkon and KeOps take lambda as the
@@ -215,9 +217,10 @@ def run_torchkm(data, sig, lams, foldid, dev, args, seed):
     from torchkm.estimators import TorchKMSVC
 
     # The estimator takes C and forms lambda = 1/(2 n C) itself, n = training
-    # rows; its path runs from small to large lambda, so hand it that order.
+    # rows. The path must run from large to small lambda (each solution warm-starts
+    # the next), so the grid is handed over in that order: C ascending.
     n = data["Xtr"].shape[0]
-    Cs = 1.0 / (2.0 * n * np.sort(lams))
+    Cs = 1.0 / (2.0 * n * lams)
     clf = TorchKMSVC(
         kernel="rbf",
         rbf_sigma=sig,
@@ -251,7 +254,7 @@ def run_torchkm(data, sig, lams, foldid, dev, args, seed):
         selected=float(1.0 / (2.0 * n * clf.best_C_)),
         selected_label="lambda",
         cv_accuracy=1.0 - float(clf.cv_mis_[clf.best_ind_]),
-        cv_curve=(1.0 - np.asarray(clf.cv_mis_, dtype=float))[::-1].tolist(),
+        cv_curve=(1.0 - np.asarray(clf.cv_mis_, dtype=float)).tolist(),
         grid_completed=len(lams),
         grid_size=len(lams),
         converged_frac=None if conv is None else float(np.mean(conv)),
@@ -617,7 +620,7 @@ def main() -> None:
     ap.add_argument(
         "--grid-size", type=int, default=50, help="lambda values (and epochs)"
     )
-    ap.add_argument("--lam-max", type=float, default=1e-2, help="largest lambda")
+    ap.add_argument("--lam-max", type=float, default=1e-1, help="largest lambda")
     ap.add_argument("--lam-min", type=float, default=1e-5, help="smallest lambda")
     ap.add_argument("--seed", type=int, default=52)
     ap.add_argument(
@@ -668,6 +671,7 @@ def main() -> None:
 
     from torchkm import sigest
 
+    # large to small: the order TorchKM's path and every sweep below run in
     lams = np.logspace(np.log10(args.lam_max), np.log10(args.lam_min), args.grid_size)
     doc: Dict[str, Any] = dict(
         script="q1_full_kernel.py",
