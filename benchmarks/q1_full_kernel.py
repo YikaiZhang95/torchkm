@@ -10,10 +10,12 @@ Protocol (identical for every method)
   kernel      RBF exp(-2 sig d^2); one bandwidth per repeat from sigest on the
               training features, shared by every method (gamma = 2 sig for
               cuML/KeOps, bandwidth 1/(2 sqrt(sig)) for Falkon/EigenPro)
-  grid        50 log-uniform lambda from 1e-1 down to 1e-5, the paper's grid,
-              the same for every dataset (--lam-max, --lam-min), swept from
-              large to small lambda (TorchKM's path warm-starts each lambda
-              from the previous one). The SVM solvers (TorchKM, cuML) are given
+  grid        50 log-uniform lambda from 1e-2 down to 2e-5, the same for every
+              dataset (--lam-max, --lam-min), swept from large to small lambda
+              (TorchKM's path warm-starts each lambda from the previous one).
+              The paper's grid was 1e-1..1e-5; at KKTeps=1e-6 TorchKM's KKT
+              test fails for lambda >= 0.027 and at 1e-5 (a7a), so the default
+              stays inside that band. The SVM solvers (TorchKM, cuML) are given
               C = 1/(2 n lambda), n = rows of the fit: TorchKM's own mapping
               between its penalised mean loss and the libsvm objective
               C * sum(loss) + ||w||^2 / 2. Falkon and KeOps take lambda as the
@@ -620,8 +622,8 @@ def main() -> None:
     ap.add_argument(
         "--grid-size", type=int, default=50, help="lambda values (and epochs)"
     )
-    ap.add_argument("--lam-max", type=float, default=1e-1, help="largest lambda")
-    ap.add_argument("--lam-min", type=float, default=1e-5, help="smallest lambda")
+    ap.add_argument("--lam-max", type=float, default=1e-2, help="largest lambda")
+    ap.add_argument("--lam-min", type=float, default=2e-5, help="smallest lambda")
     ap.add_argument("--seed", type=int, default=52)
     ap.add_argument(
         "--time-cap",

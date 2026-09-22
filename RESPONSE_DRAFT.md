@@ -13,7 +13,7 @@ every run are on `docs/examples/reproduce_paper_benchmarks.md`.
 **Ready to run.** `benchmarks/q1_full_kernel.py` runs one protocol for
 TorchKM, cuML, Falkon, KeOps and EigenPro with every method on the full
 kernel (no Nyström centres anywhere): the same RBF bandwidth, the same
-50-value λ grid from 1e-1 down to 1e-5, identical stratified 5-fold splits, float64 throughout,
+50-value λ grid from 1e-2 down to 2e-5, identical stratified 5-fold splits, float64 throughout,
 end-to-end timing of the cross-validation sweep plus the final fit and the
 test predictions, peak GPU memory from NVML, and test accuracy. Three seeds
 per dataset give standard errors. Datasets: the paper's a7a, a8a, a9a, w7a,
