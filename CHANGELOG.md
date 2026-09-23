@@ -5,6 +5,20 @@ All notable changes to TorchKM are documented in this file.
 ## [Unreleased]
 
 ### Added
+- `eigh_backend` on `TorchKMSVC`, `TorchKMDWD`, `TorchKMLogit`, `TorchKMKQR`
+  and the six exact solvers: where the one eigendecomposition of the kernel
+  runs on a GPU. `"cusolver"` is fastest (peak about 6 n x n float64 matrices
+  on an L40S); `"magma"` and `"cpu"` keep the solver workspace in host memory
+  (about 2) at several times the factorisation time; `"auto"`, the default,
+  uses cuSOLVER and falls back to them when the device runs out of memory, so
+  exact mode is predicted to reach about n = 52,000 on a 48 GB card instead
+  of failing near 30,000. The eigenpairs, and the fitted model, do not depend on the
+  choice. Fitted estimators report `eigh_backend_` and `eigh_seconds_`;
+  `torchkm.linalg.kernel_eigh` is the shared helper.
+- `torchkm.memory` models the peak per backend (`EXACT_MODE_COPIES_BY_BACKEND`,
+  measured on an L40S); `exact_mode_memory_estimate` and `max_exact_n` take
+  `backend`, and `EXACT_MODE_COPIES` is now the measured cuSOLVER value, 6.1
+  (it was a provisional 4).
 - `torchkm.memory`: `exact_mode_memory_estimate`, `max_exact_n`, and the
   out-of-memory message the estimators raise in exact mode (predicted
   requirement, device total, largest feasible `n`, and the `low_rank=True`

@@ -98,7 +98,9 @@ def exact_mode_feasible(
 ) -> tuple[bool, str]:
     from torchkm.memory import device_total_memory, exact_mode_memory_estimate
 
-    need = exact_mode_memory_estimate(n, nlam=grid_size)
+    # "auto" falls back to the low-memory eigendecomposition, so exact mode is
+    # out of reach only when that does not fit either.
+    need = exact_mode_memory_estimate(n, nlam=grid_size, backend="cpu")
     total = device_total_memory(dev) if str(dev).startswith("cuda") else ram_bytes
     if total is None:
         return True, ""
@@ -186,7 +188,8 @@ def main() -> None:
         "--max-train",
         type=int,
         default=None,
-        help="stratified-subsample every training set larger than this (e.g. 20000 to stay at the paper's exact-mode sizes)",
+        help="stratified-subsample every training set larger than this "
+        "(e.g. 20000 to stay at the paper's exact-mode sizes)",
     )
     args = smoke_settings(ap.parse_args())
 

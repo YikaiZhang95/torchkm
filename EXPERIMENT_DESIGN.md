@@ -231,9 +231,12 @@ Nyström path continues to 10⁶ rows with memory growing as n × landmarks.
 | E8c (optional) | E8 on a 16 GB consumer card | 1 | same command on that machine |
 
 The script records, per fit, wall time, the allocator peak, the NVML peak,
-the predicted peak, and the empirical c = (peak − 16nL)/(8n²); it prints the
-median c and the first OOM size. Update `torchkm.memory.EXACT_MODE_COPIES`
-to the measured c (the CPU sweep gave 4.2; the constant is 4 until then).
+the predicted peak, the eigendecomposition backend and its seconds, and the
+empirical c = (peak − 16nL)/(8n²); it prints the median c and the first OOM
+size. Run it with `--eigh-backend cusolver` and with `--eigh-backend magma`.
+Measured so far on the L40S: c = 6.0 to 6.1 with cuSOLVER (a7a, a8a, w7a in
+the Q1 run), 2.0 with MAGMA and with the host factorisation (allocator peak,
+16,100 rows); `torchkm.memory.EXACT_MODE_COPIES_BY_BACKEND` holds these.
 
 **Paper.** Figure 1: time and peak memory versus n, exact and Nyström, first
 OOM marked, 16/24/48/80 GB ceilings drawn (`fig1_envelope`). One sentence in

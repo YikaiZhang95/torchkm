@@ -5,6 +5,7 @@ import torch
 
 from .exceptions import ConvergenceWarning
 from .functions import *
+from .linalg import check_eigh_backend, kernel_eigh
 
 
 class cvklogit:
@@ -22,8 +23,11 @@ class cvklogit:
         KKTeps=1e-3,
         KKTeps2=1e-3,
         device="cuda",
+        eigh_backend="auto",
     ):
         self.device = device
+        self.eigh_backend = check_eigh_backend(eigh_backend)
+        self.eigh_info = None
         self.Kmat = Kmat.double().to(self.device)
         self.y = y.double().to(self.device)
         # self.Kmat = None
@@ -76,7 +80,10 @@ class cvklogit:
         Ksum = torch.sum(Kmat, dim=1)
         # Kinv = torch.linalg.inv(Kmat)
 
-        eigens, Umat = torch.linalg.eigh(Kmat)
+        # One factorisation for the whole path; see torchkm.linalg for where it runs.
+        eigens, Umat, self.eigh_info = kernel_eigh(
+            Kmat, self.eigh_backend, return_info=True
+        )
         eigens = eigens.double().to(self.device)
         Umat = Umat.double().to(self.device)
         Kmat = Kmat.double().to(self.device)

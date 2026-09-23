@@ -18,6 +18,14 @@ This page documents public kernel and utility functions.
 
 ::: torchkm.functions.kernelMult
 
+## Memory envelope and the eigendecomposition
+
+::: torchkm.linalg.kernel_eigh
+
+::: torchkm.memory.exact_mode_memory_estimate
+
+::: torchkm.memory.max_exact_n
+
 ## Probability calibration
 
 ::: torchkm.platt.PlattScalerTorch

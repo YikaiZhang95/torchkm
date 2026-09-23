@@ -164,6 +164,9 @@ def run_torchkm(
     if getattr(args, "kkt_scaled", False):
         kwargs["kkt_scaled"] = True
         params["kkt_scaled"] = True
+    if not low_rank:
+        kwargs["eigh_backend"] = getattr(args, "eigh_backend", "auto")
+        params["eigh_backend"] = kwargs["eigh_backend"]
     if low_rank:
         kwargs.update(low_rank=True, num_landmarks=int(landmarks), nys_k=int(rank))
         params.update(num_landmarks=int(landmarks), nys_k=int(rank))
@@ -183,6 +186,8 @@ def run_torchkm(
         torch_peak_bytes=clf.peak_gpu_memory_bytes_,
         best_C=float(clf.best_C_),
         converged_frac=None if conv is None else float(np.mean(conv)),
+        eigh_backend_used=getattr(clf, "eigh_backend_", None),
+        eigh_seconds=getattr(clf, "eigh_seconds_", None),
     )
     if low_rank:
         rec["params"]["nys_k_effective"] = getattr(clf, "nys_k_", None)

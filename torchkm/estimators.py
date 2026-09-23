@@ -122,6 +122,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         KKTeps: float = 1e-3,
         delta_len: int = 8,  # only used by cvksvm
         kkt_scaled: bool = False,
+        eigh_backend: str = "auto",
         device: Optional[Union[str, torch.device]] = None,
         # RBF
         rbf_sigma: Optional[float] = None,
@@ -154,6 +155,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         self.KKTeps = KKTeps
         self.delta_len = delta_len
         self.kkt_scaled = kkt_scaled
+        self.eigh_backend = eigh_backend
         self.device = device
 
         self.rbf_sigma = rbf_sigma
@@ -213,6 +215,8 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             "platt_y_",
             "_platt_device_",
             "peak_gpu_memory_bytes_",
+            "eigh_backend_",
+            "eigh_seconds_",
         )
         for attr in fitted_attrs:
             if hasattr(self, attr):
@@ -374,6 +378,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
 
         # Per-lambda convergence status (None for backends that do not track it)
         conv = getattr(backend, "converged", None)
+        self._record_eigh(backend)
         self.converged_ = None if conv is None else conv.detach().cpu().numpy().copy()
 
         # CV selection: backend.cv expects y on CPU shape (n,)
@@ -737,6 +742,12 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         if int(self.nys_k) < 1:
             raise ValueError("nys_k must be positive.")
 
+    def _record_eigh(self, backend) -> None:
+        """Expose where the kernel eigendecomposition ran and how long it took."""
+        info = getattr(backend, "eigh_info", None) or {}
+        self.eigh_backend_ = info.get("used")
+        self.eigh_seconds_ = info.get("seconds")
+
     def _make_backend(
         self,
         *,
@@ -795,6 +806,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 delta_len=int(self.delta_len),
                 KKTeps=float(self.KKTeps),
                 kkt_scaled=bool(self.kkt_scaled),
+                eigh_backend=self.eigh_backend,
                 device=dev,
             )
 
@@ -810,6 +822,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 maxit=int(self.max_iter),
                 gamma=float(self.solver_gamma),
                 KKTeps=float(self.KKTeps),
+                eigh_backend=self.eigh_backend,
                 device=dev,
             )
 
@@ -825,6 +838,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 maxit=int(self.max_iter),
                 gamma=float(self.solver_gamma),
                 KKTeps=float(self.KKTeps),
+                eigh_backend=self.eigh_backend,
                 device=dev,
             )
 
@@ -878,6 +892,15 @@ class TorchKMSVC(_TorchKMBaseBinaryClassifier):
     kkt_scaled : bool, default=False
         Use the scale-aware KKT rule (``n * sum(KKT**2) < KKTeps``), under which
         ``KKTeps`` means the same relative accuracy at every ``n``.
+    eigh_backend : {"auto", "cusolver", "magma", "cpu"}, default="auto"
+        Where exact mode's single eigendecomposition of the kernel runs on a
+        CUDA device. ``"cusolver"`` is fastest and peaks at about six ``n x n``
+        float64 matrices; ``"magma"`` and ``"cpu"`` keep the solver workspace
+        in host memory and peak at about two, at several times the
+        factorisation time. ``"auto"`` uses cuSOLVER and falls back to the
+        low-memory backends only when the device runs out of memory. The
+        solution does not depend on the choice. See the "Operating envelope"
+        page of the user guide.
     device : {"cpu", "cuda"} or torch.device, optional
         Device used for computation. If ``None``, CUDA is used when available;
         otherwise CPU is used. Requests for CUDA fall back to CPU when CUDA is
@@ -943,6 +966,13 @@ class TorchKMSVC(_TorchKMBaseBinaryClassifier):
         the whole ``fit`` call: kernel construction, the solver, and Platt
         calibration. ``None`` when the fit ran on CPU. Exact mode scales as
         ``n^2``; see :mod:`torchkm.memory` and the "Operating envelope" page.
+    eigh_backend_ : str or None
+        Backend that computed the kernel eigendecomposition (``"cusolver"``,
+        ``"magma"``, ``"cpu"``, or ``"lapack"`` for a CPU fit); ``None`` on the
+        Nyström path.
+    eigh_seconds_ : float or None
+        Wall-clock seconds of that eigendecomposition, including any attempt
+        that ran out of memory first.
 
     Notes
     -----
@@ -1042,6 +1072,7 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
         KKTeps: float = 1e-3,
         KKTeps2: float = 1e-3,
         kkt_scaled: bool = False,
+        eigh_backend: str = "auto",
         device: Optional[Union[str, torch.device]] = None,
         rbf_sigma: Optional[float] = None,
         sigest_frac: float = 0.5,
@@ -1071,6 +1102,7 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
         self.KKTeps = KKTeps
         self.KKTeps2 = KKTeps2
         self.kkt_scaled = kkt_scaled
+        self.eigh_backend = eigh_backend
         self.device = device
         self.rbf_sigma = rbf_sigma
         self.sigest_frac = sigest_frac
@@ -1117,6 +1149,8 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
             "alpmat_path_",
             "pred_path_",
             "peak_gpu_memory_bytes_",
+            "eigh_backend_",
+            "eigh_seconds_",
         )
         for attr in fitted_attrs:
             if hasattr(self, attr):
@@ -1161,6 +1195,12 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
             raise ValueError("num_landmarks must be positive.")
         if int(self.nys_k) < 1:
             raise ValueError("nys_k must be positive.")
+
+    def _record_eigh(self, backend) -> None:
+        """Expose where the kernel eigendecomposition ran and how long it took."""
+        info = getattr(backend, "eigh_info", None) or {}
+        self.eigh_backend_ = info.get("used")
+        self.eigh_seconds_ = info.get("seconds")
 
     def _make_backend(
         self,
@@ -1216,6 +1256,7 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
             KKTeps=float(self.KKTeps),
             KKTeps2=float(self.KKTeps2),
             kkt_scaled=bool(self.kkt_scaled),
+            eigh_backend=self.eigh_backend,
             device=device,
         )
 
@@ -1323,6 +1364,7 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
             device=dev,
         )
         backend.fit()
+        self._record_eigh(backend)
 
         cv_loss_t = backend.cv(backend.pred, y_train_t.to(backend.pred.device))
         cv_loss = cv_loss_t.detach().cpu().numpy()
@@ -1414,5 +1456,7 @@ class TorchKMKQR(_TorchKMBaseKernelQuantileRegressor):
     """Kernel quantile regressor with integrated model selection.
 
     ``TorchKMKQR`` uses :class:`torchkm.cvkqr.cvkqr` when ``low_rank=False``
-    and :class:`torchkm.cvknyqr.cvknyqr` when ``low_rank=True``.
+    and :class:`torchkm.cvknyqr.cvknyqr` when ``low_rank=True``. In exact mode
+    ``eigh_backend`` chooses where the kernel eigendecomposition runs, as for
+    :class:`TorchKMSVC`, and ``eigh_backend_`` / ``eigh_seconds_`` report it.
     """
