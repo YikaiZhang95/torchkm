@@ -110,37 +110,23 @@ revision benchmarks both against the CPU packages their users run today.
 
 ## 4. The operating envelope is never characterised
 
-**Answered, measured on the L40S.** Peak memory in exact mode is
-`c · 8 n² + 16 n L` bytes: c resident n×n float64 matrices plus the n×L
-path. The peak is the one eigendecomposition of the kernel, so c depends on
-where it runs. On the L40S (PyTorch 2.6, CUDA 12.4) the tuned fits of a7a,
-a8a and w7a peaked at c = 6.0 to 6.1 in PyTorch's allocator (6.4 to 6.8 in the
-driver's count) with cuSOLVER, the default: the kernel, cuSOLVER's working
-copy and its workspace. That puts the 48 GB ceiling near n = 30,000, below
-a9a's 32,561 rows (predicted 52 GB) and above Table 3's largest set, w7a with
-24,692 rows.
-
-The same factorisation run through MAGMA, which keeps its workspace in host
-memory, returned the same eigenpairs (largest difference 7e-15) at c = 2.0 in
-PyTorch's allocator, in 85 s instead of 21.5 s for a 16,100-row kernel. The
-package now exposes this as `eigh_backend` ("cusolver", "magma", "cpu") and
-by default falls back to it when cuSOLVER runs out of memory, which is
-predicted to raise the 48 GB ceiling to about n = 52,000 at several times the
-factorisation cost; the fitted model does not depend on the choice. The revision reports both
-settings in the exact-mode table. The estimators also factorise the kernel in
-place and rebuild it afterwards, which removes cuSOLVER's working copy from the
-peak (expected c of about 5.1 instead of 6.1, same speed, bitwise-identical
-fits); the rerun on the L40S measures it.
+**Answered in form, GPU numbers pending.** Peak memory in exact mode is
+`c · 8 n² + 16 n L` bytes: c resident n×n float64 matrices (kernel,
+eigenvectors, eigensolver workspace) plus the n×L path. A CPU sweep of the
+same code measured c = 4.2 for n = 2,000 to 8,000; the CUDA eigensolver's
+workspace differs, so `benchmarks/bench_memory_envelope.py` on the L40S is
+the number to quote. With c = 4 the predicted ceiling on a 48 GB card is
+about n = 37,000, which is why Table 3 stopped at 24,692 and Table 4 began at
+32,561 on the Nyström path.
 
 Package changes on this branch make the envelope explicit: one of the n×n
 copies is no longer materialised (it was only used by the projection step,
 and never read at all in two solvers), the kernel is built on the device
 instead of the host, every fitted estimator reports `peak_gpu_memory_bytes_`,
 `torchkm.exact_mode_memory_estimate` and `torchkm.max_exact_n` predict the
-requirement and the largest feasible n for each eigendecomposition backend,
-fitted estimators report `eigh_backend_` and `eigh_seconds_`, and an
-exact-mode out-of-memory error states the requirement with each backend, the
-device total, the feasible n and the `low_rank=True` alternative. A user-guide page ("Operating envelope") states
+requirement and the largest feasible n, and an exact-mode out-of-memory error
+now states the requirement, the device total, the feasible n and the
+`low_rank=True` alternative. A user-guide page ("Operating envelope") states
 the model and a table per card size.
 
 The new Figure 1 will be time and peak memory versus n, exact mode up to the

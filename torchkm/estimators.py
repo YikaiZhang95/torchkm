@@ -122,7 +122,6 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         KKTeps: float = 1e-3,
         delta_len: int = 8,  # only used by cvksvm
         kkt_scaled: bool = False,
-        eigh_backend: str = "auto",
         device: Optional[Union[str, torch.device]] = None,
         # RBF
         rbf_sigma: Optional[float] = None,
@@ -155,7 +154,6 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         self.KKTeps = KKTeps
         self.delta_len = delta_len
         self.kkt_scaled = kkt_scaled
-        self.eigh_backend = eigh_backend
         self.device = device
 
         self.rbf_sigma = rbf_sigma
@@ -215,9 +213,6 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             "platt_y_",
             "_platt_device_",
             "peak_gpu_memory_bytes_",
-            "eigh_backend_",
-            "eigh_seconds_",
-            "fit_timing_",
         )
         for attr in fitted_attrs:
             if hasattr(self, attr):
@@ -359,8 +354,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             else:
                 # Build the kernel on the target device: no host-side n x n
                 # copy and no host-to-device transfer of the full matrix.
-                X_dev = X_train_t.to(dev)
-                K_train, kernel_state = self._compute_K_train(X_dev)
+                K_train, kernel_state = self._compute_K_train(X_train_t.to(dev))
                 self.X_fit_ = X_np
                 self.kernel_state_ = kernel_state
 
@@ -375,19 +369,11 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             nlam=nlam,
             ulam_backend=ulam_backend,
             foldid_backend=foldid_backend,
-            rebuild_kmat=(
-                None
-                if self.low_rank
-                else self._kernel_rebuilder(
-                    None if self.kernel == "precomputed" else X_dev, X_np, dev
-                )
-            ),
         )
         backend.fit()
 
         # Per-lambda convergence status (None for backends that do not track it)
         conv = getattr(backend, "converged", None)
-        self._record_eigh(backend)
         self.converged_ = None if conv is None else conv.detach().cpu().numpy().copy()
 
         # CV selection: backend.cv expects y on CPU shape (n,)
@@ -751,36 +737,6 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         if int(self.nys_k) < 1:
             raise ValueError("nys_k must be positive.")
 
-    def _kernel_rebuilder(self, X_dev: Optional[torch.Tensor], X_np, dev: str):
-        """Callable that rebuilds the training kernel with the fitted parameters.
-
-        Lets the exact solvers factorise the kernel in place (one ``n x n``
-        copy less at the peak) and recover it afterwards. It reuses
-        ``kernel_state_`` so the bandwidth estimate is not drawn again.
-        """
-        if self.kernel == "precomputed":
-            return lambda: torch.as_tensor(X_np, dtype=torch.double).to(dev)
-        state = dict(self.kernel_state_)
-
-        def rebuild() -> torch.Tensor:
-            if self.kernel == "rbf":
-                return rbf_kernel_train(X_dev, float(state["sigma"]))
-            if self.kernel == "linear":
-                return X_dev @ X_dev.T
-            return (
-                self.poly_gamma * (X_dev @ X_dev.T) + self.poly_coef0
-            ) ** self.poly_degree
-
-        return rebuild
-
-    def _record_eigh(self, backend) -> None:
-        """Expose where the kernel eigendecomposition ran and how long it took."""
-        info = getattr(backend, "eigh_info", None) or {}
-        self.eigh_backend_ = info.get("used")
-        self.eigh_seconds_ = info.get("seconds")
-        timing = getattr(backend, "timing", None)
-        self.fit_timing_ = dict(timing) if timing else None
-
     def _make_backend(
         self,
         *,
@@ -792,7 +748,6 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         nlam: int,
         ulam_backend: torch.Tensor,
         foldid_backend: torch.Tensor,
-        rebuild_kmat=None,
     ):
         if low_rank:
             backend_cls = {
@@ -840,8 +795,6 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 delta_len=int(self.delta_len),
                 KKTeps=float(self.KKTeps),
                 kkt_scaled=bool(self.kkt_scaled),
-                eigh_backend=self.eigh_backend,
-                rebuild_kmat=rebuild_kmat,
                 device=dev,
             )
 
@@ -857,8 +810,6 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 maxit=int(self.max_iter),
                 gamma=float(self.solver_gamma),
                 KKTeps=float(self.KKTeps),
-                eigh_backend=self.eigh_backend,
-                rebuild_kmat=rebuild_kmat,
                 device=dev,
             )
 
@@ -874,8 +825,6 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 maxit=int(self.max_iter),
                 gamma=float(self.solver_gamma),
                 KKTeps=float(self.KKTeps),
-                eigh_backend=self.eigh_backend,
-                rebuild_kmat=rebuild_kmat,
                 device=dev,
             )
 
@@ -929,15 +878,6 @@ class TorchKMSVC(_TorchKMBaseBinaryClassifier):
     kkt_scaled : bool, default=False
         Use the scale-aware KKT rule (``n * sum(KKT**2) < KKTeps``), under which
         ``KKTeps`` means the same relative accuracy at every ``n``.
-    eigh_backend : {"auto", "cusolver", "magma", "cpu"}, default="auto"
-        Where exact mode's single eigendecomposition of the kernel runs on a
-        CUDA device. ``"cusolver"`` is fastest and peaks at about six ``n x n``
-        float64 matrices; ``"magma"`` and ``"cpu"`` keep the solver workspace
-        in host memory and peak at about two, at several times the
-        factorisation time. ``"auto"`` uses cuSOLVER and falls back to the
-        low-memory backends only when the device runs out of memory. The
-        solution does not depend on the choice. See the "Operating envelope"
-        page of the user guide.
     device : {"cpu", "cuda"} or torch.device, optional
         Device used for computation. If ``None``, CUDA is used when available;
         otherwise CPU is used. Requests for CUDA fall back to CPU when CUDA is
@@ -1003,18 +943,6 @@ class TorchKMSVC(_TorchKMBaseBinaryClassifier):
         the whole ``fit`` call: kernel construction, the solver, and Platt
         calibration. ``None`` when the fit ran on CPU. Exact mode scales as
         ``n^2``; see :mod:`torchkm.memory` and the "Operating envelope" page.
-    eigh_backend_ : str or None
-        Backend that computed the kernel eigendecomposition (``"cusolver"``,
-        ``"magma"``, ``"cpu"``, or ``"lapack"`` for a CPU fit); ``None`` on the
-        Nyström path.
-    eigh_seconds_ : float or None
-        Wall-clock seconds of that eigendecomposition, including any attempt
-        that ran out of memory first.
-    fit_timing_ : dict or None
-        Seconds spent in the parts of an exact-mode SVM fit: ``"eigh"``,
-        ``"rebuild"`` (the kernel after the in-place factorisation), ``"cv"``,
-        ``"path"`` and ``"total"``. ``None`` for backends that do not time
-        themselves.
 
     Notes
     -----
@@ -1114,7 +1042,6 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
         KKTeps: float = 1e-3,
         KKTeps2: float = 1e-3,
         kkt_scaled: bool = False,
-        eigh_backend: str = "auto",
         device: Optional[Union[str, torch.device]] = None,
         rbf_sigma: Optional[float] = None,
         sigest_frac: float = 0.5,
@@ -1144,7 +1071,6 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
         self.KKTeps = KKTeps
         self.KKTeps2 = KKTeps2
         self.kkt_scaled = kkt_scaled
-        self.eigh_backend = eigh_backend
         self.device = device
         self.rbf_sigma = rbf_sigma
         self.sigest_frac = sigest_frac
@@ -1191,9 +1117,6 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
             "alpmat_path_",
             "pred_path_",
             "peak_gpu_memory_bytes_",
-            "eigh_backend_",
-            "eigh_seconds_",
-            "fit_timing_",
         )
         for attr in fitted_attrs:
             if hasattr(self, attr):
@@ -1239,36 +1162,6 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
         if int(self.nys_k) < 1:
             raise ValueError("nys_k must be positive.")
 
-    def _kernel_rebuilder(self, X_dev: Optional[torch.Tensor], X_np, dev: str):
-        """Callable that rebuilds the training kernel with the fitted parameters.
-
-        Lets the exact solvers factorise the kernel in place (one ``n x n``
-        copy less at the peak) and recover it afterwards. It reuses
-        ``kernel_state_`` so the bandwidth estimate is not drawn again.
-        """
-        if self.kernel == "precomputed":
-            return lambda: torch.as_tensor(X_np, dtype=torch.double).to(dev)
-        state = dict(self.kernel_state_)
-
-        def rebuild() -> torch.Tensor:
-            if self.kernel == "rbf":
-                return rbf_kernel_train(X_dev, float(state["sigma"]))
-            if self.kernel == "linear":
-                return X_dev @ X_dev.T
-            return (
-                self.poly_gamma * (X_dev @ X_dev.T) + self.poly_coef0
-            ) ** self.poly_degree
-
-        return rebuild
-
-    def _record_eigh(self, backend) -> None:
-        """Expose where the kernel eigendecomposition ran and how long it took."""
-        info = getattr(backend, "eigh_info", None) or {}
-        self.eigh_backend_ = info.get("used")
-        self.eigh_seconds_ = info.get("seconds")
-        timing = getattr(backend, "timing", None)
-        self.fit_timing_ = dict(timing) if timing else None
-
     def _make_backend(
         self,
         *,
@@ -1279,7 +1172,6 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
         ulam_backend: torch.Tensor,
         foldid_backend: torch.Tensor,
         device: str,
-        rebuild_kmat=None,
     ):
         if self.low_rank:
             return cvknyqr(
@@ -1324,8 +1216,6 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
             KKTeps=float(self.KKTeps),
             KKTeps2=float(self.KKTeps2),
             kkt_scaled=bool(self.kkt_scaled),
-            eigh_backend=self.eigh_backend,
-            rebuild_kmat=rebuild_kmat,
             device=device,
         )
 
@@ -1417,17 +1307,11 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
             self.kernel_state_ = {}
         else:
             # Build the kernel on the target device (see the classifier path).
-            X_dev = X_train_t.to(dev)
-            K_train, kernel_state = self._compute_K_train(X_dev)
+            K_train, kernel_state = self._compute_K_train(X_train_t.to(dev))
             self.X_fit_ = X_np
             self.kernel_state_ = kernel_state
         if K_train is not None:
             K_train = K_train.to(dev)
-        rebuild_kmat = None
-        if K_train is not None:
-            rebuild_kmat = self._kernel_rebuilder(
-                None if self.kernel == "precomputed" else X_dev, X_np, dev
-            )
 
         backend = self._make_backend(
             K_train=K_train,
@@ -1437,10 +1321,8 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
             ulam_backend=ulam_backend,
             foldid_backend=foldid_backend,
             device=dev,
-            rebuild_kmat=rebuild_kmat,
         )
         backend.fit()
-        self._record_eigh(backend)
 
         cv_loss_t = backend.cv(backend.pred, y_train_t.to(backend.pred.device))
         cv_loss = cv_loss_t.detach().cpu().numpy()
@@ -1532,7 +1414,5 @@ class TorchKMKQR(_TorchKMBaseKernelQuantileRegressor):
     """Kernel quantile regressor with integrated model selection.
 
     ``TorchKMKQR`` uses :class:`torchkm.cvkqr.cvkqr` when ``low_rank=False``
-    and :class:`torchkm.cvknyqr.cvknyqr` when ``low_rank=True``. In exact mode
-    ``eigh_backend`` chooses where the kernel eigendecomposition runs, as for
-    :class:`TorchKMSVC`, and ``eigh_backend_`` / ``eigh_seconds_`` report it.
+    and :class:`torchkm.cvknyqr.cvknyqr` when ``low_rank=True``.
     """

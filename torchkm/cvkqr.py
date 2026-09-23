@@ -2,7 +2,6 @@
 import torch
 
 from .functions import *
-from .linalg import check_eigh_backend, kernel_eigh
 
 
 class cvkqr:
@@ -71,27 +70,8 @@ class cvkqr:
     device : {'cuda', 'cpu'}, default=None
         Device to perform computations on. Defaults to 'cuda' if available, else 'cpu'.
 
-    eigh_backend : {'auto', 'cusolver', 'magma', 'cpu'}, default='auto'
-        Where the eigendecomposition of ``Kmat`` runs when it is on a CUDA
-        device. ``'cusolver'`` is fastest and peaks at about six ``n x n``
-        matrices; ``'magma'`` and ``'cpu'`` keep the solver workspace in host
-        memory and peak at about two. ``'auto'`` uses cuSOLVER and repeats
-        the factorisation with the low-memory backends if the device runs
-        out of memory. The eigenpairs, and so the solution path, are the same
-        to rounding error. See :mod:`torchkm.linalg`.
-
-    rebuild_kmat : callable, optional
-        Returns ``Kmat`` again (same values). When given, the eigendecomposition
-        overwrites ``Kmat``'s storage instead of factorising a copy, which
-        lowers the peak by one ``n x n`` matrix, and ``Kmat`` is rebuilt with
-        it afterwards. The estimators pass the kernel construction here.
-
     Attributes
     ----------
-    eigh_info : dict
-        After ``fit``: the eigendecomposition backend used (``'used'``), any
-        that failed first (``'failed'``) and its wall-clock ``'seconds'``.
-
     self.alpmat : ndarray or tensor
         Matrix of optimized alpha values after fitting the data, of shape (n_samples, nlam).
 
@@ -164,15 +144,10 @@ class cvkqr:
         KKTeps2=1e-3,
         device=None,
         kkt_scaled=False,
-        eigh_backend="auto",
-        rebuild_kmat=None,
     ):
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = torch.device(device)
-        self.eigh_backend = check_eigh_backend(eigh_backend)
-        self.eigh_info = None
-        self.rebuild_kmat = rebuild_kmat
 
         # --- Check Kmat ---
         if not isinstance(Kmat, torch.Tensor):
@@ -263,15 +238,7 @@ class cvkqr:
         # Precompute sum of Kmat along rows
         Ksum = torch.sum(Kmat, dim=1)
 
-        # One factorisation for the whole path; see torchkm.linalg for where it
-        # runs. Given rebuild_kmat, it overwrites Kmat's storage with the
-        # eigenvectors (one n x n copy less at the peak) and Kmat is rebuilt.
-        eigens, Umat, self.eigh_info = kernel_eigh(
-            Kmat, self.eigh_backend, return_info=True, rebuild=self.rebuild_kmat
-        )
-        if self.rebuild_kmat is not None:
-            Kmat = self.rebuild_kmat().double().to(self.device)
-            self.Kmat = Kmat
+        eigens, Umat = torch.linalg.eigh(Kmat)
         eigens = eigens.double().to(self.device)
         Umat = Umat.double().to(self.device)
         Kmat = Kmat.double().to(self.device)

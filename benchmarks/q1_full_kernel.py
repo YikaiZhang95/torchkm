@@ -45,26 +45,18 @@ Datasets
               data are redrawn for every repeat (seed 52 + repeat); the test set
               is n/10 rows from the same mixture. Any sim_<n>x<p> works
 
-Methods (default: torchkm, torchkm_lowmem, cuml, falkon; keops and eigenpro
-are optional extra columns, selected with --methods)
+Methods (default: torchkm, cuml, falkon; keops and eigenpro are optional extra
+columns, selected with --methods)
   torchkm     TorchKMSVC, hinge loss: one eigendecomposition of the kernel,
               the whole lambda path and the exact CV formula; is_exact=0 (the
-              default), KKTeps from --kkt-eps, eigh_backend="auto" (cuSOLVER,
-              falling back to the low-memory eigendecomposition only when the
-              GPU runs out of memory). "Exceeded maximum delta iterations for
-              lambda i" in the log means the KKT test was still unmet after
-              --delta-len smoothing rounds for the i-th lambda of the path
-              (large to small): the last iterate is kept and the table's note
-              column shows the converged fraction. --delta-len 16 gives the
-              solver more rounds
-  torchkm_lowmem
-              the same fit with eigh_backend="magma": the eigendecomposition
-              keeps its workspace in host memory (host LAPACK when PyTorch has
-              no MAGMA). Same eigenpairs, so the same model; about a third of
-              the GPU memory at several times the factorisation time. The note
-              column gives each row's factorisation seconds
+              default), KKTeps from --kkt-eps. "Exceeded maximum delta
+              iterations for lambda i" in the log means the KKT test was still
+              unmet after --delta-len smoothing rounds for the i-th lambda of
+              the path (small to large): the last iterate is kept and the
+              table's note column shows the converged fraction. --delta-len 16
+              gives the solver more rounds
   cuml        cuml.svm.SVC, hinge loss, SMO on the full kernel: one fit per
-              (C, fold), folds x 50 + 1 fits (501 at 10 folds)
+              (C, fold), 5 x 50 + 1 fits
   falkon      falkon.Falkon, squared loss, M = n centres (every training row,
               so no Nystrom approximation), preconditioned conjugate gradient:
               one fit per (lambda, fold)
@@ -104,7 +96,6 @@ Run (re-running with the same --out resumes; finished cells are skipped):
 from __future__ import annotations
 
 import argparse
-import functools
 import json
 import math
 import os
@@ -146,8 +137,8 @@ DATASETS = [
     "sim_20000x100",
     "sim_20000x1000",
 ]
-METHODS = ["torchkm", "torchkm_lowmem", "cuml", "falkon", "keops", "eigenpro"]
-DEFAULT_METHODS = ["torchkm", "torchkm_lowmem", "cuml", "falkon"]
+METHODS = ["torchkm", "cuml", "falkon", "keops", "eigenpro"]
+DEFAULT_METHODS = ["torchkm", "cuml", "falkon"]
 
 
 def parse_sim(name: str) -> Optional[tuple]:
@@ -253,9 +244,8 @@ def sweep(fit_predict, data, foldid, grid, dev, args, params, label="lambda"):
 # ---------------------------------------------------------------------------
 
 
-def run_torchkm(data, sig, lams, foldid, dev, args, seed, eigh_backend="auto"):
+def run_torchkm(data, sig, lams, foldid, dev, args, seed):
     from torchkm.estimators import TorchKMSVC
-    from torchkm.linalg import kernel_eigh
 
     # The estimator takes C and forms lambda = 1/(2 n C) itself, n = training
     # rows. The path must run from large to small lambda (each solution warm-starts
@@ -275,11 +265,10 @@ def run_torchkm(data, sig, lams, foldid, dev, args, seed, eigh_backend="auto"):
         KKTeps=args.kkt_eps,
         delta_len=args.delta_len,
         is_exact=0,
-        eigh_backend=eigh_backend,
         random_state=seed,
     )
-    # start-up: CUDA context, cuBLAS handles, the eigensolver library's own
-    kernel_eigh(torch.eye(64, dtype=torch.float64, device=dev), eigh_backend)
+    # start-up: CUDA context, cuSOLVER/cuBLAS handles
+    torch.linalg.eigh(torch.eye(64, dtype=torch.float64, device=dev))
     sync(dev)
     with PeakMemory(dev) as pm:
         t0 = time.perf_counter()
@@ -300,13 +289,9 @@ def run_torchkm(data, sig, lams, foldid, dev, args, seed, eigh_backend="auto"):
         grid_completed=len(lams),
         grid_size=len(lams),
         converged_frac=None if conv is None else float(np.mean(conv)),
-        eigh_backend_used=clf.eigh_backend_,
-        eigh_seconds=clf.eigh_seconds_,
-        fit_timing=clf.fit_timing_,
         params=dict(
             loss="hinge",
             solver="eigendecomposition + lambda path + exact CV",
-            eigh_backend=eigh_backend,
             is_exact=0,
             tol=args.tol,
             max_iter=args.max_iter,
@@ -530,7 +515,6 @@ def run_eigenpro(data, sig, lams, foldid, dev, args, seed):  # lams unused: epoc
 
 RUN = dict(
     torchkm=run_torchkm,
-    torchkm_lowmem=functools.partial(run_torchkm, eigh_backend="magma"),
     cuml=run_cuml,
     falkon=run_falkon,
     keops=run_keops,
@@ -590,10 +574,6 @@ def write_markdown(doc: Dict[str, Any], path: str) -> str:
         f"(lambda in [{a['lam_min']:g}, {a['lam_max']:g}]; epochs 1..{a['grid_size']} for EigenPro), "
         f"{a['repeats']} repeats (seeds {a['seed']}..{a['seed'] + a['repeats'] - 1}).",
         "Time = CV sweep + final fit + test predictions. Memory = NVML peak of the process.",
-        "torchkm_lowmem = TorchKM with the eigendecomposition in MAGMA (workspace in host "
-        "memory): same model, less GPU memory. The TorchKM notes split the fit time into "
-        "the factorisation ('eigh', with its backend), the regularization path and the "
-        "exact CV.",
         "Cells are mean +- SE over repeats; 'selected' lists the chosen value per repeat.",
         "",
         "| dataset | n_train | n_test | p | method | test accuracy | time (s) | GPU memory | selected | note |",
@@ -629,24 +609,6 @@ def write_markdown(doc: Dict[str, Any], path: str) -> str:
         hits = sum(r.get("cg_maxiter_hits") or 0 for r in ok)
         if hits:
             notes.append(f"CG cap hit in {hits} solves")
-        eigh = [r for r in ok if r.get("eigh_seconds") is not None]
-        if eigh:
-            used = sorted({str(r.get("eigh_backend_used")) for r in eigh})
-            secs = mean_se([r["eigh_seconds"] for r in eigh])[0]
-            fallback = m == "torchkm" and any(
-                u not in ("cusolver", "lapack") for u in used
-            )
-            split = ""
-            timed = [r["fit_timing"] for r in eigh if r.get("fit_timing")]
-            if timed:
-                path_s = mean_se([t["path"] for t in timed])[0]
-                cv_s = mean_se([t["cv"] for t in timed])[0]
-                split = f", path {path_s:.0f} s, CV {cv_s:.0f} s"
-            notes.append(
-                f"eigh {'/'.join(used)} {secs:.0f} s"
-                + (" (cuSOLVER out of memory)" if fallback else "")
-                + split
-            )
         conv = [r["converged_frac"] for r in ok if r.get("converged_frac") is not None]
         if conv and min(conv) < 1:
             notes.append(
@@ -818,7 +780,7 @@ def main() -> None:
                 doc["records"].append(rec)
                 save_json(doc, args.out)
                 print(
-                    f"   {m:14s} r{r} {rec['status']:11s} acc={rec.get('accuracy', float('nan')):.4f} "
+                    f"   {m:9s} r{r} {rec['status']:11s} acc={rec.get('accuracy', float('nan')):.4f} "
                     f"t={rec.get('time_s', float('nan')):8.1f}s mem={fmt_bytes(rec.get('gpu_bytes'))}"
                     + (
                         f" {rec.get('selected_label')}={rec.get('selected'):.3g}"

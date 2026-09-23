@@ -2,7 +2,6 @@
 import torch
 
 from .functions import *
-from .linalg import check_eigh_backend, kernel_eigh
 
 
 class cvksqsvm:
@@ -20,13 +19,8 @@ class cvksqsvm:
         KKTeps=1e-3,
         KKTeps2=1e-3,
         device="cuda",
-        eigh_backend="auto",
-        rebuild_kmat=None,
     ):
         self.device = device
-        self.eigh_backend = check_eigh_backend(eigh_backend)
-        self.eigh_info = None
-        self.rebuild_kmat = rebuild_kmat
         self.Kmat = Kmat.double().to(self.device)
         self.y = y.double().to(self.device)
         # self.Kmat = None
@@ -75,15 +69,7 @@ class cvksqsvm:
         Ksum = torch.sum(Kmat, dim=1)
         # Kinv = torch.linalg.inv(Kmat)
 
-        # One factorisation for the whole path; see torchkm.linalg for where it
-        # runs. Given rebuild_kmat, it overwrites Kmat's storage with the
-        # eigenvectors (one n x n copy less at the peak) and Kmat is rebuilt.
-        eigens, Umat, self.eigh_info = kernel_eigh(
-            Kmat, self.eigh_backend, return_info=True, rebuild=self.rebuild_kmat
-        )
-        if self.rebuild_kmat is not None:
-            Kmat = self.rebuild_kmat().double().to(self.device)
-            self.Kmat = Kmat
+        eigens, Umat = torch.linalg.eigh(Kmat)
         eigens = eigens.double().to(self.device)
         Umat = Umat.double().to(self.device)
         Kmat = Kmat.double().to(self.device)

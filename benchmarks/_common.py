@@ -899,12 +899,6 @@ def add_common_args(ap: argparse.ArgumentParser, *, repeats: int = 1) -> None:
         action="store_true",
         help="TorchKM scale-aware KKT rule (n * sum(KKT^2) < KKTeps)",
     )
-    ap.add_argument(
-        "--eigh-backend",
-        default="auto",
-        choices=["auto", "cusolver", "magma", "cpu"],
-        help="where TorchKM's exact-mode eigendecomposition runs (see torchkm.linalg)",
-    )
     ap.add_argument("--out", default=None, help="write JSON results here")
     ap.add_argument(
         "--time-cap",

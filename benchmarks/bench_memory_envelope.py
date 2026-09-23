@@ -81,8 +81,6 @@ def make_estimator(name: str, Cs, args, dev, seed, *, low_rank: bool):
         common["KKTeps"] = float(args.kkt_eps)
     if getattr(args, "kkt_scaled", False):
         common["kkt_scaled"] = True
-    if not low_rank:
-        common["eigh_backend"] = getattr(args, "eigh_backend", "auto")
     if low_rank:
         common.update(
             low_rank=True, num_landmarks=int(args.landmarks), nys_k=int(args.rank)
@@ -107,11 +105,7 @@ def one_fit(name: str, n: int, args, dev, seed, *, low_rank: bool) -> Dict[str, 
         n=int(n),
         p=int(args.p),
         seed=int(seed),
-        predicted_exact_bytes=int(
-            exact_mode_memory_estimate(
-                n, nlam=len(Cs), backend=getattr(args, "eigh_backend", "auto")
-            )
-        ),
+        predicted_exact_bytes=int(exact_mode_memory_estimate(n, nlam=len(Cs))),
         params=(
             dict(num_landmarks=int(args.landmarks), nys_k=int(args.rank))
             if low_rank
@@ -131,8 +125,6 @@ def one_fit(name: str, n: int, args, dev, seed, *, low_rank: bool) -> Dict[str, 
         time_s=t.dt,
         memory=pm.result,
         torch_peak_bytes=est.peak_gpu_memory_bytes_,
-        eigh_backend_used=getattr(est, "eigh_backend_", None),
-        eigh_seconds=getattr(est, "eigh_seconds_", None),
     )
     peak = est.peak_gpu_memory_bytes_
     if peak is not None and n > 0:
