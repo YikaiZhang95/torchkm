@@ -302,6 +302,7 @@ def run_torchkm(data, sig, lams, foldid, dev, args, seed, eigh_backend="auto"):
         converged_frac=None if conv is None else float(np.mean(conv)),
         eigh_backend_used=clf.eigh_backend_,
         eigh_seconds=clf.eigh_seconds_,
+        fit_timing=clf.fit_timing_,
         params=dict(
             loss="hinge",
             solver="eigendecomposition + lambda path + exact CV",
@@ -590,8 +591,9 @@ def write_markdown(doc: Dict[str, Any], path: str) -> str:
         f"{a['repeats']} repeats (seeds {a['seed']}..{a['seed'] + a['repeats'] - 1}).",
         "Time = CV sweep + final fit + test predictions. Memory = NVML peak of the process.",
         "torchkm_lowmem = TorchKM with the eigendecomposition in MAGMA (workspace in host "
-        "memory): same model, less GPU memory; 'eigh' in the note = factorisation backend "
-        "and seconds.",
+        "memory): same model, less GPU memory. The TorchKM notes split the fit time into "
+        "the factorisation ('eigh', with its backend), the regularization path and the "
+        "exact CV.",
         "Cells are mean +- SE over repeats; 'selected' lists the chosen value per repeat.",
         "",
         "| dataset | n_train | n_test | p | method | test accuracy | time (s) | GPU memory | selected | note |",
@@ -634,9 +636,16 @@ def write_markdown(doc: Dict[str, Any], path: str) -> str:
             fallback = m == "torchkm" and any(
                 u not in ("cusolver", "lapack") for u in used
             )
+            split = ""
+            timed = [r["fit_timing"] for r in eigh if r.get("fit_timing")]
+            if timed:
+                path_s = mean_se([t["path"] for t in timed])[0]
+                cv_s = mean_se([t["cv"] for t in timed])[0]
+                split = f", path {path_s:.0f} s, CV {cv_s:.0f} s"
             notes.append(
                 f"eigh {'/'.join(used)} {secs:.0f} s"
                 + (" (cuSOLVER out of memory)" if fallback else "")
+                + split
             )
         conv = [r["converged_frac"] for r in ok if r.get("converged_frac") is not None]
         if conv and min(conv) < 1:

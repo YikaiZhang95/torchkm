@@ -80,6 +80,12 @@ class cvkqr:
         out of memory. The eigenpairs, and so the solution path, are the same
         to rounding error. See :mod:`torchkm.linalg`.
 
+    rebuild_kmat : callable, optional
+        Returns ``Kmat`` again (same values). When given, the eigendecomposition
+        overwrites ``Kmat``'s storage instead of factorising a copy, which
+        lowers the peak by one ``n x n`` matrix, and ``Kmat`` is rebuilt with
+        it afterwards. The estimators pass the kernel construction here.
+
     Attributes
     ----------
     eigh_info : dict
@@ -159,12 +165,14 @@ class cvkqr:
         device=None,
         kkt_scaled=False,
         eigh_backend="auto",
+        rebuild_kmat=None,
     ):
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = torch.device(device)
         self.eigh_backend = check_eigh_backend(eigh_backend)
         self.eigh_info = None
+        self.rebuild_kmat = rebuild_kmat
 
         # --- Check Kmat ---
         if not isinstance(Kmat, torch.Tensor):
@@ -255,10 +263,15 @@ class cvkqr:
         # Precompute sum of Kmat along rows
         Ksum = torch.sum(Kmat, dim=1)
 
-        # One factorisation for the whole path; see torchkm.linalg for where it runs.
+        # One factorisation for the whole path; see torchkm.linalg for where it
+        # runs. Given rebuild_kmat, it overwrites Kmat's storage with the
+        # eigenvectors (one n x n copy less at the peak) and Kmat is rebuilt.
         eigens, Umat, self.eigh_info = kernel_eigh(
-            Kmat, self.eigh_backend, return_info=True
+            Kmat, self.eigh_backend, return_info=True, rebuild=self.rebuild_kmat
         )
+        if self.rebuild_kmat is not None:
+            Kmat = self.rebuild_kmat().double().to(self.device)
+            self.Kmat = Kmat
         eigens = eigens.double().to(self.device)
         Umat = Umat.double().to(self.device)
         Kmat = Kmat.double().to(self.device)

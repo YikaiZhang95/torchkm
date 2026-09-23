@@ -30,7 +30,10 @@ import torch
 #:
 #: * ``"cusolver"`` 6.1: the kernel, cuSOLVER's working copy and its
 #:   workspace. The driver (NVML) reports 6.4 to 6.8 for the whole process,
-#:   which adds the CUDA context and the allocator's cached blocks.
+#:   which adds the CUDA context and the allocator's cached blocks. The
+#:   estimators now factorise the kernel in place (no working copy), which is
+#:   expected to lower this by one; the constant stays at the measured value
+#:   until the GPU envelope sweep confirms the new one.
 #: * ``"magma"`` 2.0: the kernel and the eigenvectors. MAGMA allocates part of
 #:   its device workspace itself, outside PyTorch, so the driver's figure is
 #:   higher; it is recorded by ``benchmarks/q1_full_kernel.py``.

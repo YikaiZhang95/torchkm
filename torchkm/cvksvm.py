@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: MIT
+import time
 import warnings
 
 import torch
@@ -81,11 +82,24 @@ class cvksvm:
         out of memory. The eigenpairs, and so the solution path, are the same
         to rounding error. See :mod:`torchkm.linalg`.
 
+    rebuild_kmat : callable, optional
+        Returns ``Kmat`` again (same values). When given, the eigendecomposition
+        overwrites ``Kmat``'s storage instead of factorising a copy, which
+        lowers the peak by one ``n x n`` matrix, and ``Kmat`` is rebuilt with
+        it afterwards. The estimators pass the kernel construction here.
+
     Attributes
     ----------
     eigh_info : dict
         After ``fit``: the eigendecomposition backend used (``'used'``), any
         that failed first (``'failed'``) and its wall-clock ``'seconds'``.
+
+    timing : dict
+        After ``fit``: wall-clock seconds of the whole fit (``'total'``) and
+        of its parts, the eigendecomposition (``'eigh'``), rebuilding the
+        kernel after an in-place factorisation (``'rebuild'``), the exact
+        cross-validation (``'cv'``) and the regularization path with setup
+        (``'path'``).
 
     self.alpmat : ndarray or tensor
         Matrix of optimized alpha values after fitting the data, of shape (n_samples, nlam).
@@ -166,12 +180,14 @@ class cvksvm:
         device=None,
         kkt_scaled=False,
         eigh_backend="auto",
+        rebuild_kmat=None,
     ):
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = torch.device(device)
         self.eigh_backend = check_eigh_backend(eigh_backend)
         self.eigh_info = None
+        self.rebuild_kmat = rebuild_kmat
 
         # --- Check Kmat ---
         if not isinstance(Kmat, torch.Tensor):
@@ -255,7 +271,14 @@ class cvksvm:
         )
         self.jerr = 0
 
+    def _sync(self):
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
+
     def fit(self):
+        self._sync()
+        t_fit = time.perf_counter()
+        cv_seconds = 0.0
         nobs = self.nobs
         nlam = self.nlam
         y = self.y
@@ -278,10 +301,19 @@ class cvksvm:
         Ksum = torch.sum(Kmat, dim=1)
         # Kinv = torch.linalg.inv(Kmat)
 
-        # One factorisation for the whole path; see torchkm.linalg for where it runs.
+        # One factorisation for the whole path; see torchkm.linalg for where it
+        # runs. Given rebuild_kmat, it overwrites Kmat's storage with the
+        # eigenvectors (one n x n copy less at the peak) and Kmat is rebuilt.
         eigens, Umat, self.eigh_info = kernel_eigh(
-            Kmat, self.eigh_backend, return_info=True
+            Kmat, self.eigh_backend, return_info=True, rebuild=self.rebuild_kmat
         )
+        rebuild_seconds = 0.0
+        if self.rebuild_kmat is not None:
+            t_rebuild = time.perf_counter()
+            Kmat = self.rebuild_kmat().double().to(self.device)
+            self.Kmat = Kmat
+            self._sync()
+            rebuild_seconds = time.perf_counter() - t_rebuild
         eigens = eigens.double().to(self.device)
         Umat = Umat.double().to(self.device)
         Kmat = Kmat.double().to(self.device)
@@ -561,6 +593,8 @@ class cvksvm:
             # print(f'Single fitting:{time.time() - start}')
 
             ######### cross-validation
+            self._sync()
+            t_cv = time.perf_counter()
             if self.is_exact == 0:
                 pred[:, l] = self._cv_batched_lambda(
                     Kmat=Kmat,
@@ -586,6 +620,8 @@ class cvksvm:
                     one=one,
                 )
                 self.anlam = l
+                self._sync()
+                cv_seconds += time.perf_counter() - t_cv
                 continue
             for nf in range(nfolds):
                 # start = time.time()
@@ -857,6 +893,8 @@ class cvksvm:
                 # print(pred[loo_ind, l][:10])
                 # print(f'{nf}-fold: {time.time() - start}')
             self.anlam = l
+            self._sync()
+            cv_seconds += time.perf_counter() - t_cv
 
         self.alpmat = alpmat
         self.npass = npass
@@ -864,6 +902,19 @@ class cvksvm:
         self.converged = converged
         self.jerr = jerr
         self.pred = pred
+        self._sync()
+        total = time.perf_counter() - t_fit
+        eigh_seconds = float(self.eigh_info["seconds"])
+        # Where the time went: the one factorisation, rebuilding the kernel
+        # after an in-place factorisation, the exact CV, and the rest (the
+        # regularization path itself plus setup).
+        self.timing = {
+            "total": total,
+            "eigh": eigh_seconds,
+            "rebuild": rebuild_seconds,
+            "cv": cv_seconds,
+            "path": total - eigh_seconds - rebuild_seconds - cv_seconds,
+        }
         self._warn_not_converged()
 
     def _warn_not_converged(self):

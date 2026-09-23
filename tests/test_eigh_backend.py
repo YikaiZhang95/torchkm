@@ -81,7 +81,7 @@ def test_attempt_order(monkeypatch):
 def _fake_backends(monkeypatch, failures):
     """Replace the single-backend call: names in ``failures`` raise that error."""
 
-    def fake(K, name):
+    def fake(K, name, overwrite=False):
         if name in failures:
             raise failures[name]
         return torch.linalg.eigh(K)
@@ -238,3 +238,127 @@ def test_gpu_backends_agree(backend):
     assert info["used"] == expected
     # the process-wide library preference is restored
     assert torch.backends.cuda.preferred_linalg_library() is not None
+
+
+# --------------------------------------------------------------------------
+# In-place factorisation with a kernel rebuild
+# --------------------------------------------------------------------------
+
+
+def test_in_place_factorisation_reuses_the_kernel_storage():
+    K = _spd(40)
+    K_ref = K.clone()
+    ptr = K.data_ptr()
+    w, U, info = linalg.kernel_eigh(K, return_info=True, rebuild=K_ref.clone)
+    w_ref, U_ref = torch.linalg.eigh(K_ref)
+    assert U.data_ptr() == ptr  # the eigenvectors live where K was
+    assert info["in_place"] is True
+    torch.testing.assert_close(w, w_ref, rtol=0, atol=0)
+    torch.testing.assert_close(U, U_ref, rtol=0, atol=0)
+    assert U.stride() == U_ref.stride()  # same column-major layout
+
+
+def test_failed_in_place_attempt_restores_the_kernel(monkeypatch):
+    K = _spd(30)
+    K_ref = K.clone()
+    seen = []
+
+    def fake(K_arg, name, overwrite=False):
+        seen.append((name, overwrite, torch.equal(K_arg, K_ref)))
+        if name == "cusolver":
+            K_arg.fill_(0.0)  # a failure that has already written into K
+            raise torch.cuda.OutOfMemoryError("oom")
+        return torch.linalg.eigh(K_arg)
+
+    monkeypatch.setattr(linalg, "_eigh_once", fake)
+    (w, _), used, failed = linalg._run_attempts(
+        K, ["cusolver", "magma"], rebuild=K_ref.clone
+    )
+    assert used == "magma" and failed == ["cusolver"]
+    # the second attempt saw the original kernel again, and factorised in place
+    assert seen == [("cusolver", True, True), ("magma", True, True)]
+    torch.testing.assert_close(w, torch.linalg.eigh(K_ref)[0])
+
+
+def test_solver_rebuilds_its_kernel_after_the_in_place_factorisation():
+    from torchkm.cvksvm import cvksvm
+
+    X, y = _binary(n=60, p=4)
+    Xt = torch.as_tensor(X, dtype=torch.double)
+    K_ref = functions.rbf_kernel(Xt, 0.5)
+
+    def rebuild():
+        return functions.rbf_kernel(Xt, 0.5)
+
+    common = dict(
+        y=torch.as_tensor(y, dtype=torch.double),
+        nlam=3,
+        ulam=torch.logspace(-1, -3, 3, dtype=torch.double),
+        foldid=torch.arange(len(y)) % 3 + 1,  # the same folds for both fits
+        nfolds=3,
+        maxit=200,
+        device="cpu",
+    )
+    a = cvksvm(Kmat=rebuild(), rebuild_kmat=rebuild, **common)
+    a.fit()
+    b = cvksvm(Kmat=rebuild(), **common)
+    b.fit()
+    torch.testing.assert_close(a.Kmat, K_ref, rtol=0, atol=0)  # predict() needs it
+    torch.testing.assert_close(a.alpmat, b.alpmat, rtol=0, atol=0)
+    torch.testing.assert_close(a.pred, b.pred, rtol=0, atol=0)
+    assert a.eigh_info["in_place"] and not b.eigh_info["in_place"]
+    assert set(a.timing) == {"total", "eigh", "rebuild", "cv", "path"}
+    assert all(v >= 0.0 for v in a.timing.values())
+
+
+@pytest.mark.parametrize("kernel", ["rbf", "linear", "poly"])
+def test_estimators_give_identical_fits_with_the_in_place_factorisation(
+    kernel, monkeypatch
+):
+    import torchkm.cvkqr
+    import torchkm.cvksvm
+
+    X, y = _binary(n=100)
+    Xr, yr = make_regression(n_samples=80, n_features=4, noise=0.4, random_state=0)
+    kw = dict(kernel=kernel, nC=4, cv=3, device="cpu", max_iter=300)
+    if kernel == "rbf":
+        kw["rbf_sigma"] = 0.2
+    in_place = (
+        TorchKMSVC(**kw).fit(X, y),
+        TorchKMKQR(tau=0.5, **kw).fit(Xr, yr),
+    )
+    copying = linalg.kernel_eigh
+
+    def without_rebuild(K, backend="auto", *, return_info=False, rebuild=None):
+        return copying(K, backend, return_info=return_info)
+
+    monkeypatch.setattr(torchkm.cvksvm, "kernel_eigh", without_rebuild)
+    monkeypatch.setattr(torchkm.cvkqr, "kernel_eigh", without_rebuild)
+    copied = (
+        TorchKMSVC(**kw).fit(X, y),
+        TorchKMKQR(tau=0.5, **kw).fit(Xr, yr),
+    )
+    np.testing.assert_array_equal(
+        in_place[0].decision_function(X), copied[0].decision_function(X)
+    )
+    np.testing.assert_array_equal(in_place[1].predict(Xr), copied[1].predict(Xr))
+    assert in_place[0].fit_timing_["total"] >= in_place[0].fit_timing_["eigh"]
+
+
+def test_rebuild_reuses_the_estimated_bandwidth():
+    """Without rbf_sigma the rebuild must not draw a new sigest bandwidth."""
+    X, y = _binary(n=100)
+    clf = TorchKMSVC(nC=3, cv=3, device="cpu", max_iter=200)
+    torch.manual_seed(5)
+    clf.fit(X, y)
+    sigma = clf.kernel_state_["sigma"]
+    rebuild = clf._kernel_rebuilder(
+        torch.as_tensor(np.asarray(X, dtype=np.float64)), X, "cpu"
+    )
+    torch.manual_seed(99)  # a different global RNG state must not matter
+    torch.testing.assert_close(
+        rebuild(),
+        functions.rbf_kernel(torch.as_tensor(np.asarray(X, dtype=np.float64)), sigma),
+        rtol=0,
+        atol=0,
+    )

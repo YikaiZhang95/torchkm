@@ -22,10 +22,12 @@ class cvkhuber:
         KKTeps2=1e-3,
         device="cuda",
         eigh_backend="auto",
+        rebuild_kmat=None,
     ):
         self.device = device
         self.eigh_backend = check_eigh_backend(eigh_backend)
         self.eigh_info = None
+        self.rebuild_kmat = rebuild_kmat
         self.delta = delta
         self.Kmat = Kmat.double().to(self.device)
         self.y = y.double().to(self.device)
@@ -79,10 +81,15 @@ class cvkhuber:
         Ksum = torch.sum(Kmat, dim=1)
         # Kinv = torch.linalg.inv(Kmat)
 
-        # One factorisation for the whole path; see torchkm.linalg for where it runs.
+        # One factorisation for the whole path; see torchkm.linalg for where it
+        # runs. Given rebuild_kmat, it overwrites Kmat's storage with the
+        # eigenvectors (one n x n copy less at the peak) and Kmat is rebuilt.
         eigens, Umat, self.eigh_info = kernel_eigh(
-            Kmat, self.eigh_backend, return_info=True
+            Kmat, self.eigh_backend, return_info=True, rebuild=self.rebuild_kmat
         )
+        if self.rebuild_kmat is not None:
+            Kmat = self.rebuild_kmat().double().to(self.device)
+            self.Kmat = Kmat
         eigens = eigens.double().to(self.device)
         Umat = Umat.double().to(self.device)
         Kmat = Kmat.double().to(self.device)

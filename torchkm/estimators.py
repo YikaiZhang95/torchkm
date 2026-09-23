@@ -217,6 +217,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             "peak_gpu_memory_bytes_",
             "eigh_backend_",
             "eigh_seconds_",
+            "fit_timing_",
         )
         for attr in fitted_attrs:
             if hasattr(self, attr):
@@ -358,7 +359,8 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             else:
                 # Build the kernel on the target device: no host-side n x n
                 # copy and no host-to-device transfer of the full matrix.
-                K_train, kernel_state = self._compute_K_train(X_train_t.to(dev))
+                X_dev = X_train_t.to(dev)
+                K_train, kernel_state = self._compute_K_train(X_dev)
                 self.X_fit_ = X_np
                 self.kernel_state_ = kernel_state
 
@@ -373,6 +375,13 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             nlam=nlam,
             ulam_backend=ulam_backend,
             foldid_backend=foldid_backend,
+            rebuild_kmat=(
+                None
+                if self.low_rank
+                else self._kernel_rebuilder(
+                    None if self.kernel == "precomputed" else X_dev, X_np, dev
+                )
+            ),
         )
         backend.fit()
 
@@ -742,11 +751,35 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         if int(self.nys_k) < 1:
             raise ValueError("nys_k must be positive.")
 
+    def _kernel_rebuilder(self, X_dev: Optional[torch.Tensor], X_np, dev: str):
+        """Callable that rebuilds the training kernel with the fitted parameters.
+
+        Lets the exact solvers factorise the kernel in place (one ``n x n``
+        copy less at the peak) and recover it afterwards. It reuses
+        ``kernel_state_`` so the bandwidth estimate is not drawn again.
+        """
+        if self.kernel == "precomputed":
+            return lambda: torch.as_tensor(X_np, dtype=torch.double).to(dev)
+        state = dict(self.kernel_state_)
+
+        def rebuild() -> torch.Tensor:
+            if self.kernel == "rbf":
+                return rbf_kernel_train(X_dev, float(state["sigma"]))
+            if self.kernel == "linear":
+                return X_dev @ X_dev.T
+            return (
+                self.poly_gamma * (X_dev @ X_dev.T) + self.poly_coef0
+            ) ** self.poly_degree
+
+        return rebuild
+
     def _record_eigh(self, backend) -> None:
         """Expose where the kernel eigendecomposition ran and how long it took."""
         info = getattr(backend, "eigh_info", None) or {}
         self.eigh_backend_ = info.get("used")
         self.eigh_seconds_ = info.get("seconds")
+        timing = getattr(backend, "timing", None)
+        self.fit_timing_ = dict(timing) if timing else None
 
     def _make_backend(
         self,
@@ -759,6 +792,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         nlam: int,
         ulam_backend: torch.Tensor,
         foldid_backend: torch.Tensor,
+        rebuild_kmat=None,
     ):
         if low_rank:
             backend_cls = {
@@ -807,6 +841,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 KKTeps=float(self.KKTeps),
                 kkt_scaled=bool(self.kkt_scaled),
                 eigh_backend=self.eigh_backend,
+                rebuild_kmat=rebuild_kmat,
                 device=dev,
             )
 
@@ -823,6 +858,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 gamma=float(self.solver_gamma),
                 KKTeps=float(self.KKTeps),
                 eigh_backend=self.eigh_backend,
+                rebuild_kmat=rebuild_kmat,
                 device=dev,
             )
 
@@ -839,6 +875,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 gamma=float(self.solver_gamma),
                 KKTeps=float(self.KKTeps),
                 eigh_backend=self.eigh_backend,
+                rebuild_kmat=rebuild_kmat,
                 device=dev,
             )
 
@@ -973,6 +1010,11 @@ class TorchKMSVC(_TorchKMBaseBinaryClassifier):
     eigh_seconds_ : float or None
         Wall-clock seconds of that eigendecomposition, including any attempt
         that ran out of memory first.
+    fit_timing_ : dict or None
+        Seconds spent in the parts of an exact-mode SVM fit: ``"eigh"``,
+        ``"rebuild"`` (the kernel after the in-place factorisation), ``"cv"``,
+        ``"path"`` and ``"total"``. ``None`` for backends that do not time
+        themselves.
 
     Notes
     -----
@@ -1151,6 +1193,7 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
             "peak_gpu_memory_bytes_",
             "eigh_backend_",
             "eigh_seconds_",
+            "fit_timing_",
         )
         for attr in fitted_attrs:
             if hasattr(self, attr):
@@ -1196,11 +1239,35 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
         if int(self.nys_k) < 1:
             raise ValueError("nys_k must be positive.")
 
+    def _kernel_rebuilder(self, X_dev: Optional[torch.Tensor], X_np, dev: str):
+        """Callable that rebuilds the training kernel with the fitted parameters.
+
+        Lets the exact solvers factorise the kernel in place (one ``n x n``
+        copy less at the peak) and recover it afterwards. It reuses
+        ``kernel_state_`` so the bandwidth estimate is not drawn again.
+        """
+        if self.kernel == "precomputed":
+            return lambda: torch.as_tensor(X_np, dtype=torch.double).to(dev)
+        state = dict(self.kernel_state_)
+
+        def rebuild() -> torch.Tensor:
+            if self.kernel == "rbf":
+                return rbf_kernel_train(X_dev, float(state["sigma"]))
+            if self.kernel == "linear":
+                return X_dev @ X_dev.T
+            return (
+                self.poly_gamma * (X_dev @ X_dev.T) + self.poly_coef0
+            ) ** self.poly_degree
+
+        return rebuild
+
     def _record_eigh(self, backend) -> None:
         """Expose where the kernel eigendecomposition ran and how long it took."""
         info = getattr(backend, "eigh_info", None) or {}
         self.eigh_backend_ = info.get("used")
         self.eigh_seconds_ = info.get("seconds")
+        timing = getattr(backend, "timing", None)
+        self.fit_timing_ = dict(timing) if timing else None
 
     def _make_backend(
         self,
@@ -1212,6 +1279,7 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
         ulam_backend: torch.Tensor,
         foldid_backend: torch.Tensor,
         device: str,
+        rebuild_kmat=None,
     ):
         if self.low_rank:
             return cvknyqr(
@@ -1257,6 +1325,7 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
             KKTeps2=float(self.KKTeps2),
             kkt_scaled=bool(self.kkt_scaled),
             eigh_backend=self.eigh_backend,
+            rebuild_kmat=rebuild_kmat,
             device=device,
         )
 
@@ -1348,11 +1417,17 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
             self.kernel_state_ = {}
         else:
             # Build the kernel on the target device (see the classifier path).
-            K_train, kernel_state = self._compute_K_train(X_train_t.to(dev))
+            X_dev = X_train_t.to(dev)
+            K_train, kernel_state = self._compute_K_train(X_dev)
             self.X_fit_ = X_np
             self.kernel_state_ = kernel_state
         if K_train is not None:
             K_train = K_train.to(dev)
+        rebuild_kmat = None
+        if K_train is not None:
+            rebuild_kmat = self._kernel_rebuilder(
+                None if self.kernel == "precomputed" else X_dev, X_np, dev
+            )
 
         backend = self._make_backend(
             K_train=K_train,
@@ -1362,6 +1437,7 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
             ulam_backend=ulam_backend,
             foldid_backend=foldid_backend,
             device=dev,
+            rebuild_kmat=rebuild_kmat,
         )
         backend.fit()
         self._record_eigh(backend)

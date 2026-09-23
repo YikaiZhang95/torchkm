@@ -35,12 +35,20 @@ context and cached blocks. The three backends return the same eigenpairs to
 rounding error (largest eigenvalue difference 7e-15 in that test), so the
 choice changes time and memory, never the fitted model.
 
+`torch.linalg.eigh` factorises a working copy of the kernel. The estimators
+instead let the eigensolver overwrite the kernel with its eigenvectors and
+rebuild the kernel afterwards, one matrix product. That takes one copy off the
+peak at no cost in speed, and the fit is bitwise identical; the cuSOLVER
+figure above was measured before this change and is expected to drop to
+about 5.1.
+
 The default, `eigh_backend="auto"`, runs cuSOLVER and, when the device runs
 out of memory, repeats the factorisation with MAGMA and then on the host. A
 problem that fits keeps the fast path; a problem that does not fit it is no
 longer an out-of-memory error, at several times the factorisation time.
 `eigh_backend_` and `eigh_seconds_` on the fitted estimator say which backend
-ran and how long it took.
+ran and how long it took; for the SVM, `fit_timing_` splits the whole fit into
+the factorisation, the regularization path and the exact cross-validation.
 
 ```python
 clf = TorchKMSVC(kernel="rbf", cv=10, device="cuda", eigh_backend="magma").fit(X, y)

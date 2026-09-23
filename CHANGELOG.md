@@ -15,6 +15,15 @@ All notable changes to TorchKM are documented in this file.
   of failing near 30,000. The eigenpairs, and the fitted model, do not depend on the
   choice. Fitted estimators report `eigh_backend_` and `eigh_seconds_`;
   `torchkm.linalg.kernel_eigh` is the shared helper.
+- The exact-mode estimators factorise the kernel in place (the eigensolver
+  overwrites the kernel with its eigenvectors) and rebuild the kernel
+  afterwards, one matrix product, instead of factorising a working copy: one
+  n x n matrix less at the peak, bitwise-identical fits. The low-level solvers
+  take the rebuild as `rebuild_kmat`; `kernel_eigh(..., rebuild=...)` does the
+  in-place factorisation and restores the kernel before retrying on failure.
+- `cvksvm.timing` and `TorchKMSVC.fit_timing_`: seconds spent in the
+  factorisation, the kernel rebuild, the regularization path and the exact
+  cross-validation.
 - `torchkm.memory` models the peak per backend (`EXACT_MODE_COPIES_BY_BACKEND`,
   measured on an L40S); `exact_mode_memory_estimate` and `max_exact_n` take
   `backend`, and `EXACT_MODE_COPIES` is now the measured cuSOLVER value, 6.1

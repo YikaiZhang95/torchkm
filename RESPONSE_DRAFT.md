@@ -127,7 +127,10 @@ package now exposes this as `eigh_backend` ("cusolver", "magma", "cpu") and
 by default falls back to it when cuSOLVER runs out of memory, which is
 predicted to raise the 48 GB ceiling to about n = 52,000 at several times the
 factorisation cost; the fitted model does not depend on the choice. The revision reports both
-settings in the exact-mode table.
+settings in the exact-mode table. The estimators also factorise the kernel in
+place and rebuild it afterwards, which removes cuSOLVER's working copy from the
+peak (expected c of about 5.1 instead of 6.1, same speed, bitwise-identical
+fits); the rerun on the L40S measures it.
 
 Package changes on this branch make the envelope explicit: one of the n×n
 copies is no longer materialised (it was only used by the projection step,
