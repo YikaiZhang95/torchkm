@@ -112,6 +112,7 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _common import (  # noqa: E402
     PeakMemory,
+    classification_metrics,
     _jsonable,
     env_snapshot,
     fmt_bytes,
@@ -198,10 +199,16 @@ def cv_select(fit_predict, X, y, foldid, grid, time_cap, t0) -> List[float]:
 
 
 def result(pm: PeakMemory, dt: float, pred, yte, **fields) -> Dict[str, Any]:
+    """A finished cell: test accuracy, balanced accuracy and AUC from the decision
+    scores, wall-clock time and peak memory."""
     mem = pm.result
+    metrics = classification_metrics(yte, pred)
     return dict(
         status="ok",
-        accuracy=float(np.mean(sign_pm1(pred) == yte)),
+        accuracy=metrics["accuracy"],
+        balanced_accuracy=metrics["balanced_accuracy"],
+        auc=metrics["auc"],
+        test_pos_frac=metrics["test_pos_frac"],
         time_s=float(dt),
         gpu_bytes=mem.get("nvml_process_peak") or mem.get("nvml_device_peak"),
         torch_bytes=mem.get("torch_max_allocated"),
@@ -468,7 +475,8 @@ def run_eigenpro(data, sig, lams, foldid, dev, args, seed):  # lams unused: epoc
     def predict(model, X):
         def block(Z):
             z = torch.from_numpy(np.ascontiguousarray(Z)).to(dev)
-            return (model.forward(z).argmax(1) * 2 - 1).cpu().numpy()
+            out = model.forward(z)  # score of class +1 minus score of class -1
+            return (out[:, 1] - out[:, 0]).cpu().numpy()
 
         return in_chunks(block, X)
 
@@ -605,23 +613,36 @@ def write_markdown(doc: Dict[str, Any], path: str) -> str:
         "Cells are mean +- SE over repeats; 'selected' lists the chosen value per repeat "
         "(median and range beyond five repeats).",
         "",
-        "| dataset | n_train | n_test | p | method | runs | test accuracy | time (s) | GPU memory "
-        "| selected | note |",
-        "|---|---:|---:|---:|---|---:|---|---|---|---|---|",
+        "| dataset | n_train | n_test | p | positive | method | runs | test accuracy "
+        "| balanced accuracy | AUC | time (s) | GPU memory | selected | note |",
+        "|---|---:|---:|---:|---:|---|---:|---|---|---|---|---|---|---|",
     ]
     groups: Dict[tuple, List[Dict[str, Any]]] = {}
     for r in doc["records"]:
         groups.setdefault((r["dataset"], r["method"]), []).append(r)
     for (ds, m), recs in groups.items():
         ok = [r for r in recs if r["status"] in ("ok", "capped")]
-        head = f"| {ds} | {recs[0]['n_train']:,} | {recs[0]['n_test']:,} | {recs[0]['p']} | {m} |"
+        prior = recs[0].get("train_pos_frac")
+        prior_s = "-" if prior is None else f"{prior:.1%}"
+        head = (
+            f"| {ds} | {recs[0]['n_train']:,} | {recs[0]['n_test']:,} | {recs[0]['p']} "
+            f"| {prior_s} | {m} |"
+        )
         if not ok:
             note = "; ".join(
                 sorted({r.get("note") or r.get("error") or r["status"] for r in recs})
             )
-            lines.append(f"{head} 0 | - | - | - | - | {note[:120]} |")
+            lines.append(f"{head} 0 | - | - | - | - | - | - | {note[:120]} |")
             continue
         acc = mean_se([r["accuracy"] for r in ok])
+
+        def pm_se(key: str) -> str:
+            vals = [r.get(key) for r in ok if r.get(key) is not None]
+            if not vals:
+                return "-"
+            m_, se_ = mean_se(vals)
+            return f"{m_:.4f} +- {se_:.4f}"
+
         t = mean_se([r["time_s"] for r in ok])
         mem = mean_se([r["gpu_bytes"] for r in ok])
         label = ok[0]["selected_label"]
@@ -659,7 +680,8 @@ def write_markdown(doc: Dict[str, Any], path: str) -> str:
                 "selected at grid edge (" + ", ".join(edge) + "): widen the range"
             )
         lines.append(
-            f"{head} {len(ok)} | {acc[0]:.4f} +- {acc[1]:.4f} | {t[0]:.1f} +- {t[1]:.1f} | "
+            f"{head} {len(ok)} | {acc[0]:.4f} +- {acc[1]:.4f} | {pm_se('balanced_accuracy')} "
+            f"| {pm_se('auc')} | {t[0]:.1f} +- {t[1]:.1f} | "
             f"{fmt_bytes(mem[0])} | {label} = {sel} | {'; '.join(notes)} |"
         )
     text = "\n".join(lines) + "\n"
@@ -804,6 +826,7 @@ def main() -> None:
                     dataset=ds,
                     n_train=data["n_train"],
                     n_test=data["n_test"],
+                    train_pos_frac=data["pos_frac"],
                     p=data["p"],
                     repeat=r,
                     seed=seed,
