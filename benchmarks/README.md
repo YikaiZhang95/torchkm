@@ -64,6 +64,27 @@ run; re-running with the same `--out` resumes; `--smoke` checks the script on
 a CPU in about a minute. The docstring at the top of the script states the
 protocol and what each method solves.
 
+## Q2 in one script: kernel quantile regression and DWD
+
+`q2_kqr_dwd.py` gives the letter one KQR and one DWD benchmark. KQR:
+`TorchKMKQR` against scikit-learn's linear `QuantileRegressor` and its
+gradient-boosted quantile regressor on cpusmall and cadata, τ = 0.1, 0.5 and
+0.9, reporting test pinball loss and coverage. DWD: `TorchKMDWD` against
+`KernGDWD` from the pip package `dwd` on gisette and MNIST 3-vs-8, reporting
+accuracy, balanced accuracy and AUC. Both use the same RBF bandwidth, the same
+10 folds, 50 values of λ from 1e-1 down to 1e-7, float64, and three seeds, and
+report time and memory. The dwd package's sweep stops after `--time-cap`
+seconds (2 h) per dataset and seed.
+
+```bash
+pip install dwd
+python benchmarks/q2_kqr_dwd.py --data-dir ~/libsvm_data --out revision_results/q2.json
+```
+
+It needs `cpusmall`, `cadata`, `gisette_scale`, `gisette_scale.t`,
+`mnist.scale` and `mnist.scale.t` in `--data-dir` (`.bz2` is fine;
+`download_data.sh` fetches them). Resume and `--smoke` work as for Q1.
+
 ## Paper-scale runs
 
 See the reproduction page for the full command list. In short: LIBSVM files in

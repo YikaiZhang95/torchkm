@@ -172,48 +172,68 @@ that the mixture's fast spectral decay favours spectral and Nyström methods.
 
 ## Q3. Kernel quantile regression and DWD
 
-**Claim to support.** GPU-accelerated KQR and DWD with exact cross-validation
-along the path do not exist elsewhere; TorchKM matches the reference CPU
-implementations' predictive quality and tunes in a small fraction of their
-time.
+**Claim to support.** TorchKM tunes kernel quantile regression and kernel DWD
+by cross-validation along the full-kernel path on one GPU. For KQR no Python
+package offers a tuned kernel fit, so the table shows what the kernel adds
+over a linear quantile regression and where it stands against gradient
+boosting. For DWD the Python package with the same objective gives the same
+accuracy at a far higher tuning cost.
 
-### KQR (E6, E6b)
+**Experiment (E6/E7, `benchmarks/q2_kqr_dwd.py`).** One script, two tables
+(the second question worked through, hence the file name).
 
 | Element | Setting |
 |---|---|
-| Datasets | synthetic heteroscedastic (n = 10,000, p = 5, known conditional quantiles); cadata (20,640 × 8); abalone (4,177 × 8); cpusmall (8,192 × 12); space_ga (3,107 × 6); YearPredictionMSD (463,715 × 90, Nyström path only) |
-| Splits | 80/20 per repeat; features standardised on the training split; targets centred and scaled by the training SD for the solvers, scored in original units |
+| KQR datasets | cpusmall (8,192 × 12) and cadata (20,640 × 8), a new random 80/20 split per repeat; features standardised on the training split; the target centred and scaled by its training SD for fitting, losses reported in original units |
 | Quantiles | τ ∈ {0.1, 0.5, 0.9} |
-| Methods | TorchKM KQR exact; TorchKM KQR Nyström (2,000 landmarks, rank 300); linear `QuantileRegressor` (highs); R: `fastkqr` (cv.kqr on the exported folds), `kernlab::kqr` (same fold loop) |
-| Metrics | pinball loss on the test split; empirical coverage P(y ≤ q̂) against τ; RMSE to the true quantile on the synthetic set; time; memory |
-| Repeats | 5 (3 on YearPredictionMSD) |
-| Commands | `bench_kqr.py --datasets synthetic cadata abalone cpusmall space_ga --taus 0.1 0.5 0.9 --repeats 5 --synthetic-n 10000 --export-splits …/kqr_splits`; `Rscript benchmarks/r/bench_kqr.R …/kqr_splits …/kqr_r.csv`; `bench_kqr.py --datasets YearPredictionMSD --methods torchkm_kqr_nystrom linear_qr --repeats 3` |
+| KQR methods | TorchKM `TorchKMKQR` (exact mode, `is_exact=0`, CV by pinball loss along the path); scikit-learn `QuantileRegressor` (linear, unpenalised, HiGHS); scikit-learn `HistGradientBoostingRegressor(loss="quantile")` with default settings |
+| KQR metrics | test pinball loss; coverage P(y ≤ q̂) against τ; time; memory |
+| DWD datasets | gisette (6,000 × 5,000 with its 1,000-row test file, the HDLSS regime DWD was designed for); MNIST 3-vs-8 (from mnist.scale and its test file) |
+| DWD methods | TorchKM `TorchKMDWD` (exact mode, `is_exact=0`, CV along the path); `KernGDWD` from the pip package `dwd` (the MM algorithm of Wang and Zou, 100 iterations per fit) on the same precomputed kernel, tuned by the script on the shared folds with one eigendecomposition per fold |
+| DWD metrics | accuracy, balanced accuracy, AUC, time, memory |
+| Kernel | RBF exp(−2σ‖x − x′‖²), σ from `sigest` per repeat, shared by every kernel method (γ = 2σ for the dwd package) |
+| Grid | 50 log-uniform λ from 1e-1 down to 1e-7, swept large to small; TorchKM receives C = 1/(2nλ) |
+| Selection | 10-fold CV on identical folds (stratified for DWD), then one fit on the full training set |
+| TorchKM | `tol` 1e-5 and `KKTeps` 1e-3 (the defaults), `max_iter` 100,000, float64, on the GPU |
+| Baselines | on the CPU, float64 |
+| Repeats | 3 seeds (52, 53, 54): new split (KQR), folds and bandwidth; mean ± SE |
+| Timing | tuning + final fit + test predictions |
+| Memory | TorchKM: NVML process peak; CPU methods: host memory added during the fit |
+| Cap | 2 h per dwd-package sweep (dataset × repeat); the sweep visits the grid coarse to fine, so a capped sweep still spans the range, and the table marks it |
 
-**Paper.** Table 4: rows = dataset × τ; columns = linear QR, kernlab, fastkqr,
-TorchKM exact, TorchKM Nyström; cells = pinball ± SE, coverage, time.
+Command: `python benchmarks/q2_kqr_dwd.py --data-dir ~/libsvm_data --out revision_results/q2.json`
+(writes `q2.md` next to the JSON; re-running with the same `--out` resumes).
 
-**Expected outcome.** Pinball loss equal to fastkqr within 2 SE (same
-algorithm family, same kernel); coverage within ±0.02 of τ for all kernel
-methods; linear QR visibly worse on the synthetic and cadata rows; TorchKM
-time one to two orders of magnitude below the R packages on n ≥ 8,000.
+**Design notes.**
+- Both DWD solvers minimise (1/n) Σ V(y f) + λ αᵀKα, so they share the grid
+  and the selected λ values are comparable.
+- The package's own `KernGDWDCV` is not used: it swaps the training and
+  validation folds, zips its parameter lists instead of crossing them, and
+  refits the final model with default parameters. The script tunes
+  `KernGDWD` itself, reusing one eigendecomposition per fold across λ as the
+  package intends.
+- The R packages (`fastkqr`, `kernlab::kqr`, `kerndwd`) stay in
+  `bench_kqr.py`, `bench_dwd.py` and `benchmarks/r/`; this table is Python
+  only by the authors' choice.
+- TorchKM's KQR cross-validation diverged before this revision (the fold fits
+  used a smoothing bandwidth eight times the one their step factors were
+  built for; see the changelog), so `TorchKMKQR` selected λ from a NaN or
+  one-pass CV curve. The fix is on this branch and tested against exact fold
+  solutions; KQR numbers from earlier versions should not be reused.
 
-### DWD (E7)
+**Paper.** Table 4 (KQR): rows dataset × τ; columns linear QR, gradient
+boosting, TorchKM; cells pinball loss ± SE, coverage, time. Table 5 (DWD):
+rows datasets; columns dwd package, TorchKM; cells accuracy, balanced
+accuracy, AUC ± SE, time, memory.
 
-| Element | Setting |
-|---|---|
-| Datasets | gisette (6,000 × 5,000 train, 1,000 test; HDLSS); ijcnn1-30k; MNIST 3-vs-8 |
-| Methods | TorchKM DWD exact; TorchKM DWD Nyström (2,000 / 300); TorchKM SVM (reference); R: `kerndwd` (cv.kerndwd on the exported folds, qval = 1) |
-| Metrics | accuracy, balanced accuracy, AUC, time, memory |
-| Repeats | 5 |
-| Commands | `bench_dwd.py --datasets gisette ijcnn1_30k mnist_3v8 --repeats 5 --export-splits …/dwd_splits`; `Rscript benchmarks/r/bench_dwd.R …/dwd_splits …/dwd_r.csv` |
-
-**Paper.** Table 5: rows = datasets; columns = kerndwd, TorchKM DWD, TorchKM
-SVM; cells = accuracy/AUC ± SE, time.
-
-**Before the first R run.** Neither R script has executed yet (no R on the
-machine used for this branch). Check `?fastkqr::cv.kqr`, `?fastkqr::kqr`,
-`?kerndwd::cv.kerndwd` for the argument names; the scripts are written to the
-documented signatures and print the exact call on failure.
+**Expected outcome.** KQR: TorchKM's pinball loss below linear QR's on both
+sets, coverage within about ±0.02 of τ. Gradient boosting is a strong
+reference on cpusmall and cadata, and the table reports whichever wins. DWD:
+accuracy equal within 2 SE (same objective, kernel and grid). The package's
+100-iteration MM fits are not fully converged at small λ, so small accuracy
+differences there are expected. Its 500 fits per repeat (10 folds × 50 λ) take
+hours on MNIST 3-vs-8 and will likely reach the cap; the table reports the
+fraction of the grid completed and the time per fit.
 
 ---
 
