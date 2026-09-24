@@ -87,7 +87,9 @@ Install on the GPU machine (TorchKM's own environment plus):
                                                          torch.version.cuda.replace('.', '')))")
   pip install falkon -f https://falkon.dibris.unige.it/$TAG.html
 
-Run (re-running with the same --out resumes; finished cells are skipped):
+Run (re-running with the same --out resumes: a finished cell is kept when it was
+computed with the same settings for its method, e.g. TorchKM's --tol and --kkt-eps,
+and computed again otherwise):
   python benchmarks/q1_full_kernel.py --data-dir ~/libsvm_data --out results/q1.json
   python benchmarks/q1_full_kernel.py --datasets sim_10000x100 --repeats 1   # one cell
   python benchmarks/q1_full_kernel.py --smoke    # CPU check on a tiny simulation
@@ -554,6 +556,32 @@ def save_json(doc: Dict[str, Any], path: str) -> None:
     os.replace(path + ".tmp", path)
 
 
+def cell_settings(method: str, args: argparse.Namespace) -> Dict[str, Any]:
+    """The solver settings a method's result depends on, as stored in its record."""
+    if method == "torchkm":
+        return dict(
+            tol=args.tol,
+            max_iter=args.max_iter,
+            KKTeps=args.kkt_eps,
+            delta_len=args.delta_len,
+        )
+    if method == "cuml":
+        return dict(cache_size_mb=args.svc_cache_mb)
+    if method == "falkon":
+        return dict(maxiter=args.falkon_maxiter)
+    if method == "keops":
+        return dict(cg_tol=args.keops_tol, cg_maxiter=args.keops_maxiter)
+    return {}
+
+
+def reusable(rec: Dict[str, Any], args: argparse.Namespace) -> bool:
+    """A finished cell computed with the same settings as this run."""
+    if rec.get("status") not in ("ok", "capped"):
+        return False
+    have = rec.get("params") or {}
+    return all(have.get(k) == v for k, v in cell_settings(rec["method"], args).items())
+
+
 def at_grid_edge(rec: Dict[str, Any], doc: Dict[str, Any]) -> bool:
     """True when the selected value is the first or last grid value."""
     if rec.get("selected_label") == "epochs":
@@ -732,7 +760,16 @@ def main() -> None:
                 f"{args.out} was written with a different protocol (folds, grid or seed): "
                 "use a new --out or delete it"
             )
-        doc["records"] = old.get("records", [])
+        # Keep a finished cell only if it was computed with this run's settings
+        # for its method (e.g. TorchKM's tol and KKTeps); everything else is
+        # dropped and computed again, so one table never mixes settings.
+        kept = [r for r in old.get("records", []) if reusable(r, args)]
+        dropped = len(old.get("records", [])) - len(kept)
+        doc["records"] = kept
+        print(
+            f"resuming {args.out}: {len(kept)} finished cells kept, "
+            f"{dropped} failed or computed with other settings will be redone"
+        )
     done = {
         (r["dataset"], r["method"], r["repeat"])
         for r in doc["records"]
