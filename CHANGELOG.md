@@ -14,7 +14,24 @@ All notable changes to TorchKM are documented in this file.
   intercept was not; on a 200-point RBF problem the true objective was 0.02% to
   0.5% above the optimum, all of it recovered by refitting the intercept. Fits
   now reach the optimum found by an independent L-BFGS solve to seven digits.
-  The hinge SVM, KQR, Huber and all Nystrom solvers were correct.
+  The helpers of the hinge SVM, KQR, Huber and all Nystrom solvers were
+  correct.
+- Cross-validation of the exact kernel quantile regression solver (`cvkqr`,
+  `TorchKMKQR`, and the Nystrom `cvknyqr`, which runs on it). The fold fits
+  started at smoothing bandwidth 1 while reusing the step factors the path had
+  built for bandwidth 0.125, so their steps were up to eight times too long:
+  the fits diverged to NaN at the first lambda and spent the whole
+  `nlam * maxit` iteration budget there, leaving at most one pass per fold for
+  every later lambda. `TorchKMKQR` skipped the NaN, and in our checks it then
+  chose the second-largest lambda. Separately, the fold fits' intercept search
+  (and, with `is_exact=1`, every loss term) counted the held-out rows as
+  responses of 0; zeroing `y` removes a row from a margin loss but not from the
+  check loss.
+  The fold fits now follow the path's bandwidth schedule and leave the held-out
+  rows out. On test problems the cross-validation loss is within a few percent
+  of exact fold solutions near its minimum and selects the same lambda
+  (`tests/test_kqr_cv.py`); a 3-fold, 5-lambda fit on 400 points with
+  `max_iter=100000` takes 7 s instead of 103 s.
 
 ### Added
 - `torchkm.memory`: `exact_mode_memory_estimate`, `max_exact_n`, and the

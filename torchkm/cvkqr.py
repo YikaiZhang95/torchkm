@@ -3,6 +3,10 @@ import torch
 
 from .functions import *
 
+# First smoothing bandwidth of the check loss. The cross-validation reuses the
+# preconditioners the path built for each bandwidth, so both start here.
+DELTA_INIT = 0.125
+
 
 class cvkqr:
     """
@@ -266,7 +270,7 @@ class cvkqr:
 
         for l in range(nlam):
             al = self.ulam[l].item()
-            delta = 0.125
+            delta = DELTA_INIT
             delta_id = 0
             delta_save = 0
             oldalpvec = torch.zeros(nobs + 1, dtype=torch.double).to(self.device)
@@ -521,12 +525,15 @@ class cvkqr:
                 continue
 
             for nf in range(nfolds):
+                # Unlike a margin loss, the check loss of a row does not vanish
+                # when its y is zeroed, so held-out rows are masked explicitly.
+                held = self.foldid == (nf + 1)
                 yn = y.clone()
-                yn[self.foldid == (nf + 1)] = 0.0
+                yn[held] = 0.0
 
                 loor = r.clone()
                 looalp = alpvec.clone()
-                delta = 1.0
+                delta = DELTA_INIT
                 delta_id = 0
 
                 while True:
@@ -562,6 +569,7 @@ class cvkqr:
                                 -loor / (2.0 * delta) - tau + 0.5,
                             ),
                         )
+                        zvec[held] = 0.0
                         gamvec = zvec + float(nobs) * al * looalp[1:]
                         rds = zvec.sum() + 2.0 * nobs * vareps * looalp[0]
                         hval = rds - torch.dot(vvec[:, delta_id - 1], gamvec)
@@ -591,9 +599,20 @@ class cvkqr:
                     ka = torch.mv(Kmat, looalp[1:])
                     aka = torch.dot(ka, looalp[1:])
 
-                    obj_value = self.objfun(looalp[0], aka, ka, yn, al, nobs, tau, 1e-9)
+                    obj_value = self.objfun(
+                        looalp[0], aka, ka, yn, al, nobs, tau, 1e-9, held_out=held
+                    )
                     golden_s = self.golden_section_search(
-                        -100.0, 100.0, nobs, ka, aka, yn, al, tau, 1e-9
+                        -100.0,
+                        100.0,
+                        nobs,
+                        ka,
+                        aka,
+                        yn,
+                        al,
+                        tau,
+                        1e-9,
+                        held_out=held,
                     )
                     int_new = golden_s[0]
                     obj_value_new = golden_s[1]
@@ -613,6 +632,7 @@ class cvkqr:
                             -loor / (2.0 * 1e-9) - tau + 0.5,
                         ),
                     )
+                    zvec[held] = 0.0
                     cvec_cv = torch.zeros(
                         (nobs + 1), dtype=torch.double, device=self.device
                     )
@@ -635,7 +655,7 @@ class cvkqr:
                             alptmp = looalp.clone()
                             for nn in range(self.mproj):
                                 rmg = loor
-                                elbowid = torch.abs(rmg) < delta
+                                elbowid = (torch.abs(rmg) < delta) & ~held
                                 elbchk = torch.all(rmg[elbowid] <= 1e-2).item()
 
                                 if elbchk:
@@ -647,7 +667,15 @@ class cvkqr:
                                     aKa = torch.dot(ka, alptmp[1:])
 
                                     obj_value = self.objfun(
-                                        alptmp[0], aKa, ka, yn, al, nobs, tau, 1e-9
+                                        alptmp[0],
+                                        aKa,
+                                        ka,
+                                        yn,
+                                        al,
+                                        nobs,
+                                        tau,
+                                        1e-9,
+                                        held_out=held,
                                     )
                                     golden_s = self.golden_section_search(
                                         -100.0,
@@ -659,6 +687,7 @@ class cvkqr:
                                         al,
                                         tau,
                                         1e-9,
+                                        held_out=held,
                                     )
                                     int_new = golden_s[0]
                                     obj_value_new = golden_s[1]
@@ -676,6 +705,7 @@ class cvkqr:
                                             -loor / (2.0 * delta) - tau + 0.5,
                                         ),
                                     )
+                                    zvec[held] = 0.0
                                     gamvec = zvec + float(nobs) * al * alptmp[1:]
                                     rds = zvec.sum() + 2.0 * nobs * vareps * alptmp[0]
                                     hval = rds - torch.dot(
@@ -782,7 +812,7 @@ class cvkqr:
         )
 
         active = torch.ones(nfolds, dtype=torch.bool, device=self.device)
-        delta = 1.0
+        delta = DELTA_INIT
         delta_id = 0
 
         while torch.any(active):
@@ -865,16 +895,26 @@ class cvkqr:
             for nf in current_cols.tolist():
                 looalp = looalp_batch[:, nf]
                 loor = loor_batch[:, nf].clone()
-                yn = y.clone()
-                yn[self.foldid == (nf + 1)] = 0.0
+                fold_mask_nf = self.foldid == (nf + 1)
                 dif_step = cv_step_buf[:, nf].clone()
 
                 ka = torch.mv(Kmat, looalp[1:])
                 aka = torch.dot(ka, looalp[1:])
 
-                obj_value = self.objfun(looalp[0], aka, ka, yn, al, nobs, tau, 1e-9)
+                obj_value = self.objfun(
+                    looalp[0], aka, ka, y, al, nobs, tau, 1e-9, held_out=fold_mask_nf
+                )
                 golden_s = self.golden_section_search(
-                    -100.0, 100.0, nobs, ka, aka, yn, al, tau, 1e-9
+                    -100.0,
+                    100.0,
+                    nobs,
+                    ka,
+                    aka,
+                    y,
+                    al,
+                    tau,
+                    1e-9,
+                    held_out=fold_mask_nf,
                 )
                 int_new = golden_s[0]
                 obj_value_new = golden_s[1]
@@ -889,7 +929,6 @@ class cvkqr:
                     -(tau - 1.0),
                     torch.where(loor >= 1e-9, -tau, -loor / (2.0 * 1e-9) - tau + 0.5),
                 )
-                fold_mask_nf = self.foldid == (nf + 1)
                 zvec_kkt = zvec.clone()
                 zvec_kkt[fold_mask_nf] = 0.0
                 cvec_nf = torch.zeros(nobs + 1, dtype=torch.double, device=self.device)
@@ -938,7 +977,7 @@ class cvkqr:
         obj = self.objfun(intcpt, aka, ka, y_train, lam_b, self.nobs, self.tau, 1e-9)
         return obj
 
-    def objfun(self, intcpt, aka, ka, y, lam, nobs, tau, delta):
+    def objfun(self, intcpt, aka, ka, y, lam, nobs, tau, delta, held_out=None):
         """
         Compute the objective function value for kernel quantile regression.
 
@@ -951,6 +990,9 @@ class cvkqr:
         - nobs (int): Number of observations.
         - tau (float): Quantile level.
         - delta (float): Smoothing bandwidth for the quantile loss.
+        - held_out (torch.Tensor, optional): Boolean mask of a held-out fold.
+          Its rows add no loss; the mean is still over all rows, as in the
+          cross-validation problem.
 
         Returns:
         - objval (float): Objective function value.
@@ -967,10 +1009,14 @@ class cvkqr:
                 xi_tmp**2 / (4.0 * delta) + (tau - 0.5) * xi_tmp + delta / 4.0,
             ),
         )
+        if held_out is not None:
+            xi = xi.masked_fill(held_out, 0.0)
         objval = (lam / 2.0) * aka + torch.mean(xi) + 1e-8 * intcpt**2
         return objval
 
-    def golden_section_search(self, lmin, lmax, nobs, ka, aka, y, lam, tau, delta):
+    def golden_section_search(
+        self, lmin, lmax, nobs, ka, aka, y, lam, tau, delta, held_out=None
+    ):
         """
         Optimize the intercept using golden section search (Brent's method).
 
@@ -984,6 +1030,8 @@ class cvkqr:
         - lam (float): Regularization parameter.
         - tau (float): Quantile level.
         - delta (float): Smoothing bandwidth for the quantile loss.
+        - held_out (torch.Tensor, optional): Boolean mask of rows left out of
+          the loss, as in :meth:`objfun`.
 
         Returns:
         - lhat (float): Optimized intercept value.
@@ -1012,7 +1060,7 @@ class cvkqr:
         e = 0.0
 
         # Evaluate the objective function at the initial x value
-        fx = self.objfun(x, aka, ka, y, lam, nobs, tau, delta)
+        fx = self.objfun(x, aka, ka, y, lam, nobs, tau, delta, held_out)
         fv = fx
         fw = fx
         tol3 = tol / 3.0
@@ -1059,7 +1107,7 @@ class cvkqr:
             # Set the new point u
             u = x + d if abs(d) >= tol1 else (x + tol1 if d > 0 else x - tol1)
             # Evaluate the objective function at u
-            fu = self.objfun(u, aka, ka, y, lam, nobs, tau, delta)
+            fu = self.objfun(u, aka, ka, y, lam, nobs, tau, delta, held_out)
             # Update the search bounds and objective values
             if fu <= fx:
                 if u < x:
@@ -1087,5 +1135,5 @@ class cvkqr:
                     fv = fu
         # Return the optimal intercept and the objective value
         lhat = x
-        res = self.objfun(x, aka, ka, y, lam, nobs, tau, delta)
+        res = self.objfun(x, aka, ka, y, lam, nobs, tau, delta, held_out)
         return lhat, res
