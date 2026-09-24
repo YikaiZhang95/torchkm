@@ -15,9 +15,10 @@ with the baseline at the same budget every time. One script, one table.
              k <= m. (2000, 30) is the submitted TorchKM configuration and
              (2000, 300) the one every other dataset and the baseline used
   torchkm    cvknyssvm called as table4_nystrom.py calls it: 50 lambda from
-             1e3 down to 1e-3, 10 folds, eps 1e-3, maxit 1e6, gamma 1e-8,
-             landmarks drawn and bandwidth estimated (sigest on the landmarks)
-             from the repeat's seed; on the GPU
+             1e3 down to 1e-3, 10 folds, maxit 1e6, gamma 1e-8, landmarks
+             drawn and bandwidth estimated (sigest on the landmarks) from the
+             repeat's seed; on the GPU. One change: eps 1e-5 instead of Table
+             4's 1e-3, for tighter solves (--eps 1e-3 gives Table 4's)
   sklearn    the paper's baseline: the same Nystrom feature map built by hand
              (RBF kernel on m landmarks, rank-k truncation, Z = C M), LinearSVC
              with its default settings tuned by 10-fold cross_val_score over 50
@@ -321,8 +322,10 @@ def write_markdown(doc: Dict[str, Any], path: str) -> str:
         f"({str(env.get('torchkm_commit'))[:10]}).",
         f"{info['name']}: {info['n_train']:,} train / {info['n_test']:,} test rows, "
         f"p = {info['p']}, share of +1 in training {info['pos_frac']:.3f}.",
-        f"Table 4 protocol: {a['folds']}-fold CV; TorchKM {len(grids['torchkm'])} lambda "
-        f"from {max(grids['torchkm']):g} to {min(grids['torchkm']):g}, eps {a['eps']:g}; "
+        f"Table 4 protocol except eps: {a['folds']}-fold CV; TorchKM "
+        f"{len(grids['torchkm'])} lambda "
+        f"from {max(grids['torchkm']):g} to {min(grids['torchkm']):g}, eps {a['eps']:g} "
+        "(Table 4: 1e-3); "
         f"scikit-learn {len(grids['sklearn'])} lambda from {max(grids['sklearn']):g} to "
         f"{min(grids['sklearn']):g}. Time = feature map + CV sweep + final fit + test "
         "predictions. Cells are mean +- SE over repeats.",
@@ -392,7 +395,9 @@ def main() -> None:
     ap.add_argument("--sk-lam-max", type=float, default=1e5, help="sklearn grid")
     ap.add_argument("--sk-lam-min", type=float, default=1e-5)
     ap.add_argument("--seed", type=int, default=52)
-    ap.add_argument("--eps", type=float, default=1e-3, help="TorchKM tolerance")
+    ap.add_argument(
+        "--eps", type=float, default=1e-5, help="TorchKM tolerance (Table 4: 1e-3)"
+    )
     ap.add_argument("--max-iter", type=int, default=1_000_000)
     ap.add_argument(
         "--time-cap",
