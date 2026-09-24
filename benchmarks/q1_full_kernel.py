@@ -572,12 +572,14 @@ def write_markdown(doc: Dict[str, Any], path: str) -> str:
         f"({str(env.get('torchkm_commit'))[:10]}); float64 everywhere.",
         f"{a['folds']}-fold CV on shared stratified folds, {a['grid_size']} grid values "
         f"(lambda in [{a['lam_min']:g}, {a['lam_max']:g}]; epochs 1..{a['grid_size']} for EigenPro), "
-        f"{a['repeats']} repeats (seeds {a['seed']}..{a['seed'] + a['repeats'] - 1}).",
+        f"seed {a['seed']} + repeat index; 'runs' = repeats in that row.",
         "Time = CV sweep + final fit + test predictions. Memory = NVML peak of the process.",
-        "Cells are mean +- SE over repeats; 'selected' lists the chosen value per repeat.",
+        "Cells are mean +- SE over repeats; 'selected' lists the chosen value per repeat "
+        "(median and range beyond five repeats).",
         "",
-        "| dataset | n_train | n_test | p | method | test accuracy | time (s) | GPU memory | selected | note |",
-        "|---|---:|---:|---:|---|---|---|---|---|---|",
+        "| dataset | n_train | n_test | p | method | runs | test accuracy | time (s) | GPU memory "
+        "| selected | note |",
+        "|---|---:|---:|---:|---|---:|---|---|---|---|---|",
     ]
     groups: Dict[tuple, List[Dict[str, Any]]] = {}
     for r in doc["records"]:
@@ -589,16 +591,21 @@ def write_markdown(doc: Dict[str, Any], path: str) -> str:
             note = "; ".join(
                 sorted({r.get("note") or r.get("error") or r["status"] for r in recs})
             )
-            lines.append(f"{head} - | - | - | - | {note[:120]} |")
+            lines.append(f"{head} 0 | - | - | - | - | {note[:120]} |")
             continue
         acc = mean_se([r["accuracy"] for r in ok])
         t = mean_se([r["time_s"] for r in ok])
         mem = mean_se([r["gpu_bytes"] for r in ok])
         label = ok[0]["selected_label"]
-        sel = ", ".join(
-            f"{r['selected']:.0f}" if label == "epochs" else f"{r['selected']:.3g}"
-            for r in ok
-        )
+        values = [r["selected"] for r in ok]
+        fmt_v = (lambda v: f"{v:.0f}") if label == "epochs" else (lambda v: f"{v:.3g}")
+        if len(values) <= 5:
+            sel = ", ".join(fmt_v(v) for v in values)
+        else:
+            sel = (
+                f"median {fmt_v(float(np.median(values)))}, "
+                f"range {fmt_v(min(values))} to {fmt_v(max(values))}"
+            )
         notes = []
         capped = [r for r in ok if r["status"] == "capped"]
         if capped:
@@ -624,7 +631,7 @@ def write_markdown(doc: Dict[str, Any], path: str) -> str:
                 "selected at grid edge (" + ", ".join(edge) + "): widen the range"
             )
         lines.append(
-            f"{head} {acc[0]:.4f} +- {acc[1]:.4f} | {t[0]:.1f} +- {t[1]:.1f} | "
+            f"{head} {len(ok)} | {acc[0]:.4f} +- {acc[1]:.4f} | {t[0]:.1f} +- {t[1]:.1f} | "
             f"{fmt_bytes(mem[0])} | {label} = {sel} | {'; '.join(notes)} |"
         )
     text = "\n".join(lines) + "\n"
