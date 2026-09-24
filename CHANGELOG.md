@@ -4,6 +4,18 @@ All notable changes to TorchKM are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- Intercept of the exact kernel DWD (`cvkdwd`, `TorchKMDWD`), logistic
+  (`cvklogit`, `TorchKMLogit`) and squared-hinge (`cvksqsvm`) solvers. Each
+  refines the intercept with a golden-section search over its objective
+  helper, and the helper did not compute the solver's loss: DWD and logistic
+  used `1 - y f` as the margin, and the squared hinge charged the points beyond
+  the margin instead of those inside it. The coefficients were optimal but the
+  intercept was not; on a 200-point RBF problem the true objective was 0.02% to
+  0.5% above the optimum, all of it recovered by refitting the intercept. Fits
+  now reach the optimum found by an independent L-BFGS solve to seven digits.
+  The hinge SVM, KQR, Huber and all Nystrom solvers were correct.
+
 ### Added
 - `torchkm.memory`: `exact_mode_memory_estimate`, `max_exact_n`, and the
   out-of-memory message the estimators raise in exact mode (predicted

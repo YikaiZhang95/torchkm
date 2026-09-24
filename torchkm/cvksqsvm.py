@@ -310,7 +310,9 @@ class cvksqsvm:
         # Compute f_hat (fh) and the hinge loss xi
         fh = ka + intcpt
         xi_tmp = 1.0 - y * fh
-        xi = torch.where(xi_tmp < 0, xi_tmp * xi_tmp, torch.zeros_like(xi_tmp))
+        # Squared hinge max(0, 1 - y f)^2. (The condition was reversed: the loss
+        # was charged on the points beyond the margin instead of inside it.)
+        xi = torch.where(xi_tmp > 0, xi_tmp * xi_tmp, torch.zeros_like(xi_tmp))
 
         # Compute the objective value
         objval = lam * aka + torch.sum(xi) / nobs

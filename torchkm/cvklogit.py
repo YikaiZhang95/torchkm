@@ -456,8 +456,11 @@ class cvklogit:
         """
         # Compute f_hat (fh) and the hinge loss xi
         fh = ka + intcpt
-        xi_tmp = 1.0 - y * fh
-        xi = torch.log1p(torch.exp(-xi_tmp))
+        # Logistic loss of the margin u = y f, log(1 + exp(-u)), computed
+        # stably. (It used 1 - y f as the margin, which made the intercept line
+        # search minimise a different function.)
+        xi_tmp = y * fh
+        xi = torch.nn.functional.softplus(-xi_tmp)
 
         # Compute the objective value
         objval = lam * aka + torch.sum(xi) / nobs

@@ -607,7 +607,10 @@ class cvkdwd:
     def objfun(self, intcpt, aka, ka, y, lam, nobs):
         # Compute f_hat (fh) and the hinge loss xi
         fh = ka + intcpt
-        xi_tmp = 1.0 - y * fh
+        # DWD loss of the margin u = y f: 1 - u for u <= 1/2, 1 / (4u) above.
+        # (It used 1 - y f as the margin, so the intercept line search
+        # minimised a different function and returned a suboptimal intercept.)
+        xi_tmp = y * fh
         xi = torch.where(xi_tmp <= 0.5, 1 - xi_tmp, 1 / (4.0 * xi_tmp))
 
         # Compute the objective value
