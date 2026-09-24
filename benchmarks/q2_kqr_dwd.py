@@ -3,25 +3,27 @@
 
 The letter asks for at least one regression benchmark exercising kernel
 quantile regression (KQR) and one exercising distance-weighted discrimination
-(DWD). One script, two tables, every TorchKM fit on the full kernel.
+(DWD). One script, two tables. TorchKM runs on the GPU, on the full kernel.
+Each competitor runs on the GPU if it can; one that cannot runs on the CPU,
+and that is part of the comparison.
 
 KQR (cpusmall 8,192 x 12 and cadata 20,640 x 8; random 80/20 train/test split
 per repeat; features and target standardised on the training split, losses
 reported in the target's original units; tau = 0.1, 0.5, 0.9)
   torchkm_kqr  TorchKMKQR, exact mode, integrated 10-fold CV over the lambda
-               path by pinball loss
-  linear_qr    scikit-learn QuantileRegressor, unpenalised (alpha = 0, the
-               standard choice with n >> p), HiGHS solver: what the kernel buys
-  gbm_qr       scikit-learn HistGradientBoostingRegressor(loss="quantile"),
-               default settings: a strong nonlinear reference
+               path by pinball loss; GPU
+  xgb_qr       XGBoost gradient-boosted quantile regression
+               (objective "reg:quantileerror", tree_method "hist"), default
+               settings, one fit; GPU (XGBoost computes in float32)
   Metrics: test pinball loss, coverage P(y <= q_hat) against tau, time, memory.
 
 DWD (gisette 6,000 x 5,000 with its 1,000-row test file; MNIST 3-vs-8 from
 mnist.scale)
-  torchkm_dwd  TorchKMDWD, exact mode, integrated 10-fold CV over the path
+  torchkm_dwd  TorchKMDWD, exact mode, integrated 10-fold CV over the path; GPU
   dwd_pkg      KernGDWD from the pip package ``dwd`` (Carmichael), the Python
                kernel DWD: the MM algorithm of Wang and Zou with a per-fit cap
-               of 100 iterations, on the same precomputed RBF kernel. Both
+               of 100 iterations, on the same precomputed RBF kernel. CPU only:
+               the package is numpy code with no GPU implementation. Both
                minimise (1/n) sum V(y f) + lambda a'Ka, so they share the lambda
                grid. The package's own KernGDWDCV is not used: it swaps the
                train and test folds, zips its parameter lists instead of
@@ -41,10 +43,12 @@ Protocol for both tables
   CV         10 folds, identical for every tuned method (stratified for DWD)
   TorchKM    tol 1e-5, KKTeps 1e-3 (the defaults), max_iter 100000, float64,
              on the GPU
-  baselines  on the CPU, float64
-  timing     tuning + final fit + test predictions, the cost of a tuned model
-  memory     TorchKM: NVML peak of the process on the GPU; CPU methods: host
-             memory added during the fit
+  devices    TorchKM and XGBoost on the GPU; the dwd package on the CPU in
+             float64. The table has a device column
+  timing     tuning + final fit + test predictions, the cost of a tuned model;
+             each GPU library is warmed up before its timed block
+  memory     GPU methods: NVML peak of the process on the GPU; the dwd package:
+             host memory added during the fit
   repeats    3 (seeds 52, 53, 54): new split (KQR), new folds and bandwidth
 
 Data files in --data-dir: cpusmall, cadata (LIBSVM regression), gisette_scale
@@ -52,7 +56,7 @@ and gisette_scale.t (.bz2 is fine), mnist.scale and mnist.scale.t.
 
 Run (re-running with the same --out keeps the finished cells computed with the
 same settings and runs the rest):
-  pip install dwd
+  pip install xgboost dwd
   python benchmarks/q2_kqr_dwd.py --data-dir ~/libsvm_data --out results/q2.json
   python benchmarks/q2_kqr_dwd.py --smoke        # CPU check on synthetic data
 """
@@ -89,7 +93,7 @@ from bench_kqr import load_regression, standardize_split  # noqa: E402
 
 KQR_SETS = ["cpusmall", "cadata"]
 DWD_SETS = ["gisette", "mnist_3v8"]
-KQR_METHODS = ["torchkm_kqr", "linear_qr", "gbm_qr"]
+KQR_METHODS = ["torchkm_kqr", "xgb_qr"]
 DWD_METHODS = ["torchkm_dwd", "dwd_pkg"]
 TASK = {**{d: "kqr" for d in KQR_SETS}, **{d: "dwd" for d in DWD_SETS}}
 
@@ -97,6 +101,10 @@ TASK = {**{d: "kqr" for d in KQR_SETS}, **{d: "dwd" for d in DWD_SETS}}
 def sync(dev: str) -> None:
     if dev.startswith("cuda"):
         torch.cuda.synchronize()
+
+
+def device_label(dev: str) -> str:
+    return "GPU" if dev.startswith("cuda") else "CPU"
 
 
 class Measured:
@@ -178,6 +186,7 @@ def run_torchkm_kqr(data, sig, lams, foldid, tau, dev, args, seed):
     lam = 1.0 / (2.0 * n * reg.best_C_)
     return dict(
         status="ok",
+        device=device_label(dev),
         time_s=m.seconds,
         memory=m.memory,
         selected=float(lam),
@@ -187,36 +196,32 @@ def run_torchkm_kqr(data, sig, lams, foldid, tau, dev, args, seed):
     )
 
 
-def run_linear_qr(data, sig, lams, foldid, tau, dev, args, seed):
-    from sklearn.linear_model import QuantileRegressor
+def run_xgb_qr(data, sig, lams, foldid, tau, dev, args, seed):
+    import xgboost as xgb
 
-    with Measured("cpu") as m:
-        model = QuantileRegressor(quantile=tau, alpha=0.0, solver="highs")
-        model.fit(data["Xtr"], data["ytr_s"])
-        q = model.predict(data["Xte"])
-    return dict(
-        status="ok",
-        time_s=m.seconds,
-        memory=m.memory,
-        params=dict(alpha=0.0, solver="highs"),
-        **quantile_metrics(data["yte"], to_original(data, q), tau),
-    )
-
-
-def run_gbm_qr(data, sig, lams, foldid, tau, dev, args, seed):
-    from sklearn.ensemble import HistGradientBoostingRegressor
-
-    with Measured("cpu") as m:
-        model = HistGradientBoostingRegressor(
-            loss="quantile", quantile=tau, random_state=seed
+    def model(**kw):
+        return xgb.XGBRegressor(
+            objective="reg:quantileerror",
+            quantile_alpha=tau,
+            tree_method="hist",
+            device=dev,
+            random_state=seed,
+            **kw,
         )
-        model.fit(data["Xtr"], data["ytr_s"])
-        q = model.predict(data["Xte"])
+
+    model(n_estimators=1).fit(np.zeros((8, 2)), np.arange(8.0))  # start-up
+    with Measured(dev) as m:
+        reg = model()
+        reg.fit(data["Xtr"], data["ytr_s"])
+        # a DMatrix is predicted on the model's device, host input included
+        q = reg.get_booster().predict(xgb.DMatrix(data["Xte"]))
+    config = json.loads(reg.get_booster().save_config())["learner"]["generic_param"]
     return dict(
         status="ok",
+        device=device_label(config.get("device", dev)),  # as XGBoost ran it
         time_s=m.seconds,
         memory=m.memory,
-        params=dict(settings="scikit-learn defaults"),
+        params=dict(settings="XGBoost defaults", xgboost=xgb.__version__),
         **quantile_metrics(data["yte"], to_original(data, q), tau),
     )
 
@@ -254,6 +259,7 @@ def run_torchkm_dwd(data, sig, lams, foldid, tau, dev, args, seed):
         )
     return dict(
         status="ok",
+        device=device_label(dev),
         time_s=m.seconds,
         memory=m.memory,
         selected=float(1.0 / (2.0 * n * clf.best_C_)),
@@ -310,6 +316,7 @@ def run_dwd_pkg(data, sig, lams, foldid, tau, dev, args, seed):
     curve = [cv_acc.get(i) for i in range(len(lams))]
     return dict(
         status="capped" if len(cv_acc) < len(lams) else "ok",
+        device="CPU",  # numpy only: the package has no GPU implementation
         time_s=m.seconds,
         memory=m.memory,
         selected=float(lams[best]),
@@ -323,8 +330,7 @@ def run_dwd_pkg(data, sig, lams, foldid, tau, dev, args, seed):
 
 RUN: Dict[str, Callable] = dict(
     torchkm_kqr=run_torchkm_kqr,
-    linear_qr=run_linear_qr,
-    gbm_qr=run_gbm_qr,
+    xgb_qr=run_xgb_qr,
     torchkm_dwd=run_torchkm_dwd,
     dwd_pkg=run_dwd_pkg,
 )
@@ -380,6 +386,10 @@ def fmt_mem(recs) -> str:
     if not vals:
         return "-"
     return f"{fmt_bytes(float(np.mean(vals)))} {recs[0]['memory']['where']}"
+
+
+def fmt_dev(recs) -> str:
+    return recs[-1].get("device") or "-"
 
 
 def fmt_sel(recs) -> str:
@@ -440,9 +450,9 @@ def write_markdown(doc: Dict[str, Any], path: str) -> str:
             "",
             "## Kernel quantile regression",
             "",
-            "| dataset | n_train | n_test | p | tau | method | runs | test pinball loss "
-            "| coverage | time (s) | memory | selected lambda | note |",
-            "|---|---:|---:|---:|---:|---|---:|---|---|---|---|---|---|",
+            "| dataset | n_train | n_test | p | tau | method | device | runs "
+            "| test pinball loss | coverage | time (s) | memory | selected lambda | note |",
+            "|---|---:|---:|---:|---:|---|---|---:|---|---|---|---|---|---|",
         ]
         for key in kqr:
             recs = groups[key]
@@ -450,11 +460,13 @@ def write_markdown(doc: Dict[str, Any], path: str) -> str:
             if not ok:
                 err = recs[-1].get("error", recs[-1]["status"])[:100]
                 lines.append(
-                    f"{head(recs)} {key[2]} | {key[3]} | 0 | - | - | - | - | - | {err} |"
+                    f"{head(recs)} {key[2]} | {key[3]} | {fmt_dev(recs)} | 0 | - | - | - | - "
+                    f"| - | {err} |"
                 )
                 continue
             lines.append(
-                f"{head(ok)} {key[2]} | {key[3]} | {len(ok)} | {fmt_pm(ok, 'pinball_loss')} "
+                f"{head(ok)} {key[2]} | {key[3]} | {fmt_dev(ok)} | {len(ok)} "
+                f"| {fmt_pm(ok, 'pinball_loss')} "
                 f"| {fmt_pm(ok, 'coverage', 3)} | {fmt_pm(ok, 'time_s', 1)} | {fmt_mem(ok)} "
                 f"| {fmt_sel(ok)} | {notes(ok, lams)} |"
             )
@@ -464,9 +476,9 @@ def write_markdown(doc: Dict[str, Any], path: str) -> str:
             "",
             "## Kernel DWD",
             "",
-            "| dataset | n_train | n_test | p | method | runs | test accuracy | balanced accuracy "
-            "| AUC | time (s) | memory | selected lambda | note |",
-            "|---|---:|---:|---:|---|---:|---|---|---|---|---|---|---|",
+            "| dataset | n_train | n_test | p | method | device | runs | test accuracy "
+            "| balanced accuracy | AUC | time (s) | memory | selected lambda | note |",
+            "|---|---:|---:|---:|---|---|---:|---|---|---|---|---|---|---|",
         ]
         for key in dwd:
             recs = groups[key]
@@ -474,11 +486,12 @@ def write_markdown(doc: Dict[str, Any], path: str) -> str:
             if not ok:
                 err = recs[-1].get("error", recs[-1]["status"])[:100]
                 lines.append(
-                    f"{head(recs)} {key[3]} | 0 | - | - | - | - | - | - | {err} |"
+                    f"{head(recs)} {key[3]} | {fmt_dev(recs)} | 0 | - | - | - | - | - "
+                    f"| - | {err} |"
                 )
                 continue
             lines.append(
-                f"{head(ok)} {key[3]} | {len(ok)} | {fmt_pm(ok, 'accuracy')} "
+                f"{head(ok)} {key[3]} | {fmt_dev(ok)} | {len(ok)} | {fmt_pm(ok, 'accuracy')} "
                 f"| {fmt_pm(ok, 'balanced_accuracy')} | {fmt_pm(ok, 'auc')} "
                 f"| {fmt_pm(ok, 'time_s', 1)} | {fmt_mem(ok)} | {fmt_sel(ok)} | {notes(ok, lams)} |"
             )
@@ -568,7 +581,11 @@ def main() -> None:
                 sys.exit(
                     f"{args.out} used a different {k}: use a new --out or delete it"
                 )
-        kept = [r for r in old.get("records", []) if reusable(r, args)]
+        kept = [
+            r
+            for r in old.get("records", [])
+            if r.get("method") in RUN and reusable(r, args)
+        ]
         doc["records"] = kept
         print(
             f"resuming {args.out}: {len(kept)} finished cells kept, "

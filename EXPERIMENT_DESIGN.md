@@ -173,11 +173,12 @@ that the mixture's fast spectral decay favours spectral and Nyström methods.
 ## Q3. Kernel quantile regression and DWD
 
 **Claim to support.** TorchKM tunes kernel quantile regression and kernel DWD
-by cross-validation along the full-kernel path on one GPU. For KQR no Python
-package offers a tuned kernel fit, so the table shows what the kernel adds
-over a linear quantile regression and where it stands against gradient
-boosting. For DWD the Python package with the same objective gives the same
-accuracy at a far higher tuning cost.
+by cross-validation along the full-kernel path on one GPU. Every method runs
+on the GPU where it can; a competitor without a GPU implementation runs on
+the CPU, and the table says so. For KQR the competitor is gradient-boosted
+quantile regression on the GPU (XGBoost). For DWD the Python package with
+the same objective has no GPU implementation; it gives the same accuracy at a
+far higher tuning cost.
 
 **Experiment (E6/E7, `benchmarks/q2_kqr_dwd.py`).** One script, two tables
 (the second question worked through, hence the file name).
@@ -186,19 +187,19 @@ accuracy at a far higher tuning cost.
 |---|---|
 | KQR datasets | cpusmall (8,192 × 12) and cadata (20,640 × 8), a new random 80/20 split per repeat; features standardised on the training split; the target centred and scaled by its training SD for fitting, losses reported in original units |
 | Quantiles | τ ∈ {0.1, 0.5, 0.9} |
-| KQR methods | TorchKM `TorchKMKQR` (exact mode, `is_exact=0`, CV by pinball loss along the path); scikit-learn `QuantileRegressor` (linear, unpenalised, HiGHS); scikit-learn `HistGradientBoostingRegressor(loss="quantile")` with default settings |
+| KQR methods | TorchKM `TorchKMKQR` (exact mode, `is_exact=0`, CV by pinball loss along the path) on the GPU; XGBoost `XGBRegressor(objective="reg:quantileerror", tree_method="hist", device="cuda")`, default settings, one fit, on the GPU |
 | KQR metrics | test pinball loss; coverage P(y ≤ q̂) against τ; time; memory |
 | DWD datasets | gisette (6,000 × 5,000 with its 1,000-row test file, the HDLSS regime DWD was designed for); MNIST 3-vs-8 (from mnist.scale and its test file) |
-| DWD methods | TorchKM `TorchKMDWD` (exact mode, `is_exact=0`, CV along the path); `KernGDWD` from the pip package `dwd` (the MM algorithm of Wang and Zou, 100 iterations per fit) on the same precomputed kernel, tuned by the script on the shared folds with one eigendecomposition per fold |
+| DWD methods | TorchKM `TorchKMDWD` (exact mode, `is_exact=0`, CV along the path) on the GPU; `KernGDWD` from the pip package `dwd` (the MM algorithm of Wang and Zou, 100 iterations per fit) on the same precomputed kernel, tuned by the script on the shared folds with one eigendecomposition per fold, on the CPU (numpy only; no GPU implementation) |
 | DWD metrics | accuracy, balanced accuracy, AUC, time, memory |
 | Kernel | RBF exp(−2σ‖x − x′‖²), σ from `sigest` per repeat, shared by every kernel method (γ = 2σ for the dwd package) |
 | Grid | 50 log-uniform λ from 1e-1 down to 1e-7, swept large to small; TorchKM receives C = 1/(2nλ) |
 | Selection | 10-fold CV on identical folds (stratified for DWD), then one fit on the full training set |
 | TorchKM | `tol` 1e-5 and `KKTeps` 1e-3 (the defaults), `max_iter` 100,000, float64, on the GPU |
-| Baselines | on the CPU, float64 |
+| Devices | TorchKM and XGBoost on the GPU (XGBoost computes in float32); the dwd package on the CPU in float64; a device column in both tables |
 | Repeats | 3 seeds (52, 53, 54): new split (KQR), folds and bandwidth; mean ± SE |
-| Timing | tuning + final fit + test predictions |
-| Memory | TorchKM: NVML process peak; CPU methods: host memory added during the fit |
+| Timing | tuning + final fit + test predictions; each GPU library warmed up before its timed block |
+| Memory | GPU methods: NVML process peak; the dwd package: host memory added during the fit |
 | Cap | 2 h per dwd-package sweep (dataset × repeat); the sweep visits the grid coarse to fine, so a capped sweep still spans the range, and the table marks it |
 
 Command: `python benchmarks/q2_kqr_dwd.py --data-dir ~/libsvm_data --out revision_results/q2.json`
@@ -212,6 +213,13 @@ Command: `python benchmarks/q2_kqr_dwd.py --data-dir ~/libsvm_data --out revisio
   refits the final model with default parameters. The script tunes
   `KernGDWD` itself, reusing one eigendecomposition per fold across λ as the
   package intends.
+- XGBoost's quantile objective runs on the GPU, and `pip install xgboost`
+  includes CUDA. It runs with its defaults, one fit, as a user would run it;
+  time includes tuning, so TorchKM's time covers its 10-fold CV over 50 λ.
+- We know of no library that runs linear quantile regression or kernel DWD
+  on the GPU (scikit-learn's are CPU only; cuML has neither), so the table has
+  no linear baseline and the dwd package runs on the CPU. Needing the CPU is
+  that method's limitation, reported as such.
 - The R packages (`fastkqr`, `kernlab::kqr`, `kerndwd`) stay in
   `bench_kqr.py`, `bench_dwd.py` and `benchmarks/r/`; this table is Python
   only by the authors' choice.
@@ -221,14 +229,15 @@ Command: `python benchmarks/q2_kqr_dwd.py --data-dir ~/libsvm_data --out revisio
   one-pass CV curve. The fix is on this branch and tested against exact fold
   solutions; KQR numbers from earlier versions should not be reused.
 
-**Paper.** Table 4 (KQR): rows dataset × τ; columns linear QR, gradient
-boosting, TorchKM; cells pinball loss ± SE, coverage, time. Table 5 (DWD):
+**Paper.** Table 4 (KQR): rows dataset × τ; columns XGBoost, TorchKM; cells
+pinball loss ± SE, coverage, time, memory, device. Table 5 (DWD):
 rows datasets; columns dwd package, TorchKM; cells accuracy, balanced
 accuracy, AUC ± SE, time, memory.
 
-**Expected outcome.** KQR: TorchKM's pinball loss below linear QR's on both
-sets, coverage within about ±0.02 of τ. Gradient boosting is a strong
-reference on cpusmall and cadata, and the table reports whichever wins. DWD:
+**Expected outcome.** KQR: coverage within about ±0.02 of τ for TorchKM.
+Gradient boosting is a strong reference on cpusmall and cadata, and the
+table reports whichever wins; XGBoost's single untuned fit takes seconds,
+TorchKM's time is for a tuned model. DWD:
 accuracy equal within 2 SE (same objective, kernel and grid). The package's
 100-iteration MM fits are not fully converged at small λ, so small accuracy
 differences there are expected. Its 500 fits per repeat (10 folds × 50 λ) take

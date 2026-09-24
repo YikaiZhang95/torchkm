@@ -91,25 +91,27 @@ accuracy column. No claim rests on it; the real-data tables carry the case.
 **Ready to run.** `benchmarks/q2_kqr_dwd.py` adds one regression benchmark for
 kernel quantile regression and one classification benchmark for DWD, under
 one protocol: the same RBF bandwidth for every kernel method, a 50-value λ
-grid from 1e-1 down to 1e-7, identical 10-fold splits, float64, end-to-end
-timing (tuning, final fit, test predictions), memory, and three seeds per
-dataset.
+grid from 1e-1 down to 1e-7, identical 10-fold splits, end-to-end timing
+(tuning, final fit, test predictions), memory, and three seeds per dataset.
+TorchKM runs on the GPU in float64, and every competitor runs on the GPU
+where it can; the tables list each method's device.
 
 - **Kernel quantile regression** on cpusmall (8,192 × 12) and cadata
   (California housing, 20,640 × 8), τ ∈ {0.1, 0.5, 0.9}, a new 80/20 split
-  per seed; test pinball loss and empirical coverage against τ. No Python
-  package fits a tuned kernel quantile regression, so the comparison is with
-  what a Python user would run instead: scikit-learn's linear
-  `QuantileRegressor`, which shows what the kernel adds, and its
-  gradient-boosted quantile regressor as a strong nonlinear reference.
+  per seed; test pinball loss and empirical coverage against τ. The
+  comparison is with gradient-boosted quantile regression on the same GPU
+  (XGBoost with its quantile objective, default settings), the strong
+  nonlinear alternative a practitioner would reach for.
 - **Kernel DWD** on gisette (6,000 × 5,000, the high-dimension, low-sample
   regime DWD was designed for) and MNIST 3-vs-8; accuracy, balanced accuracy
   and AUC. The baseline is `KernGDWD` from the Python package `dwd`, which
   minimises the same objective with the MM algorithm of Wang and Zou, run on
-  the same kernel and tuned on the same folds. The package's own
-  cross-validation class is not used (it swaps training and validation folds
-  and refits with default parameters), and its sweep is capped at two hours
-  per dataset and seed, visiting the grid coarse to fine.
+  the same kernel and tuned on the same folds. It is numpy code with no GPU
+  implementation, so it runs on the CPU; we know of no GPU implementation of
+  kernel DWD. The package's own cross-validation class is not used (it swaps
+  training and validation folds and refits with default parameters), and its
+  sweep is capped at two hours per dataset and seed, visiting the grid coarse
+  to fine.
 - Preparing this benchmark exposed a defect in TorchKM's KQR
   cross-validation: the fold fits diverged, so the λ chosen by `TorchKMKQR`
   did not reflect the data. It is fixed in this revision and tested against
@@ -210,7 +212,7 @@ are scikit-learn compatible, with a test. The section cannot stay as is.
 | # | Requested | Where it comes from | Status |
 |---|---|---|---|
 | 1 | cuML and Falkon with accuracy, time, peak memory | `bench_gpu_libraries.py`, exact and Nyström suites | ready to run |
-| 2 | One KQR and one DWD benchmark | `q2_kqr_dwd.py` (KQR: cpusmall, cadata vs linear and boosted QR; DWD: gisette, MNIST 3v8 vs the `dwd` package) | ready to run |
+| 2 | One KQR and one DWD benchmark | `q2_kqr_dwd.py` (KQR: cpusmall, cadata vs XGBoost quantile regression, both on the GPU; DWD: gisette, MNIST 3v8 vs the `dwd` package, CPU only) | ready to run |
 | 3 | covtype accounted for | rank-30 configuration (answered); `bench_covtype_rank.py` curve | answered; curve ready to run |
 | 4 | AUC / balanced accuracy under imbalance | harness metrics on every table | done |
 | 5 | Kernel-natural problem in the exact range | ijcnn1-30k, MNIST pairs, covtype-30k, each with linear baselines | ready to run |

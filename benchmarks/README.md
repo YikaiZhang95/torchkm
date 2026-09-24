@@ -66,18 +66,20 @@ protocol and what each method solves.
 
 ## Q2 in one script: kernel quantile regression and DWD
 
-`q2_kqr_dwd.py` gives the letter one KQR and one DWD benchmark. KQR:
-`TorchKMKQR` against scikit-learn's linear `QuantileRegressor` and its
-gradient-boosted quantile regressor on cpusmall and cadata, τ = 0.1, 0.5 and
-0.9, reporting test pinball loss and coverage. DWD: `TorchKMDWD` against
-`KernGDWD` from the pip package `dwd` on gisette and MNIST 3-vs-8, reporting
-accuracy, balanced accuracy and AUC. Both use the same RBF bandwidth, the same
-10 folds, 50 values of λ from 1e-1 down to 1e-7, float64, and three seeds, and
-report time and memory. The dwd package's sweep stops after `--time-cap`
-seconds (2 h) per dataset and seed.
+`q2_kqr_dwd.py` gives the letter one KQR and one DWD benchmark, with TorchKM
+on the GPU and each competitor on the GPU where it can run there. KQR:
+`TorchKMKQR` against XGBoost's gradient-boosted quantile regression
+(`reg:quantileerror`, default settings), both on the GPU, on cpusmall and
+cadata at τ = 0.1, 0.5 and 0.9, reporting test pinball loss and coverage.
+DWD: `TorchKMDWD` on the GPU against `KernGDWD` from the pip package `dwd`,
+which is numpy code and runs on the CPU, on gisette and MNIST 3-vs-8,
+reporting accuracy, balanced accuracy and AUC. Both use the same RBF
+bandwidth, the same 10 folds, 50 values of λ from 1e-1 down to 1e-7, and
+three seeds, and report time, memory and each method's device. The dwd
+package's sweep stops after `--time-cap` seconds (2 h) per dataset and seed.
 
 ```bash
-pip install dwd
+pip install xgboost dwd
 python benchmarks/q2_kqr_dwd.py --data-dir ~/libsvm_data --out revision_results/q2.json
 ```
 
