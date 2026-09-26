@@ -14,15 +14,21 @@ with the baseline at the same budget every time. One script, one table.
   budget     landmarks m in {2000, 5000, 10000} x rank k in {30, 300, 1000},
              k <= m. (2000, 30) is the submitted TorchKM configuration and
              (2000, 300) the one every other dataset and the baseline used
-  torchkm    cvknyssvm called as table4_nystrom.py calls it: 50 lambda from
-             1e3 down to 1e-3, 10 folds, maxit 1e6, gamma 1e-8, landmarks
-             drawn and bandwidth estimated (sigest on the landmarks) from the
-             repeat's seed; on the GPU. One change: eps 1e-5 instead of Table
-             4's 1e-3, for tighter solves (--eps 1e-3 gives Table 4's)
+  lambda     50 values from 1e-1 down to 1e-7 for both methods, the grid
+             Table 4 used for a9a. Table 4's covtype grid, 1e3 down to 1e-3,
+             stops where the CV still wants less regularisation: on this split
+             at rank 300 it picks its edge (1e-3) and reaches 0.711 test
+             accuracy against 0.790 with the grid down to 1e-7, where CV picks
+             about 1e-6. Grids reaching 1e-9 add nothing, and eps 1e-5 or 1e-7
+             instead of 1e-3 changes accuracy by 0.2 points or less
+             (--lam-max 1e3 --lam-min 1e-3 gives Table 4's grid)
+  torchkm    cvknyssvm called as table4_nystrom.py calls it: 10 folds, eps
+             1e-3, maxit 1e6, gamma 1e-8, landmarks drawn and bandwidth
+             estimated (sigest on the landmarks) from the repeat's seed; GPU
   sklearn    the paper's baseline: the same Nystrom feature map built by hand
              (RBF kernel on m landmarks, rank-k truncation, Z = C M), LinearSVC
-             with its default settings tuned by 10-fold cross_val_score over 50
-             lambda from 1e5 down to 1e-5 (C = 1/(2 n lambda)), then a final
+             with its default settings tuned by 10-fold cross_val_score over
+             the same lambda grid (C = 1/(2 n lambda)), then a final
              refit on fresh landmarks, as the notebook did. The CV features use
              the landmarks and bandwidth TorchKM draws for the same repeat. CPU
              only; a sweep stops after --time-cap seconds and visits the grid
@@ -322,13 +328,12 @@ def write_markdown(doc: Dict[str, Any], path: str) -> str:
         f"({str(env.get('torchkm_commit'))[:10]}).",
         f"{info['name']}: {info['n_train']:,} train / {info['n_test']:,} test rows, "
         f"p = {info['p']}, share of +1 in training {info['pos_frac']:.3f}.",
-        f"Table 4 protocol except eps: {a['folds']}-fold CV; TorchKM "
-        f"{len(grids['torchkm'])} lambda "
-        f"from {max(grids['torchkm']):g} to {min(grids['torchkm']):g}, eps {a['eps']:g} "
-        "(Table 4: 1e-3); "
-        f"scikit-learn {len(grids['sklearn'])} lambda from {max(grids['sklearn']):g} to "
-        f"{min(grids['sklearn']):g}. Time = feature map + CV sweep + final fit + test "
-        "predictions. Cells are mean +- SE over repeats.",
+        f"Table 4 protocol with a longer lambda grid: {a['folds']}-fold CV; TorchKM "
+        f"{len(grids['torchkm'])} lambda from {max(grids['torchkm']):g} to "
+        f"{min(grids['torchkm']):g} (Table 4's covtype grid: 1e3 to 1e-3), eps "
+        f"{a['eps']:g}; scikit-learn {len(grids['sklearn'])} lambda from "
+        f"{max(grids['sklearn']):g} to {min(grids['sklearn']):g}. Time = feature map + "
+        "CV sweep + final fit + test predictions. Cells are mean +- SE over repeats.",
         "Submitted Table 4 row: TorchKM 0.807 in 31.1 s (2,000 landmarks, rank 30); "
         "scikit-learn Nystrom 0.786 in 2,269 s (rank 300).",
         "Exact RBF SVM on covtype.binary: 96.15% (LIBSVM, full training set; Hsieh, Si "
@@ -390,13 +395,13 @@ def main() -> None:
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--folds", type=int, default=10)
     ap.add_argument("--grid-size", type=int, default=50)
-    ap.add_argument("--lam-max", type=float, default=1e3, help="TorchKM grid")
-    ap.add_argument("--lam-min", type=float, default=1e-3)
-    ap.add_argument("--sk-lam-max", type=float, default=1e5, help="sklearn grid")
-    ap.add_argument("--sk-lam-min", type=float, default=1e-5)
+    ap.add_argument("--lam-max", type=float, default=1e-1, help="TorchKM grid")
+    ap.add_argument("--lam-min", type=float, default=1e-7)
+    ap.add_argument("--sk-lam-max", type=float, default=1e-1, help="sklearn grid")
+    ap.add_argument("--sk-lam-min", type=float, default=1e-7)
     ap.add_argument("--seed", type=int, default=52)
     ap.add_argument(
-        "--eps", type=float, default=1e-5, help="TorchKM tolerance (Table 4: 1e-3)"
+        "--eps", type=float, default=1e-3, help="TorchKM tolerance, as Table 4"
     )
     ap.add_argument("--max-iter", type=int, default=1_000_000)
     ap.add_argument(
