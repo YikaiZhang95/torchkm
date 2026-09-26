@@ -164,7 +164,6 @@ def run_torchkm(data, m, k, lams, sk_lams, foldid, seed, dev, args):
             k=k,
             device=dev,
             random_state=seed,
-            is_exact=args.is_exact,
         )
         model.fit()
         cv_mis = model.cv(model.pred, ytr).numpy()
@@ -180,7 +179,7 @@ def run_torchkm(data, m, k, lams, sk_lams, foldid, seed, dev, args):
         cv_curve=(1.0 - cv_mis).tolist(),
         rank_used=int(model.k_eff_),
         bandwidth=float(model.sig_w_),
-        params=dict(eps=args.eps, max_iter=args.max_iter, is_exact=args.is_exact),
+        params=dict(eps=args.eps, max_iter=args.max_iter),
         **classification_metrics(data["yte"], scores),
     )
     del model
@@ -262,7 +261,7 @@ RUN = dict(torchkm=run_torchkm, sklearn=run_sklearn)
 
 def cell_settings(method: str, args) -> Dict[str, Any]:
     if method == "torchkm":
-        return dict(eps=args.eps, max_iter=args.max_iter, is_exact=args.is_exact)
+        return dict(eps=args.eps, max_iter=args.max_iter)
     return dict(time_cap=args.time_cap, sklearn_jobs=args.sklearn_jobs)
 
 
@@ -400,13 +399,6 @@ def main() -> None:
         "--eps", type=float, default=1e-5, help="TorchKM tolerance (Table 4: 1e-3)"
     )
     ap.add_argument("--max-iter", type=int, default=1_000_000)
-    ap.add_argument(
-        "--is-exact",
-        type=int,
-        default=0,
-        choices=[0, 1],
-        help="TorchKM: 1 puts the smoothing band on the margin after each fit",
-    )
     ap.add_argument(
         "--time-cap",
         type=float,
