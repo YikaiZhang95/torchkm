@@ -118,7 +118,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         tol: float = 1e-5,
         max_iter: int = 1000,
         solver_gamma: float = 1e-8,
-        is_exact: int = 0,  # only used by cvksvm/cvkdwd
+        is_exact: int = 0,  # SVM only: cvksvm and, with low_rank, cvknyssvm
         KKTeps: float = 1e-3,
         delta_len: int = 8,  # only used by cvksvm
         kkt_scaled: bool = False,
@@ -776,6 +776,8 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 random_state=self.random_state,
                 sigma=self.rbf_sigma,
             )
+            if self._BACKEND == "svm":
+                kwargs["is_exact"] = int(self.is_exact)
 
             return backend_cls(**kwargs)
 
@@ -865,7 +867,10 @@ class TorchKMSVC(_TorchKMBaseBinaryClassifier):
     solver_gamma : float, default=1e-8
         Small numerical regularizer passed to the solver.
     is_exact : int, default=0
-        Solver option used by the exact SVM backend.
+        SVM only. With ``1`` the solver moves the points in the smoothing band
+        onto the margin after each fit (exact backend, and the Nystrom backend
+        with ``low_rank=True``), so the solution is that of the hinge loss
+        rather than of its smoothed version.
     KKTeps : float, default=1e-3
         Tolerance of the KKT stopping rule applied after each smoothing
         stage (``sum(KKT**2) / max(lambda, 1)**2 < KKTeps``). The squared

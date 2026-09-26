@@ -34,6 +34,14 @@ All notable changes to TorchKM are documented in this file.
   `max_iter=100000` takes 7 s instead of 103 s.
 
 ### Added
+- `is_exact` for the Nystrom SVM (`cvknyssvm`, and `TorchKMSVC` with
+  `low_rank=True`). With `is_exact=1`, after each fit the solver puts the points
+  in the smoothing band exactly on the margin (once the band holds no more
+  points than the Nystrom rank), refits the intercept, and keeps the result
+  only if the hinge-loss KKT condition holds and the objective does not rise;
+  `mproj` bounds the rounds. On test problems it matches or slightly lowers
+  the default's objective at the same cost; on covtype (20,000 training rows,
+  ranks 30 and 300) test accuracy is unchanged.
 - `torchkm.memory`: `exact_mode_memory_estimate`, `max_exact_n`, and the
   out-of-memory message the estimators raise in exact mode (predicted
   requirement, device total, largest feasible `n`, and the `low_rank=True`

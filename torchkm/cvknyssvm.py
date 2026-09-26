@@ -25,9 +25,15 @@ class cvknyssvm:
         device="cuda",
         random_state=None,
         sigma=None,
+        is_exact=0,
+        mproj=10,
     ):
         self.device = device
         self.random_state = random_state
+        # is_exact=1 moves the points in the smoothing band onto the margin
+        # after each fit, as cvksvm does (at most ``mproj`` projection rounds).
+        self.is_exact = is_exact
+        self.mproj = mproj
         # RBF bandwidth for the landmark kernel; ``None`` estimates it from the
         # landmarks with ``sigest`` (the paper's Table 4 protocol).
         self.sigma = sigma
@@ -186,6 +192,12 @@ class cvknyssvm:
         # Precompute sum of Xmat along rows
         Xsum = torch.sum(Xmat, dim=0)
         XX = torch.mm(Xmat.T, Xmat)
+        # is_exact: the least-squares map (Z'Z)^{-1} = V diag(1/e) V' of the
+        # feature-space projection, the analogue of cvksvm's K^{-1}.
+        lsq = None
+        if self.is_exact:
+            xx_evals, xx_evecs = torch.linalg.eigh(XX)
+            lsq = (xx_evecs, 1.0 / (xx_evals.clamp_min(0.0) + self.gamma))
 
         # Initialize Amat with zeros
         Amat = torch.zeros((np + 1, np + 1), dtype=torch.double).to(self.device)
@@ -328,7 +340,14 @@ class cvknyssvm:
                     # Check convergence
                     dif_norm = torch.max(dif_step**2)
                     if dif_norm < float(nobs) * (self.eps * mul * mul):
-                        break
+                        if not self.is_exact:
+                            break
+                        alp_exact, r_exact = self._project_to_margin(
+                            alpvec, y, al, delta, Xmat, lsq, self.KKTeps, 1e-3
+                        )
+                        if alp_exact is not None:
+                            alpvec, r = alp_exact, r_exact
+                            break
                 # else:
                 #     # Reduce delta
                 #     delta *= 0.125
@@ -470,7 +489,14 @@ class cvknyssvm:
                     if KKT_norm < self.KKTeps2:
                         dif_norm = torch.max(dif_step**2)
                         if dif_norm < float(nobs) * (self.eps * mul * mul):
-                            break
+                            if not self.is_exact:
+                                break
+                            alp_exact, _ = self._project_to_margin(
+                                looalp, yn, al, delta, Xmat, lsq, self.KKTeps2, 1e-2
+                            )
+                            if alp_exact is not None:
+                                looalp = alp_exact
+                                break
                         elif dif_norm > nobs and cvnpass[l] > 2:
                             break
                         if torch.sum(cvnpass) > self.nmaxit:
@@ -526,6 +552,68 @@ class cvknyssvm:
         misclass_matrix = (pred_label != y_expanded).float()
         misclass_rate = misclass_matrix.mean(dim=0)
         return misclass_rate
+
+    def _project_to_margin(self, alpvec, yv, al, delta, Xmat, lsq, kkteps, elbtol):
+        """The ``is_exact=1`` step: put the points in the smoothing band exactly
+        on the margin, as cvksvm does in the kernel basis.
+
+        cvksvm maps the corrected fitted values back with alpha = K^{-1} theta,
+        which puts every band point on the margin and leaves the other fitted
+        values unchanged. A rank-k feature model can hold at most k points on
+        the margin through w, so a band wider than that is left to the next,
+        narrower smoothing stage. Otherwise each of at most ``mproj`` rounds
+        applies the correction that puts the band points exactly on the margin
+        and changes the fitted values least,
+        dw = G Z_E' (Z_E G Z_E')^{-1} (y_E - f_E) with G = (Z'Z)^{-1},
+        then refits the intercept.
+
+        Returns ``(alp, r)``: the projected coefficients and margins if the
+        unsmoothed KKT condition holds there and the hinge objective is no
+        higher than before the projection, else ``(None, None)``.
+        """
+        xx_evecs, xx_inv = lsq
+        nobs, nfeat = Xmat.shape
+        alptmp = alpvec.clone()
+        xa = torch.mv(Xmat, alptmp[1:])
+        obj0 = self.objfun(
+            alptmp[0], torch.dot(alptmp[1:], alptmp[1:]), xa, yv, al, nobs
+        )
+        r = yv * (alptmp[0] + xa)
+        for _ in range(self.mproj):
+            rmg = torch.abs(1.0 - r)
+            elbow = (rmg < delta) & (yv != 0)
+            nelb = int(torch.sum(elbow).item())
+            if nelb == 0 or nelb > nfeat or torch.all(rmg[elbow] <= elbtol).item():
+                break
+            ZE = Xmat[elbow]
+            GZt = torch.mm(xx_evecs, xx_inv.unsqueeze(1) * torch.mm(xx_evecs.T, ZE.T))
+            S = torch.mm(ZE, GZt)
+            S.diagonal().add_(1e-12 * S.diagonal().mean())
+            e = yv[elbow] * (1.0 - r[elbow])  # y - f on the band
+            alptmp[1:] += torch.mv(GZt, torch.linalg.solve(S, e))
+
+            xa = torch.mv(Xmat, alptmp[1:])
+            aa = torch.dot(alptmp[1:], alptmp[1:])
+            b_new, obj_new = self.golden_section_search(
+                -100.0, 100.0, nobs, xa, aa, yv, al
+            )
+            if obj_new < self.objfun(alptmp[0], aa, xa, yv, al, nobs):
+                alptmp[0] = b_new
+            r = yv * (alptmp[0] + xa)
+
+        zvec = torch.where(
+            r < 1.0,
+            -yv,
+            torch.where(r > 1.0, torch.zeros(1, device=self.device), -0.5 * yv),
+        )
+        KKT = zvec @ Xmat / float(nobs) + 2.0 * al * alptmp[1:]
+        xa = torch.mv(Xmat, alptmp[1:])
+        obj = self.objfun(
+            alptmp[0], torch.dot(alptmp[1:], alptmp[1:]), xa, yv, al, nobs
+        )
+        if torch.sum(KKT**2) < kkteps and obj <= obj0:
+            return alptmp, r
+        return None, None
 
     def objfun(self, intcpt, aka, ka, y, lam, nobs):
         """
