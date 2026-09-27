@@ -36,6 +36,14 @@ Protocol (identical for every method)
               libraries; falls back to whole-device peak where the driver hides
               per-process figures) and the PyTorch allocator peak where the
               library allocates through PyTorch
+  objective   Table 2's column for the two hinge-loss solvers: the SVM
+              objective, equation (1), (1/n) sum (1 - y f)_+ + lambda a'Ka, of
+              the fit on all training rows, in float64 on the training kernel
+              and outside the timed region. cuML's is at the lambda it
+              selected; TorchKM's is read off its path at the same lambda, so
+              the two compare as solvers (at TorchKM's own lambda when cuML
+              has no result). Falkon, KeOps and EigenPro minimise squared
+              loss, so the column is empty for them
 
 Datasets
   real        a7a, a8a, a9a, w7a, MNIST 3v8, MNIST 4v9, ijcnn1 (30k stratified
@@ -181,6 +189,32 @@ def cast(data: Dict[str, Any], dtype: str) -> Dict[str, Any]:
     return {**data, **arrays}
 
 
+def svm_objectives(
+    X, y, sig, alphas, lams, dev, *, intercepts=None, scores=None, chunk=4096
+) -> List[float]:
+    """Equation (1), (1/n) sum_i (1 - y_i f_i)_+ + lambda a'Ka, for each column
+    of ``alphas`` at the matching ``lams``: float64, training kernel
+    exp(-2 sig |x - x'|^2) built in row blocks. f = K a + b, or the method's own
+    training ``scores`` (cuML: they carry the sign convention of its dual
+    coefficients, which the penalty a'Ka does not see)."""
+    from torchkm.functions import kernelMult
+
+    n = X.shape[0]
+    Xt = torch.as_tensor(X, dtype=torch.float64, device=dev)
+    A = torch.as_tensor(np.asarray(alphas, np.float64).reshape(n, -1), device=dev)
+    KA = torch.cat(
+        [kernelMult(Xt[i : i + chunk], Xt, sig) @ A for i in range(0, n, chunk)]
+    )
+    if scores is None:
+        F = KA + torch.as_tensor(np.asarray(intercepts, np.float64), device=dev)
+    else:
+        F = torch.as_tensor(np.asarray(scores, np.float64).reshape(n, -1), device=dev)
+    yt = torch.as_tensor(np.asarray(y, np.float64), device=dev).reshape(-1, 1)
+    hinge = torch.clamp(1.0 - yt * F, min=0.0).mean(0)
+    lam = torch.as_tensor(np.asarray(lams, np.float64), device=dev)
+    return (hinge + lam * (A * KA).sum(0)).cpu().tolist()
+
+
 def warm_rows(y: np.ndarray, per_class: int = 32) -> np.ndarray:
     """Row indices with both classes present, for the untimed warm-up fit."""
     return np.r_[np.flatnonzero(y > 0)[:per_class], np.flatnonzero(y < 0)[:per_class]]
@@ -283,6 +317,7 @@ def run_torchkm(data, sig, lams, foldid, dev, args, seed):
         is_exact=0,
         dtype=args.dtype,
         random_state=seed,
+        store_path=True,  # the whole-data solution at every lambda, for the objective
     )
     # start-up: CUDA context, cuSOLVER/cuBLAS handles
     torch.linalg.eigh(torch.eye(64, dtype=getattr(torch, args.dtype), device=dev))
@@ -294,6 +329,10 @@ def run_torchkm(data, sig, lams, foldid, dev, args, seed):
         sync(dev)
         dt = time.perf_counter() - t0
     conv = clf.converged_
+    path = clf.alpmat_path_.double().numpy()  # row 0 the intercepts, then alpha
+    objective = svm_objectives(
+        data["Xtr"], data["ytr"], sig, path[1:], lams, dev, intercepts=path[0]
+    )
     return result(
         pm,
         dt,
@@ -301,6 +340,8 @@ def run_torchkm(data, sig, lams, foldid, dev, args, seed):
         data["yte"],
         selected=float(1.0 / (2.0 * n * clf.best_C_)),
         selected_label="lambda",
+        objective=objective[clf.best_ind_],
+        objective_path=objective,
         cv_accuracy=1.0 - float(clf.cv_mis_[clf.best_ind_]),
         cv_curve=(1.0 - np.asarray(clf.cv_mis_, dtype=float)).tolist(),
         grid_completed=len(lams),
@@ -324,6 +365,7 @@ def run_cuml(data, sig, lams, foldid, dev, args, seed):
     from cuml.svm import SVC
 
     gamma = 2.0 * sig
+    last = {}
 
     def fit_predict(lam, Xa, ya, Xb):
         model = SVC(
@@ -334,13 +376,22 @@ def run_cuml(data, sig, lams, foldid, dev, args, seed):
             output_type="numpy",
         )
         model.fit(Xa, ya)
+        last["model"] = model
         return model.decision_function(Xb)
 
     params = dict(
         loss="hinge", solver="SMO", gamma=gamma, cache_size_mb=args.svc_cache_mb
     )
     params.update(C="1/(2 n lambda), n = rows of the fit", dtype=args.dtype)
-    return sweep(fit_predict, data, foldid, list(map(float, lams)), dev, args, params)
+    rec = sweep(fit_predict, data, foldid, list(map(float, lams)), dev, args, params)
+    model = last["model"]  # sweep's last fit: all training rows, selected lambda
+    alpha = np.zeros(data["Xtr"].shape[0])
+    alpha[np.asarray(model.support_)] = np.asarray(model.dual_coef_).ravel()
+    scores = model.decision_function(data["Xtr"])
+    rec["objective"] = svm_objectives(
+        data["Xtr"], data["ytr"], sig, alpha, [rec["selected"]], dev, scores=scores
+    )[0]
+    return rec
 
 
 def run_falkon(data, sig, lams, foldid, dev, args, seed):
@@ -600,6 +651,10 @@ def reusable(rec: Dict[str, Any], args: argparse.Namespace) -> bool:
     """A finished cell computed with the same settings as this run."""
     if rec.get("status") not in ("ok", "capped"):
         return False
+    if rec["method"] == "torchkm" and "objective_path" not in rec:
+        return False  # computed before the objective column existed
+    if rec["method"] == "cuml" and "objective" not in rec:
+        return False
     have = rec.get("params") or {}
     return all(have.get(k) == v for k, v in cell_settings(rec["method"], args).items())
 
@@ -610,6 +665,22 @@ def at_grid_edge(rec: Dict[str, Any], doc: Dict[str, Any]) -> bool:
         return rec["selected"] >= rec["grid_size"]
     lo, hi = min(doc["grid_lambda"]), max(doc["grid_lambda"])
     return bool(np.isclose(rec["selected"], lo) or np.isclose(rec["selected"], hi))
+
+
+def shown_objective(rec: Dict[str, Any], doc: Dict[str, Any]) -> Optional[float]:
+    """The SVM objective the table shows: cuML's at its lambda, TorchKM's at the
+    lambda cuML selected in the same repeat (read off its path), else its own."""
+    if rec["method"] == "torchkm" and rec.get("objective_path"):
+        for c in doc["records"]:
+            if (
+                c["method"] == "cuml"
+                and (c["dataset"], c["repeat"]) == (rec["dataset"], rec["repeat"])
+                and c.get("objective") is not None
+            ):
+                grid = np.log(np.asarray(doc["grid_lambda"]))
+                j = int(np.argmin(np.abs(grid - np.log(c["selected"]))))
+                return rec["objective_path"][j]
+    return rec.get("objective")
 
 
 def write_markdown(doc: Dict[str, Any], path: str) -> str:
@@ -624,12 +695,16 @@ def write_markdown(doc: Dict[str, Any], path: str) -> str:
         f"(lambda in [{a['lam_min']:g}, {a['lam_max']:g}]; epochs 1..{a['grid_size']} for EigenPro), "
         f"seed {a['seed']} + repeat index; 'runs' = repeats in that row.",
         "Time = CV sweep + final fit + test predictions. Memory = NVML peak of the process.",
+        "SVM objective = equation (1), (1/n) sum (1 - y f)_+ + lambda a'Ka, of the fit on all "
+        "training rows, in float64 on the training kernel (Table 2's column), for the "
+        "hinge-loss solvers; TorchKM's is read off its path at the lambda cuML selected in the "
+        "same repeat, so the two compare at the same lambda.",
         "Cells are mean +- SE over repeats; 'selected' lists the chosen value per repeat "
         "(median and range beyond five repeats).",
         "",
         "| dataset | n_train | n_test | p | positive | method | runs | test accuracy "
-        "| balanced accuracy | AUC | time (s) | GPU memory | selected | note |",
-        "|---|---:|---:|---:|---:|---|---:|---|---|---|---|---|---|---|",
+        "| balanced accuracy | AUC | SVM objective | time (s) | GPU memory | selected | note |",
+        "|---|---:|---:|---:|---:|---|---:|---|---|---|---|---|---|---|---|",
     ]
     groups: Dict[tuple, List[Dict[str, Any]]] = {}
     for r in doc["records"]:
@@ -646,12 +721,12 @@ def write_markdown(doc: Dict[str, Any], path: str) -> str:
             note = "; ".join(
                 sorted({r.get("note") or r.get("error") or r["status"] for r in recs})
             )
-            lines.append(f"{head} 0 | - | - | - | - | - | - | {note[:120]} |")
+            lines.append(f"{head} 0 | - | - | - | - | - | - | - | {note[:120]} |")
             continue
         acc = mean_se([r["accuracy"] for r in ok])
 
-        def pm_se(key: str) -> str:
-            vals = [r.get(key) for r in ok if r.get(key) is not None]
+        def pm_se(vals) -> str:
+            vals = [v for v in vals if v is not None]
             if not vals:
                 return "-"
             m_, se_ = mean_se(vals)
@@ -694,8 +769,10 @@ def write_markdown(doc: Dict[str, Any], path: str) -> str:
                 "selected at grid edge (" + ", ".join(edge) + "): widen the range"
             )
         lines.append(
-            f"{head} {len(ok)} | {acc[0]:.4f} +- {acc[1]:.4f} | {pm_se('balanced_accuracy')} "
-            f"| {pm_se('auc')} | {t[0]:.1f} +- {t[1]:.1f} | "
+            f"{head} {len(ok)} | {acc[0]:.4f} +- {acc[1]:.4f} "
+            f"| {pm_se(r.get('balanced_accuracy') for r in ok)} "
+            f"| {pm_se(r.get('auc') for r in ok)} "
+            f"| {pm_se(shown_objective(r, doc) for r in ok)} | {t[0]:.1f} +- {t[1]:.1f} | "
             f"{fmt_bytes(mem[0])} | {label} = {sel} | {'; '.join(notes)} |"
         )
     text = "\n".join(lines) + "\n"
@@ -880,6 +957,11 @@ def main() -> None:
                         f" {rec.get('selected_label')}={rec.get('selected'):.3g}"
                         + (" (grid edge)" if at_grid_edge(rec, doc) else "")
                         if "selected" in rec
+                        else ""
+                    )
+                    + (
+                        f" objective={rec['objective']:.4f}"
+                        if rec.get("objective") is not None
                         else ""
                     )
                 )
