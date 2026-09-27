@@ -25,7 +25,9 @@ Protocol (identical for every method)
   selection   10-fold stratified CV (the paper's protocol; --folds) on the same
               folds for every method, then
               one fit on the full training set at the selected value
-  precision   float64 everywhere
+  precision   float32 everywhere by default (--dtype float64 for double): the
+              features go to every method in that precision and each computes
+              in it; the bandwidth is estimated in float64 either way
   timing      wall clock for everything a user pays for a tuned model: kernel
               construction, the whole CV sweep, the final fit and the test
               predictions; CUDA synchronised; one-off library start-up (JIT
@@ -45,11 +47,10 @@ Datasets
               data are redrawn for every repeat (seed 52 + repeat); the test set
               is n/10 rows from the same mixture. Any sim_<n>x<p> works
 
-Methods (default: torchkm, cuml, falkon; keops and eigenpro are optional extra
-columns, selected with --methods)
+Methods (default: all five; --methods picks a subset)
   torchkm     TorchKMSVC, hinge loss: one eigendecomposition of the kernel,
               the whole lambda path and the exact CV formula; is_exact=0 (the
-              default), KKTeps from --kkt-eps. "Exceeded maximum delta
+              default), KKTeps from --kkt-eps, dtype from --dtype. "Exceeded maximum delta
               iterations for lambda i" in the log means the KKT test was still
               unmet after --delta-len smoothing rounds for the i-th lambda of
               the path (small to large): the last iterate is kept and the
@@ -72,7 +73,8 @@ columns, selected with --methods)
               epoch; the best epoch count is refit on all rows. The package's
               LOBPCG eigensolver for the preconditioner returned NaN eigenpairs
               in float64, so this script gives it torch.linalg.eigh on the same
-              2,000-row subsample kernel (the algorithm is otherwise untouched)
+              2,000-row subsample kernel (the algorithm is otherwise untouched;
+              exact top eigenpairs in either precision)
 
 Install on the GPU machine (TorchKM's own environment plus):
   pip install pykeops
@@ -141,7 +143,6 @@ DATASETS = [
     "sim_20000x1000",
 ]
 METHODS = ["torchkm", "cuml", "falkon", "keops", "eigenpro"]
-DEFAULT_METHODS = ["torchkm", "cuml", "falkon"]
 
 
 def parse_sim(name: str) -> Optional[tuple]:
@@ -172,6 +173,12 @@ def in_chunks(fn: Callable, X: np.ndarray, chunk: int = 4096) -> np.ndarray:
         np.asarray(fn(X[i : i + chunk])).reshape(-1) for i in range(0, len(X), chunk)
     ]
     return np.concatenate(parts)
+
+
+def cast(data: Dict[str, Any], dtype: str) -> Dict[str, Any]:
+    """The dataset with its feature and label arrays in ``dtype``."""
+    arrays = {k: data[k].astype(dtype) for k in ("Xtr", "ytr", "Xte", "yte")}
+    return {**data, **arrays}
 
 
 def warm_rows(y: np.ndarray, per_class: int = 32) -> np.ndarray:
@@ -274,10 +281,11 @@ def run_torchkm(data, sig, lams, foldid, dev, args, seed):
         KKTeps=args.kkt_eps,
         delta_len=args.delta_len,
         is_exact=0,
+        dtype=args.dtype,
         random_state=seed,
     )
     # start-up: CUDA context, cuSOLVER/cuBLAS handles
-    torch.linalg.eigh(torch.eye(64, dtype=torch.float64, device=dev))
+    torch.linalg.eigh(torch.eye(64, dtype=getattr(torch, args.dtype), device=dev))
     sync(dev)
     with PeakMemory(dev) as pm:
         t0 = time.perf_counter()
@@ -307,7 +315,7 @@ def run_torchkm(data, sig, lams, foldid, dev, args, seed):
             KKTeps=args.kkt_eps,
             delta_len=args.delta_len,
             C="1/(2 n lambda), n = training rows",
-            dtype="float64",
+            dtype=args.dtype,
         ),
     )
 
@@ -331,7 +339,7 @@ def run_cuml(data, sig, lams, foldid, dev, args, seed):
     params = dict(
         loss="hinge", solver="SMO", gamma=gamma, cache_size_mb=args.svc_cache_mb
     )
-    params.update(C="1/(2 n lambda), n = rows of the fit", dtype="float64")
+    params.update(C="1/(2 n lambda), n = rows of the fit", dtype=args.dtype)
     return sweep(fit_predict, data, foldid, list(map(float, lams)), dev, args, params)
 
 
@@ -360,7 +368,7 @@ def run_falkon(data, sig, lams, foldid, dev, args, seed):
         loss="squared",
         solver="preconditioned CG, M = n",
         maxiter=args.falkon_maxiter,
-        dtype="float64",
+        dtype=args.dtype,
     )
     return sweep(fit_predict, data, foldid, list(map(float, lams)), dev, args, params)
 
@@ -416,7 +424,7 @@ def run_keops(data, sig, lams, foldid, dev, args, seed):
         solver="matrix-free CG on a LazyTensor kernel",
         cg_tol=args.keops_tol,
         cg_maxiter=args.keops_maxiter,
-        dtype="float64",
+        dtype=args.dtype,
     )
     rec = sweep(fit_predict, data, foldid, list(map(float, lams)), dev, args, params)
     rec["cg_maxiter_hits"] = hits[0]
@@ -443,8 +451,12 @@ def run_eigenpro(data, sig, lams, foldid, dev, args, seed):  # lams unused: epoc
     epm.nystrom_kernel_eigh = exact_subsample_eigh
     bandwidth = 1.0 / (2.0 * math.sqrt(sig))
     epochs = args.grid_size
+    dtype = getattr(torch, args.dtype)
+    # the package sizes its batches for 4-byte entries: halve the budget in float64
     mem_gb = (
-        torch.cuda.get_device_properties(dev).total_memory / 2**30 / 2  # float64
+        torch.cuda.get_device_properties(dev).total_memory
+        / 2**30
+        / (torch.finfo(dtype).bits // 32)
         if dev.startswith("cuda")
         else 8
     )
@@ -454,7 +466,7 @@ def run_eigenpro(data, sig, lams, foldid, dev, args, seed):  # lams unused: epoc
         return gaussian(a, b, bandwidth=bandwidth)
 
     def onehot(v):  # column 0 = class -1, column 1 = class +1
-        return torch.from_numpy(np.stack([v < 0, v > 0], 1).astype(np.float64)).to(dev)
+        return torch.from_numpy(np.stack([v < 0, v > 0], 1).astype(v.dtype)).to(dev)
 
     def train(Xa, ya, n_epochs, Xb=None, yb=None):
         torch.manual_seed(seed)
@@ -481,7 +493,7 @@ def run_eigenpro(data, sig, lams, foldid, dev, args, seed):  # lams unused: epoc
         return in_chunks(block, X)
 
     default_dtype = torch.get_default_dtype()
-    torch.set_default_dtype(torch.float64)  # the package's weights follow the default
+    torch.set_default_dtype(dtype)  # the package's weights follow the default
     try:
         train(Xtr[:256], ytr[:256], 1)  # start-up, untimed
         sync(dev)
@@ -518,7 +530,7 @@ def run_eigenpro(data, sig, lams, foldid, dev, args, seed):  # lams unused: epoc
             loss="squared",
             solver="EigenPro 2 preconditioned SGD, all rows as centres",
             preconditioner="top eigenvectors of a 2,000-row subsample kernel (torch.linalg.eigh)",
-            dtype="float64",
+            dtype=args.dtype,
         ),
     )
 
@@ -567,19 +579,21 @@ def save_json(doc: Dict[str, Any], path: str) -> None:
 def cell_settings(method: str, args: argparse.Namespace) -> Dict[str, Any]:
     """The solver settings a method's result depends on, as stored in its record."""
     if method == "torchkm":
-        return dict(
+        own = dict(
             tol=args.tol,
             max_iter=args.max_iter,
             KKTeps=args.kkt_eps,
             delta_len=args.delta_len,
         )
-    if method == "cuml":
-        return dict(cache_size_mb=args.svc_cache_mb)
-    if method == "falkon":
-        return dict(maxiter=args.falkon_maxiter)
-    if method == "keops":
-        return dict(cg_tol=args.keops_tol, cg_maxiter=args.keops_maxiter)
-    return {}
+    elif method == "cuml":
+        own = dict(cache_size_mb=args.svc_cache_mb)
+    elif method == "falkon":
+        own = dict(maxiter=args.falkon_maxiter)
+    elif method == "keops":
+        own = dict(cg_tol=args.keops_tol, cg_maxiter=args.keops_maxiter)
+    else:
+        own = {}
+    return dict(own, dtype=args.dtype)
 
 
 def reusable(rec: Dict[str, Any], args: argparse.Namespace) -> bool:
@@ -605,7 +619,7 @@ def write_markdown(doc: Dict[str, Any], path: str) -> str:
         "# Q1: TorchKM vs GPU kernel libraries, full kernel",
         "",
         f"{gpu}; torch {env.get('torch')}; torchkm {env.get('torchkm')} "
-        f"({str(env.get('torchkm_commit'))[:10]}); float64 everywhere.",
+        f"({str(env.get('torchkm_commit'))[:10]}); {a.get('dtype', 'float64')} everywhere.",
         f"{a['folds']}-fold CV on shared stratified folds, {a['grid_size']} grid values "
         f"(lambda in [{a['lam_min']:g}, {a['lam_max']:g}]; epochs 1..{a['grid_size']} for EigenPro), "
         f"seed {a['seed']} + repeat index; 'runs' = repeats in that row.",
@@ -701,7 +715,13 @@ def main() -> None:
     )
     ap.add_argument("--data-dir", default=None, help="directory of LIBSVM files")
     ap.add_argument("--datasets", nargs="+", default=DATASETS)
-    ap.add_argument("--methods", nargs="+", choices=METHODS, default=DEFAULT_METHODS)
+    ap.add_argument("--methods", nargs="+", choices=METHODS, default=METHODS)
+    ap.add_argument(
+        "--dtype",
+        choices=["float32", "float64"],
+        default="float32",
+        help="precision of every method (default float32)",
+    )
     ap.add_argument("--device", default="cuda", help="cuda (default) or cpu")
     ap.add_argument("--repeats", type=int, default=3, help="seeds per dataset")
     ap.add_argument("--folds", type=int, default=10, help="CV folds (paper: 10)")
@@ -804,12 +824,19 @@ def main() -> None:
 
     for ds in args.datasets:
         sim = parse_sim(ds)
-        data = None if sim else load_dataset(ds, args.data_dir, seed=args.seed)
+        data = (
+            None
+            if sim
+            else cast(load_dataset(ds, args.data_dir, seed=args.seed), args.dtype)
+        )
         for r in range(args.repeats):
             seed = args.seed + r
             if sim:  # Table 2 protocol: fresh data for every repeat
-                data = synthetic_dataset(
-                    sim[0], sim[1], seed, name=ds, n_test=sim[0] // 10
+                data = cast(
+                    synthetic_dataset(
+                        sim[0], sim[1], seed, name=ds, n_test=sim[0] // 10
+                    ),
+                    args.dtype,
                 )
             if r == 0:
                 print(
@@ -817,7 +844,7 @@ def main() -> None:
                     f"p={data['p']} positive fraction={data['pos_frac']:.3f}"
                 )
             torch.manual_seed(seed)
-            sig = float(sigest(torch.from_numpy(data["Xtr"])))
+            sig = float(sigest(torch.from_numpy(data["Xtr"]).double()))
             foldid = make_folds(data["ytr"], args.folds, seed)
             for m in args.methods:
                 if (ds, m, r) in done:
