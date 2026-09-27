@@ -108,6 +108,7 @@ and computed again otherwise):
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import os
@@ -347,6 +348,7 @@ def run_torchkm(data, sig, lams, foldid, dev, args, seed):
         objective_path=objective,
         time_profile=profile,
         passes=clf.n_passes_,
+        fit_profile=clf.fit_profile_,
         cv_accuracy=1.0 - float(clf.cv_mis_[clf.best_ind_]),
         cv_curve=(1.0 - np.asarray(clf.cv_mis_, dtype=float)).tolist(),
         grid_completed=len(lams),
@@ -656,9 +658,8 @@ def reusable(rec: Dict[str, Any], args: argparse.Namespace) -> bool:
     """A finished cell computed with the same settings as this run."""
     if rec.get("status") not in ("ok", "capped"):
         return False
-    if rec["method"] == "torchkm" and not {"objective_path", "time_profile"} <= set(
-        rec
-    ):
+    recorded = {"objective_path", "time_profile", "fit_profile"}
+    if rec["method"] == "torchkm" and not recorded <= set(rec):
         return False  # computed before the objective and profile were recorded
     if rec["method"] == "cuml" and "objective" not in rec:
         return False
@@ -786,7 +787,39 @@ def write_markdown(doc: Dict[str, Any], path: str) -> str:
     text = "\n".join(lines) + "\n"
     with open(path, "w") as fh:
         fh.write(text)
+    write_cv_profile(doc, os.path.splitext(path)[0] + "_cv_profile.csv")
     return text
+
+
+def write_cv_profile(doc: Dict[str, Any], path: str) -> None:
+    """TorchKM per lambda: seconds of the whole-data fit and of the fold fits
+    (fitted together), and the solver iterations of each fold, one CSV row per
+    (dataset, repeat, lambda)."""
+    rows = [
+        r
+        for r in doc["records"]
+        if r["method"] == "torchkm" and (r.get("fit_profile") or {}).get("cv_passes")
+    ]
+    if not rows:
+        return
+    folds = len(rows[0]["fit_profile"]["cv_passes"])
+    with open(path, "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(
+            ["dataset", "repeat", "dtype", "lambda_index", "lambda", "path_seconds"]
+            + ["cv_seconds", "path_passes", "cv_passes"]
+            + [f"cv_passes_fold{k + 1}" for k in range(folds)]
+        )
+        for r in rows:
+            fp = r["fit_profile"]
+            for j, lam in enumerate(fp["lambdas"]):
+                per_fold = [f[j] for f in fp["cv_passes"]]
+                w.writerow(
+                    [r["dataset"], r["repeat"], r["params"]["dtype"], j, f"{lam:.6g}"]
+                    + [f"{fp['path_seconds'][j]:.6f}", f"{fp['cv_seconds'][j]:.6f}"]
+                    + [fp["path_passes"][j], sum(per_fold)]
+                    + per_fold
+                )
 
 
 PHASES = [
@@ -814,13 +847,17 @@ def profile_table(doc: Dict[str, Any]) -> List[str]:
         "Mean seconds over repeats. Kernel, eigendecomposition, its error check, "
         "lambda path (whole-data fits) and CV fits make up the fit; 'other' is the rest "
         "of the fit (data conversion, selection, copies). Passes = solver iterations, "
-        "path / CV (each a few matrix-vector products with the n x n kernel).",
+        "path / CV (each a few matrix-vector products with the n x n kernel). "
+        "Per CV fit = CV fits / (folds x lambdas); the 10 folds of a lambda are "
+        "fitted together, and <out>_cv_profile.csv has the seconds per lambda and the "
+        "iterations per fold and lambda.",
         "",
         "| dataset | runs | "
         + " | ".join(label for _, label in PHASES)
-        + " | other | total (s) | passes |",
-        "|---|---:|" + "---:|" * (len(PHASES) + 3),
+        + " | other | total (s) | passes | per CV fit (ms) |",
+        "|---|---:|" + "---:|" * (len(PHASES) + 4),
     ]
+    n_fits = doc["args"]["folds"] * doc["args"]["grid_size"]
     for ds, rs in recs.items():
         mean = {
             k: float(np.mean([r["time_profile"].get(k, 0.0) for r in rs]))
@@ -840,7 +877,8 @@ def profile_table(doc: Dict[str, Any]) -> List[str]:
         lines.append(
             f"| {ds} | {len(rs)} | "
             + " | ".join(share(mean[k]) for k, _ in PHASES)
-            + f" | {share(other)} | {total:.1f} | {pas} |"
+            + f" | {share(other)} | {total:.1f} | {pas} "
+            + f"| {1e3 * mean['cross_validation'] / n_fits:.1f} |"
         )
     return lines
 
