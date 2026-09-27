@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 from __future__ import annotations
 
+import time
 from typing import Any, Literal, Optional, Tuple, Union
 
 import numpy as np
@@ -51,6 +52,13 @@ def _pick_device_str(device: Optional[Union[str, torch.device]]) -> str:
         return "cuda" if device.type == "cuda" else "cpu"
     dev = str(device).lower()
     return "cuda" if dev.startswith("cuda") and torch.cuda.is_available() else "cpu"
+
+
+def _now(dev: str) -> float:
+    """Wall clock once the device's queued work is done."""
+    if dev == "cuda":
+        torch.cuda.synchronize()
+    return time.perf_counter()
 
 
 def _make_ulam(nC: int, Cs: Optional[Any], C_max: float, C_min: float) -> torch.Tensor:
@@ -216,6 +224,8 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             "_platt_device_",
             "peak_gpu_memory_bytes_",
             "_work_dtype_",
+            "fit_timing_",
+            "n_passes_",
         )
         for attr in fitted_attrs:
             if hasattr(self, attr):
@@ -330,6 +340,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             # Peak-memory accounting for the whole fit (kernel build, solver,
             # calibration); read back into ``peak_gpu_memory_bytes_``.
             torch.cuda.reset_peak_memory_stats(dev)
+        t_start = _now(dev)
 
         # lambdas
         uC_t = _make_ulam(self.nC, self.Cs, self.C_max, self.C_min)
@@ -359,6 +370,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         self.foldid_ = foldid_t.detach().cpu().to(torch.int64).numpy()
         self.y_fit_original_ = np.asarray(y_np).copy()
 
+        t_kernel = _now(dev)
         if self.low_rank:
             self.X_fit_ = X_np
             self.kernel_state_ = {"low_rank": True}
@@ -382,6 +394,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 self.kernel_state_ = kernel_state
 
             K_train = K_train.to(dev)
+        kernel_s = _now(dev) - t_kernel
 
         backend = self._make_backend(
             low_rank=self.low_rank,
@@ -457,6 +470,23 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
 
         self.peak_gpu_memory_bytes_ = (
             int(torch.cuda.max_memory_allocated(dev)) if dev == "cuda" else None
+        )
+        # Where the fit's time went, in seconds: building the kernel, the
+        # backend's own phases where it records them (the exact SVM solver:
+        # eigendecomposition, its error check, the lambda path, the
+        # cross-validation fits), and the whole fit. Passes are solver
+        # iterations, one matrix-vector product with the kernel each.
+        self.fit_timing_ = dict(
+            kernel=kernel_s,
+            **(getattr(backend, "timing", None) or {}),
+            total=_now(dev) - t_start,
+        )
+        npass = getattr(backend, "npass", None)
+        cvnpass = getattr(backend, "cvnpass", None)
+        self.n_passes_ = (
+            None
+            if npass is None or cvnpass is None
+            else dict(path=int(npass.sum()), cross_validation=int(cvnpass.sum()))
         )
 
         # free big GPU kernel tensor ASAP
@@ -972,6 +1002,16 @@ class TorchKMSVC(_TorchKMBaseBinaryClassifier):
         the whole ``fit`` call: kernel construction, the solver, and Platt
         calibration. ``None`` when the fit ran on CPU. Exact mode scales as
         ``n^2``; see :mod:`torchkm.memory` and the "Operating envelope" page.
+    fit_timing_ : dict
+        Wall-clock seconds of the last ``fit`` by phase: ``kernel`` (building
+        the kernel matrix), in exact mode ``eigendecomposition``,
+        ``factorization_error`` (the check of its rounding error), ``path``
+        (the whole-data fits along the lambda grid) and ``cross_validation``
+        (the fold fits), and ``total`` (the whole call).
+    n_passes_ : dict or None
+        Solver iterations of the last ``fit``, ``path`` and
+        ``cross_validation`` (one per fold and lambda iteration); each costs a
+        few matrix-vector products with the ``n x n`` kernel.
 
     Notes
     -----

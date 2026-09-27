@@ -57,6 +57,12 @@ All notable changes to TorchKM are documented in this file.
   to 5%, as much as float64 itself moves between `KKTeps=1e-6` and `1e-9`.
   `is_exact=1` needs float64; the other solvers and estimators stay in
   float64.
+- Fitted attributes `fit_timing_` and `n_passes_` on the binary classifiers:
+  seconds per phase of the last fit (kernel build, and for the exact SVM
+  solver the eigendecomposition, its error check, the lambda path and the
+  cross-validation fits; CUDA synchronised at each boundary) and the solver
+  iterations of the path and of the cross-validation fits. `cvksvm` records
+  its phases in `timing`.
 - `torchkm.memory`: `exact_mode_memory_estimate`, `max_exact_n`, and the
   out-of-memory message the estimators raise in exact mode (predicted
   requirement, device total, largest feasible `n`, and the `low_rank=True`

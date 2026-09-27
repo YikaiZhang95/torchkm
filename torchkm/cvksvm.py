@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: MIT
+import time
 import warnings
 
 import torch
@@ -276,6 +277,8 @@ class cvksvm:
             self.device
         )
         self.jerr = 0
+        # seconds spent in each phase of the last fit (see ``fit``)
+        self.timing = None
 
     def fit(self):
         nobs = self.nobs
@@ -300,7 +303,16 @@ class cvksvm:
         Ksum = torch.sum(Kmat, dim=1)
         # Kinv = torch.linalg.inv(Kmat)
 
+        # Wall-clock seconds per phase, device work included: the kernel's
+        # eigendecomposition, the check of its rounding error, the whole-data
+        # lambda path and the cross-validation fits.
+        timing = dict.fromkeys(
+            ("eigendecomposition", "factorization_error", "path", "cross_validation"),
+            0.0,
+        )
+        t = self._now()
         eigens, Umat = torch.linalg.eigh(Kmat)
+        timing["eigendecomposition"] = self._now() - t
         # K is positive semi-definite, so a negative eigenvalue is rounding error.
         eigens.clamp_min_(0.0)
         # The steps bound the loss curvature with U diag(eigens) U^T, which equals
@@ -309,7 +321,10 @@ class cvksvm:
         # error lets the float32 bound fall a few percent below K and the
         # accelerated steps oscillate instead of converging; adding twice the
         # error to the eigenvalues keeps the bound above K.
-        eigens += self.gamma + 2.0 * _factorization_error(Kmat, Umat, eigens)
+        t = self._now()
+        error = _factorization_error(Kmat, Umat, eigens)
+        timing["factorization_error"] = self._now() - t
+        eigens += self.gamma + 2.0 * error
         Usum = torch.sum(Umat, dim=0)
         einv = 1 / eigens
         # The regularised inverse K^{-1} = U diag(einv) U^T is applied on the
@@ -329,7 +344,7 @@ class cvksvm:
         gval = torch.zeros((self.delta_len), dtype=self.dtype, device=self.device)
 
         for l in range(nlam):
-            # start = time.time()
+            t = self._now()
             al = self.ulam[l].item()
             delta = 1.0
             delta_id = 0
@@ -589,6 +604,8 @@ class cvksvm:
             alpmat[:, l] = alpvec
             # Update anlam
             self.anlam = l
+            t_cv = self._now()
+            timing["path"] += t_cv - t
 
             # Check if maximum iterations exceeded
             if torch.sum(npass) > self.maxit:
@@ -622,6 +639,7 @@ class cvksvm:
                     one=one,
                 )
                 self.anlam = l
+                timing["cross_validation"] += self._now() - t_cv
                 continue
             for nf in range(nfolds):
                 # start = time.time()
@@ -905,7 +923,9 @@ class cvksvm:
                 # print(pred[loo_ind, l][:10])
                 # print(f'{nf}-fold: {time.time() - start}')
             self.anlam = l
+            timing["cross_validation"] += self._now() - t_cv
 
+        self.timing = timing
         self.alpmat = alpmat
         self.npass = npass
         self.cvnpass = cvnpass
@@ -1113,6 +1133,12 @@ class cvksvm:
         cv_alpha[fold_masks] = 0.0
         cv_scores = torch.mm(Kmat, cv_alpha) + looalp_batch[0, :].unsqueeze(0)
         return cv_scores[row_index, fold_col_index]
+
+    def _now(self):
+        """Wall clock once the device's queued work is done, for ``timing``."""
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
+        return time.perf_counter()
 
     def _stalled(self, step2, stall):
         """True once the largest step has not reached a new low for
