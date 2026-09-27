@@ -325,10 +325,13 @@ def run_torchkm(data, sig, lams, foldid, dev, args, seed):
     with PeakMemory(dev) as pm:
         t0 = time.perf_counter()
         clf.fit(data["Xtr"], data["ytr"])
+        sync(dev)
+        t_fit = time.perf_counter()
         pred = in_chunks(clf.decision_function, data["Xte"])
         sync(dev)
         dt = time.perf_counter() - t0
     conv = clf.converged_
+    profile = dict(clf.fit_timing_, prediction=dt - (t_fit - t0))
     path = clf.alpmat_path_.double().numpy()  # row 0 the intercepts, then alpha
     objective = svm_objectives(
         data["Xtr"], data["ytr"], sig, path[1:], lams, dev, intercepts=path[0]
@@ -342,6 +345,8 @@ def run_torchkm(data, sig, lams, foldid, dev, args, seed):
         selected_label="lambda",
         objective=objective[clf.best_ind_],
         objective_path=objective,
+        time_profile=profile,
+        passes=clf.n_passes_,
         cv_accuracy=1.0 - float(clf.cv_mis_[clf.best_ind_]),
         cv_curve=(1.0 - np.asarray(clf.cv_mis_, dtype=float)).tolist(),
         grid_completed=len(lams),
@@ -651,8 +656,10 @@ def reusable(rec: Dict[str, Any], args: argparse.Namespace) -> bool:
     """A finished cell computed with the same settings as this run."""
     if rec.get("status") not in ("ok", "capped"):
         return False
-    if rec["method"] == "torchkm" and "objective_path" not in rec:
-        return False  # computed before the objective column existed
+    if rec["method"] == "torchkm" and not {"objective_path", "time_profile"} <= set(
+        rec
+    ):
+        return False  # computed before the objective and profile were recorded
     if rec["method"] == "cuml" and "objective" not in rec:
         return False
     have = rec.get("params") or {}
@@ -775,10 +782,67 @@ def write_markdown(doc: Dict[str, Any], path: str) -> str:
             f"| {pm_se(shown_objective(r, doc) for r in ok)} | {t[0]:.1f} +- {t[1]:.1f} | "
             f"{fmt_bytes(mem[0])} | {label} = {sel} | {'; '.join(notes)} |"
         )
+    lines += profile_table(doc)
     text = "\n".join(lines) + "\n"
     with open(path, "w") as fh:
         fh.write(text)
     return text
+
+
+PHASES = [
+    ("kernel", "kernel"),
+    ("eigendecomposition", "eigendecomposition"),
+    ("factorization_error", "error check"),
+    ("path", "lambda path"),
+    ("cross_validation", "CV fits"),
+    ("prediction", "test prediction"),
+]
+
+
+def profile_table(doc: Dict[str, Any]) -> List[str]:
+    """Where TorchKM's time goes, per dataset: mean seconds over repeats."""
+    recs: Dict[str, List[Dict[str, Any]]] = {}
+    for r in doc["records"]:
+        if r["method"] == "torchkm" and r.get("time_profile"):
+            recs.setdefault(r["dataset"], []).append(r)
+    if not recs:
+        return []
+    lines = [
+        "",
+        "## TorchKM time profile",
+        "",
+        "Mean seconds over repeats. Kernel, eigendecomposition, its error check, "
+        "lambda path (whole-data fits) and CV fits make up the fit; 'other' is the rest "
+        "of the fit (data conversion, selection, copies). Passes = solver iterations, "
+        "path / CV (each a few matrix-vector products with the n x n kernel).",
+        "",
+        "| dataset | runs | "
+        + " | ".join(label for _, label in PHASES)
+        + " | other | total (s) | passes |",
+        "|---|---:|" + "---:|" * (len(PHASES) + 3),
+    ]
+    for ds, rs in recs.items():
+        mean = {
+            k: float(np.mean([r["time_profile"].get(k, 0.0) for r in rs]))
+            for k, _ in PHASES
+        }
+        fit_total = float(np.mean([r["time_profile"]["total"] for r in rs]))
+        other = fit_total - sum(v for k, v in mean.items() if k != "prediction")
+        total = float(np.mean([r["time_s"] for r in rs]))
+        share = lambda v: f"{v:.2f} ({v / total:.0%})"  # noqa: E731
+        passes = [r["passes"] for r in rs if r.get("passes")]
+        pas = (
+            f"{np.mean([q['path'] for q in passes]):,.0f} / "
+            f"{np.mean([q['cross_validation'] for q in passes]):,.0f}"
+            if passes
+            else "-"
+        )
+        lines.append(
+            f"| {ds} | {len(rs)} | "
+            + " | ".join(share(mean[k]) for k, _ in PHASES)
+            + f" | {share(other)} | {total:.1f} | {pas} |"
+        )
+    return lines
 
 
 # ---------------------------------------------------------------------------
