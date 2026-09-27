@@ -20,7 +20,11 @@ values). The prediction TorchKM uses is
 \]
 
 with \(c\) the number of resident \(n \times n\) copies,
-`torchkm.memory.EXACT_MODE_COPIES`. The constant is calibrated, not derived:
+`torchkm.memory.EXACT_MODE_COPIES`. `TorchKMSVC(dtype="float32")` stores
+every \(n \times n\) matrix in 4 bytes per entry instead of 8, which halves
+the peak and raises the largest feasible \(n\) by about \(\sqrt{2}\); pass
+`dtype=torch.float32` to `exact_mode_memory_estimate` and `max_exact_n` for
+its envelope. The other exact solvers run in float64. The constant is calibrated, not derived:
 `benchmarks/bench_memory_envelope.py` fits exact mode at increasing \(n\)
 until the first out-of-memory error and reports the empirical \(c\) for the
 PyTorch and CUDA build in use. Run it once on your hardware; its measured
@@ -88,6 +92,7 @@ accuracy is short of the exact-mode result on a subsample.
 
 Exact mode pays one \(O(n^3)\) eigendecomposition and then \(O(n^2)\) per
 solver iteration for every fold and regularization value. The eigendecomposition
-runs in float64, so GPUs with a low float64 rate (consumer cards) spend
-proportionally longer in it than data-centre cards; the envelope script reports
-the split.
+runs in float64 by default, so GPUs with a low float64 rate (consumer cards and
+the L40S) spend proportionally longer in it than data-centre cards; the
+envelope script reports the split. `TorchKMSVC(dtype="float32")` runs it at the
+single-precision rate.

@@ -50,8 +50,8 @@ def exact_mode_memory_estimate(
     n_samples : int
         Number of training samples ``n``.
     dtype : torch.dtype, default=torch.float64
-        Element type of the kernel matrix. The solvers currently run in
-        float64.
+        Element type of the kernel matrix. ``TorchKMSVC(dtype="float32")``
+        runs the exact SVM solver in float32; the other solvers run in float64.
     n_copies : float, default=EXACT_MODE_COPIES
         Number of ``n x n`` matrices resident at the peak.
     nlam : int, default=50
@@ -110,21 +110,24 @@ def format_bytes(n_bytes: float) -> str:
     return f"{float(n_bytes) / 1e6:.0f} MB"
 
 
-def exact_mode_oom_message(n_samples: int, device: DeviceLike) -> str:
+def exact_mode_oom_message(
+    n_samples: int, device: DeviceLike, dtype: torch.dtype = torch.float64
+) -> str:
     """Message for a CUDA out-of-memory error raised by an exact-mode fit."""
     n = int(n_samples)
-    est = exact_mode_memory_estimate(n)
+    size = _itemsize(dtype)
+    est = exact_mode_memory_estimate(n, dtype=dtype)
     total = device_total_memory(device)
     msg = (
         f"TorchKM exact mode ran out of GPU memory at n_samples={n:,}. "
         f"Exact mode eigendecomposes the full n x n kernel matrix and needs "
         f"about {format_bytes(est)} for n={n:,} "
-        f"({EXACT_MODE_COPIES:g} x 8 x n^2 bytes)"
+        f"({EXACT_MODE_COPIES:g} x {size} x n^2 bytes)"
     )
     if total is not None:
         msg += (
             f"; the device reports {format_bytes(total)} in total, which supports "
-            f"exact mode up to roughly n={max_exact_n(total):,}"
+            f"exact mode up to roughly n={max_exact_n(total, dtype=dtype):,}"
         )
     msg += (
         ". Use low_rank=True (Nyström approximation, memory grows with "

@@ -7,6 +7,21 @@ from .exceptions import ConvergenceWarning
 from .functions import *
 
 
+def _factorization_error(Kmat, Umat, eigens, iters=20):
+    """Power-iteration estimate of the spectral norm of U diag(eigens) U^T - K."""
+    gen = torch.Generator().manual_seed(0)
+    v = torch.randn(Kmat.shape[0], generator=gen, dtype=Kmat.dtype).to(Kmat.device)
+    v /= v.norm()
+    norm = 0.0
+    for _ in range(iters):
+        w = torch.mv(Umat, eigens * torch.mv(Umat.T, v)) - torch.mv(Kmat, v)
+        norm = float(w.norm())
+        if norm == 0.0:
+            break
+        v = w / norm
+    return norm
+
+
 class cvksvm:
     """
     Kernel SVM with Regularization and Acceleration.
@@ -70,6 +85,17 @@ class cvksvm:
 
     device : {'cuda', 'cpu'}, default='cuda'
         Device to perform computations on. Default is GPU ('cuda') for improved performance.
+
+    dtype : {torch.float64, torch.float32}, default=torch.float64
+        Working precision of the kernel matrix, its eigendecomposition and the
+        solution path. ``torch.float32`` halves the memory of every ``n x n``
+        matrix (the kernel, the eigenvectors and the eigendecomposition
+        workspace), so exact mode fits about 1.4 times as many rows on the same
+        device, and runs at the device's single-precision rate. In our checks
+        cross-validation chose the same lambda as in float64 and the objectives
+        agreed to about 1e-5 (median over the path). At weak regularization a
+        smoothing round in float32 can end at the precision floor rather than
+        at ``eps`` (see ``__init__``). ``is_exact=1`` needs ``torch.float64``.
 
     Attributes
     ----------
@@ -151,21 +177,34 @@ class cvksvm:
         KKTeps2=1e-3,
         device=None,
         kkt_scaled=False,
+        dtype=torch.float64,
     ):
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = torch.device(device)
+        if dtype not in (torch.float64, torch.float32):
+            raise ValueError(
+                f"dtype must be torch.float64 or torch.float32, got {dtype}"
+            )
+        if dtype == torch.float32 and is_exact != 0:
+            raise ValueError("is_exact=1 needs dtype=torch.float64")
+        self.dtype = dtype
+        # In float32 the steps stop shrinking at a level set by the rounding of
+        # K alpha, which at weak regularization can lie above eps; a smoothing
+        # round then ends once its largest step has not reached a new low for
+        # this many iterations. float64's floor is far below eps.
+        self._stall_patience = 100 if dtype == torch.float32 else None
 
         # --- Check Kmat ---
         if not isinstance(Kmat, torch.Tensor):
             raise TypeError("Kmat must be a torch.Tensor")
-        Kmat = Kmat.double().to(self.device)
+        Kmat = Kmat.to(device=self.device, dtype=self.dtype)
         self.Kmat = Kmat
         self.nobs = Kmat.shape[0]
 
         if not isinstance(y, torch.Tensor):
             raise TypeError("y must be a torch.Tensor")
-        y = y.double().to(self.device)
+        y = y.to(device=self.device, dtype=self.dtype)
 
         # --- Label check ---
         unique_labels = torch.unique(y)
@@ -226,14 +265,14 @@ class cvksvm:
         self.foldid = foldid
 
         # Initialize outputs
-        self.alpmat = torch.zeros((self.nobs + 1, self.nlam), dtype=torch.double).to(
+        self.alpmat = torch.zeros((self.nobs + 1, self.nlam), dtype=self.dtype).to(
             self.device
         )
         self.anlam = 0
         self.npass = torch.zeros(self.nlam, dtype=torch.int32).to(self.device)
         self.converged = torch.zeros(self.nlam, dtype=torch.bool).to(self.device)
         self.cvnpass = torch.zeros(self.nlam, dtype=torch.int32).to(self.device)
-        self.pred = torch.zeros((self.nobs, self.nlam), dtype=torch.double).to(
+        self.pred = torch.zeros((self.nobs, self.nlam), dtype=self.dtype).to(
             self.device
         )
         self.jerr = 0
@@ -245,27 +284,32 @@ class cvksvm:
         Kmat = self.Kmat
         nfolds = self.nfolds
 
-        r = torch.zeros(nobs, dtype=torch.double).to(self.device)
-        alpmat = torch.zeros((nobs + 1, nlam), dtype=torch.double).to(self.device)
+        r = torch.zeros(nobs, dtype=self.dtype).to(self.device)
+        alpmat = torch.zeros((nobs + 1, nlam), dtype=self.dtype).to(self.device)
         npass = torch.zeros(nlam, dtype=torch.int32).to(self.device)
         cvnpass = torch.zeros(nlam, dtype=torch.int32).to(self.device)
-        alpvec = torch.zeros(nobs + 1, dtype=torch.double).to(self.device)
-        pred = torch.zeros((self.nobs, self.nlam), dtype=torch.double).to(self.device)
+        alpvec = torch.zeros(nobs + 1, dtype=self.dtype).to(self.device)
+        pred = torch.zeros((self.nobs, self.nlam), dtype=self.dtype).to(self.device)
         converged = torch.zeros(nlam, dtype=torch.bool).to(self.device)
         jerr = 0
         eps2 = 1.0e-5
-        one = torch.ones((), dtype=torch.double, device=self.device)
-        step_buf = torch.empty(nobs + 1, dtype=torch.double, device=self.device)
+        one = torch.ones((), dtype=self.dtype, device=self.device)
+        step_buf = torch.empty(nobs + 1, dtype=self.dtype, device=self.device)
 
         # Precompute sum of Kmat along rows
         Ksum = torch.sum(Kmat, dim=1)
         # Kinv = torch.linalg.inv(Kmat)
 
         eigens, Umat = torch.linalg.eigh(Kmat)
-        eigens = eigens.double().to(self.device)
-        Umat = Umat.double().to(self.device)
-        Kmat = Kmat.double().to(self.device)
-        eigens += self.gamma
+        # K is positive semi-definite, so a negative eigenvalue is rounding error.
+        eigens.clamp_min_(0.0)
+        # The steps bound the loss curvature with U diag(eigens) U^T, which equals
+        # K only up to the eigendecomposition's rounding error: about 1e-13 |K| in
+        # float64 but 1e-6 |K| in float32. Once 4 n delta lambda is small, that
+        # error lets the float32 bound fall a few percent below K and the
+        # accelerated steps oscillate instead of converging; adding twice the
+        # error to the eigenvalues keeps the bound above K.
+        eigens += self.gamma + 2.0 * _factorization_error(Kmat, Umat, eigens)
         Usum = torch.sum(Umat, dim=0)
         einv = 1 / eigens
         # The regularised inverse K^{-1} = U diag(einv) U^T is applied on the
@@ -275,18 +319,14 @@ class cvksvm:
         vareps = 1.0e-8
 
         lpUsum = torch.zeros(
-            (nobs, self.delta_len), dtype=torch.double, device=self.device
+            (nobs, self.delta_len), dtype=self.dtype, device=self.device
         )
         lpinv = torch.zeros(
-            (nobs, self.delta_len), dtype=torch.double, device=self.device
+            (nobs, self.delta_len), dtype=self.dtype, device=self.device
         )
-        svec = torch.zeros(
-            (nobs, self.delta_len), dtype=torch.double, device=self.device
-        )
-        vvec = torch.zeros(
-            (nobs, self.delta_len), dtype=torch.double, device=self.device
-        )
-        gval = torch.zeros((self.delta_len), dtype=torch.double, device=self.device)
+        svec = torch.zeros((nobs, self.delta_len), dtype=self.dtype, device=self.device)
+        vvec = torch.zeros((nobs, self.delta_len), dtype=self.dtype, device=self.device)
+        gval = torch.zeros((self.delta_len), dtype=self.dtype, device=self.device)
 
         for l in range(nlam):
             # start = time.time()
@@ -294,7 +334,7 @@ class cvksvm:
             delta = 1.0
             delta_id = 0
             delta_save = 0
-            oldalpvec = torch.zeros(nobs + 1, dtype=torch.double).to(self.device)
+            oldalpvec = torch.zeros(nobs + 1, dtype=self.dtype).to(self.device)
 
             while delta_id < self.delta_len:
                 delta_id += 1
@@ -311,13 +351,14 @@ class cvksvm:
                         Umat, eigens * lpUsum[:, delta_id - 1]
                     )
                     svec[:, delta_id - 1] = torch.mv(Umat, lpUsum[:, delta_id - 1])
-                    gval[delta_id - 1] = 1.0 / (
-                        nobs + 4.0 * nobs * delta * vareps - vvec[:, delta_id - 1].sum()
+                    gval[delta_id - 1] = self._gval(
+                        Usum, lpUsum[:, delta_id - 1], delta, al, nobs, vareps
                     )
                     delta_save = delta_id
 
                 # Compute residual r
                 told = one
+                stall = [float("inf"), 0]
                 ka = torch.mv(Kmat, alpvec[1:])
                 r = y * (alpvec[0] + ka)
                 # Update alpha
@@ -333,8 +374,16 @@ class cvksvm:
                         ),
                     )
                     gamvec = zvec + 2.0 * float(nobs) * al * alpvec[1:]  ##
-                    rds = zvec.sum() + 2.0 * nobs * vareps * alpvec[0]
-                    hval = rds - torch.dot(vvec[:, delta_id - 1], gamvec)
+                    hval = self._hval(
+                        zvec,
+                        alpvec,
+                        svec[:, delta_id - 1],
+                        vvec[:, delta_id - 1],
+                        delta,
+                        al,
+                        nobs,
+                        vareps,
+                    )
 
                     tnew = 0.5 + 0.5 * torch.sqrt(one + 4.0 * told * told)
                     mul = 1.0 + (told - 1.0) / tnew
@@ -361,7 +410,8 @@ class cvksvm:
                     npass[l] += 1
 
                     # Check convergence
-                    if torch.max(step_buf**2) < (self.eps * mul * mul):
+                    step2 = torch.max(step_buf**2)
+                    if step2 < (self.eps * mul * mul) or self._stalled(step2, stall):
                         break
 
                     if torch.sum(npass) > self.maxit:
@@ -451,9 +501,15 @@ class cvksvm:
                                     gamvec = (
                                         zvec + 2.0 * float(nobs) * al * alptmp[1:]
                                     )  ##
-                                    rds = zvec.sum() + 2.0 * nobs * vareps * alptmp[0]
-                                    hval = rds - torch.dot(
-                                        vvec[:, delta_id - 1], gamvec
+                                    hval = self._hval(
+                                        zvec,
+                                        alptmp,
+                                        svec[:, delta_id - 1],
+                                        vvec[:, delta_id - 1],
+                                        delta,
+                                        al,
+                                        nobs,
+                                        vareps,
                                     )
 
                                     tnew = 0.5 + 0.5 * torch.sqrt(
@@ -596,10 +652,8 @@ class cvksvm:
                             Umat, eigens * lpUsum[:, delta_id - 1]
                         )
                         svec[:, delta_id - 1] = torch.mv(Umat, lpUsum[:, delta_id - 1])
-                        gval[delta_id - 1] = 1.0 / (
-                            nobs
-                            + 4.0 * nobs * delta * vareps
-                            - vvec[:, delta_id - 1].sum()
+                        gval[delta_id - 1] = self._gval(
+                            Usum, lpUsum[:, delta_id - 1], delta, al, nobs, vareps
                         )
                         delta_save = delta_id
 
@@ -619,8 +673,16 @@ class cvksvm:
                             ),
                         )
                         gamvec = zvec + 2.0 * float(nobs) * al * looalp[1:]  ##
-                        rds = zvec.sum() + 2.0 * nobs * vareps * looalp[0]
-                        hval = rds - torch.dot(vvec[:, delta_id - 1], gamvec)
+                        hval = self._hval(
+                            zvec,
+                            looalp,
+                            svec[:, delta_id - 1],
+                            vvec[:, delta_id - 1],
+                            delta,
+                            al,
+                            nobs,
+                            vareps,
+                        )
 
                         tnew = 0.5 + 0.5 * torch.sqrt(one + 4.0 * told * told)
                         mul = 1.0 + (told - 1.0) / tnew
@@ -763,9 +825,15 @@ class cvksvm:
                                     gamvec = (
                                         zvec + 2.0 * float(nobs) * al * alptmp[1:]
                                     )  ##
-                                    rds = zvec.sum() + 2.0 * nobs * vareps * alptmp[0]
-                                    hval = rds - torch.dot(
-                                        vvec[:, delta_id - 1], gamvec
+                                    hval = self._hval(
+                                        zvec,
+                                        alptmp,
+                                        svec[:, delta_id - 1],
+                                        vvec[:, delta_id - 1],
+                                        delta,
+                                        al,
+                                        nobs,
+                                        vareps,
                                     )
 
                                     tnew = 0.5 + 0.5 * torch.sqrt(
@@ -901,7 +969,7 @@ class cvksvm:
         looalp_batch = alpvec.unsqueeze(1).expand(-1, nfolds).clone()
         loor_batch = r.unsqueeze(1).expand(-1, nfolds).clone()
         cv_step_buf = torch.zeros(
-            (nobs + 1, nfolds), dtype=torch.double, device=self.device
+            (nobs + 1, nfolds), dtype=self.dtype, device=self.device
         )
 
         active = torch.ones(nfolds, dtype=torch.bool, device=self.device)
@@ -919,13 +987,15 @@ class cvksvm:
                 lpUsum[:, delta_id - 1] = lpinv[:, delta_id - 1] * Usum
                 vvec[:, delta_id - 1] = torch.mv(Umat, eigens * lpUsum[:, delta_id - 1])
                 svec[:, delta_id - 1] = torch.mv(Umat, lpUsum[:, delta_id - 1])
-                gval[delta_id - 1] = 1.0 / (
-                    nobs + 4.0 * nobs * delta * vareps - vvec[:, delta_id - 1].sum()
+                gval[delta_id - 1] = self._gval(
+                    Usum, lpUsum[:, delta_id - 1], delta, al, nobs, vareps
                 )
                 delta_save = delta_id
 
             active_cols = torch.nonzero(active, as_tuple=False).squeeze(1)
-            told = torch.ones(nfolds, dtype=torch.double, device=self.device)
+            told = torch.ones(nfolds, dtype=self.dtype, device=self.device)
+            best_step2 = torch.full_like(told, float("inf"))
+            since_best = torch.zeros(nfolds, dtype=torch.int64, device=self.device)
             ka_batch = torch.mm(Kmat, looalp_batch[1:, active_cols])
             loor_batch[:, active_cols] = yn_batch[:, active_cols] * (
                 looalp_batch[0, active_cols].unsqueeze(0) + ka_batch
@@ -949,8 +1019,16 @@ class cvksvm:
                     ),
                 )
                 gamvec = zvec + 2.0 * float(nobs) * al * alp_iter[1:, :]
-                rds = zvec.sum(dim=0) + 2.0 * nobs * vareps * alp_iter[0, :]
-                hval = rds - torch.matmul(vvec[:, delta_id - 1], gamvec)
+                hval = self._hval(
+                    zvec,
+                    alp_iter,
+                    svec[:, delta_id - 1],
+                    vvec[:, delta_id - 1],
+                    delta,
+                    al,
+                    nobs,
+                    vareps,
+                )
 
                 tnew = 0.5 + 0.5 * torch.sqrt(one + 4.0 * told_iter * told_iter)
                 mul = 1.0 + (told_iter - 1.0) / tnew
@@ -978,9 +1056,17 @@ class cvksvm:
                 if torch.sum(cvnpass) > self.nmaxit:
                     break
 
-                converged = torch.max(
-                    cv_step_buf[:, iter_cols] ** 2, dim=0
-                ).values < eps2 * (mul**2)
+                step2 = torch.max(cv_step_buf[:, iter_cols] ** 2, dim=0).values
+                converged = step2 < eps2 * (mul**2)
+                if self._stall_patience is not None:  # see _stalled
+                    improved = step2 < best_step2[iter_cols]
+                    best_step2[iter_cols] = torch.where(
+                        improved, step2, best_step2[iter_cols]
+                    )
+                    since_best[iter_cols] = torch.where(
+                        improved, 0, since_best[iter_cols] + 1
+                    )
+                    converged |= since_best[iter_cols] >= self._stall_patience
                 active_iter[iter_cols[converged]] = False
 
             if torch.sum(cvnpass) > self.nmaxit:
@@ -1028,6 +1114,43 @@ class cvksvm:
         cv_scores = torch.mm(Kmat, cv_alpha) + looalp_batch[0, :].unsqueeze(0)
         return cv_scores[row_index, fold_col_index]
 
+    def _stalled(self, step2, stall):
+        """True once the largest step has not reached a new low for
+        ``_stall_patience`` iterations (float32 only; see ``__init__``).
+        ``stall`` holds the lowest step so far and the iterations since."""
+        if self._stall_patience is None:
+            return False
+        step2 = float(step2)
+        if step2 < stall[0]:
+            stall[0], stall[1] = step2, 0
+            return False
+        stall[1] += 1
+        return stall[1] >= self._stall_patience
+
+    @staticmethod
+    def _gval(Usum, lpUsum_d, delta, al, nobs, vareps):
+        """1 / (n + 4 n delta vareps - sum(vvec)), the intercept's step factor.
+
+        With c = 4 n delta lambda and U orthogonal (so n = |U^T 1|^2),
+        n - sum(vvec) = c * Usum . lpUsum. The direct form subtracts two numbers
+        of size n that agree to within about c, which float32 cannot resolve
+        once c is small; this form has no such difference.
+        """
+        return 1.0 / (4.0 * nobs * delta * (vareps + al * torch.dot(Usum, lpUsum_d)))
+
+    @staticmethod
+    def _hval(zvec, alp, svec_d, vvec_d, delta, al, nobs, vareps):
+        """sum(zvec) + 2 n vareps alp[0] - vvec . gamvec: the intercept's step.
+
+        Written with 1 - vvec = c * svec (c = 4 n delta lambda), for the reason
+        given in ``_gval``. ``zvec`` and ``alp`` may hold one column per fold.
+        """
+        return (
+            4.0 * nobs * delta * al * (svec_d @ zvec)
+            - 2.0 * nobs * al * (vvec_d @ alp[1:])
+            + 2.0 * nobs * vareps * alp[0]
+        )
+
     def cv(self, pred, y):
         pred_label = torch.where(pred > 0, 1, -1).to(device="cpu")
         y_expanded = y[:, None]
@@ -1044,7 +1167,8 @@ class cvksvm:
     def obj_value(self, alp_b, lam_b):
         intcpt = alp_b[0]
         alp = alp_b[1:]
-        Kmat = self.Kmat.double().to(alp.device)
+        Kmat = self.Kmat.to(alp.device)
+        alp = alp.to(Kmat.dtype)
         ka = torch.mv(Kmat, alp)
         aka = torch.dot(alp, ka)
         y_train = self.y.to(alp.device)

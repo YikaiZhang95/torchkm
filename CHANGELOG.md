@@ -34,6 +34,29 @@ All notable changes to TorchKM are documented in this file.
   `max_iter=100000` takes 7 s instead of 103 s.
 
 ### Added
+- `dtype` on the exact SVM solver (`cvksvm(dtype=torch.float32)`,
+  `TorchKMSVC(dtype="float32")`): the kernel, its eigendecomposition and the
+  solution path in single precision, half the memory of every `n x n` matrix.
+  Three changes make the solver work in float32. (1) The intercept's step
+  factors `n - sum(vvec)` and `rds - vvec . gamvec` subtracted numbers of size
+  `n` that agree to within `4 n delta lambda`; they are now computed in an
+  equivalent form without the difference. (2) The eigenvalues are clamped at
+  zero and raised by twice the eigendecomposition's rounding error
+  (`|U E U^T - K|`, estimated by power iteration: about 1e-13 `|K|` in float64,
+  1e-6 `|K|` in float32). Without it the float32 curvature bound fell up to 9%
+  below `K` at small `4 n delta lambda` and the accelerated steps oscillated
+  until the iteration budget ran out. (3) In float32 a smoothing round also
+  ends when its largest step has not reached a new low for 100 iterations: at
+  weak regularization the steps stop shrinking at a level set by the rounding
+  of `K alpha`, above `eps`. In float64 (1) and (2) change results only at
+  rounding level and (3) is off. On simulated problems with 2,000 to 5,000
+  rows (p from 10 to 1,000, and one-hot data with duplicate rows) and lambda
+  down to 2e-5, float32 selected the same lambda as float64, test accuracy
+  agreed within 0.005 at every lambda, and the objectives agreed to a median
+  1e-5. At the smallest lambdas of a near-separable problem they differed by up
+  to 5%, as much as float64 itself moves between `KKTeps=1e-6` and `1e-9`.
+  `is_exact=1` needs float64; the other solvers and estimators stay in
+  float64.
 - `torchkm.memory`: `exact_mode_memory_estimate`, `max_exact_n`, and the
   out-of-memory message the estimators raise in exact mode (predicted
   requirement, device total, largest feasible `n`, and the `low_rank=True`

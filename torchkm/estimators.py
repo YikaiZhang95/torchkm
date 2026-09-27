@@ -123,6 +123,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         delta_len: int = 8,  # only used by cvksvm
         kkt_scaled: bool = False,
         device: Optional[Union[str, torch.device]] = None,
+        dtype: str = "float64",  # only used by cvksvm (exact mode)
         # RBF
         rbf_sigma: Optional[float] = None,
         sigest_frac: float = 0.5,
@@ -155,6 +156,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         self.delta_len = delta_len
         self.kkt_scaled = kkt_scaled
         self.device = device
+        self.dtype = dtype
 
         self.rbf_sigma = rbf_sigma
         self.sigest_frac = sigest_frac
@@ -213,10 +215,24 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             "platt_y_",
             "_platt_device_",
             "peak_gpu_memory_bytes_",
+            "_work_dtype_",
         )
         for attr in fitted_attrs:
             if hasattr(self, attr):
                 delattr(self, attr)
+
+    def _work_dtype(self) -> torch.dtype:
+        """Precision of the exact solver's kernel matrix and solution path."""
+        if self.dtype not in ("float64", "float32"):
+            raise ValueError(
+                f"dtype must be 'float64' or 'float32', got {self.dtype!r}."
+            )
+        if self.dtype == "float32" and (self._BACKEND != "svm" or self.low_rank):
+            raise ValueError(
+                "dtype='float32' is supported by the exact SVM solver only "
+                "(TorchKMSVC with low_rank=False)."
+            )
+        return torch.float32 if self.dtype == "float32" else torch.float64
 
     def _compute_K_train(self, X_t: torch.Tensor) -> Tuple[torch.Tensor, dict]:
         """
@@ -278,7 +294,11 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 raise
             n = int(_as_numpy(X).shape[0])
             raise torch.cuda.OutOfMemoryError(
-                exact_mode_oom_message(n, getattr(self, "_device_str_", "cuda"))
+                exact_mode_oom_message(
+                    n,
+                    getattr(self, "_device_str_", "cuda"),
+                    getattr(self, "_work_dtype_", torch.float64),
+                )
             ) from err
 
     def _fit_impl(
@@ -302,6 +322,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         self.y_fit_original_ = np.asarray(y_np).copy()
         self.n_features_in_ = X_np.shape[1]
         self._validate_low_rank()
+        self._work_dtype_ = self._work_dtype()
 
         dev = _pick_device_str(self.device)
         self._device_str_ = dev
@@ -344,7 +365,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             K_train = None
         else:
             if self.kernel == "precomputed":
-                K_train = torch.as_tensor(X_np, dtype=torch.double)
+                K_train = torch.as_tensor(X_np, dtype=self._work_dtype_)
                 if K_train.ndim != 2 or K_train.shape[0] != K_train.shape[1]:
                     raise ValueError(
                         "For kernel='precomputed', X must be a square (n,n) kernel matrix."
@@ -354,7 +375,9 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             else:
                 # Build the kernel on the target device: no host-side n x n
                 # copy and no host-to-device transfer of the full matrix.
-                K_train, kernel_state = self._compute_K_train(X_train_t.to(dev))
+                K_train, kernel_state = self._compute_K_train(
+                    X_train_t.to(device=dev, dtype=self._work_dtype_)
+                )
                 self.X_fit_ = X_np
                 self.kernel_state_ = kernel_state
 
@@ -460,22 +483,23 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
 
             return scores.detach().cpu().numpy()
 
+        wdt = getattr(self, "_work_dtype_", torch.float64)
         if self.kernel == "precomputed":
             # X is K_test: (n_test, n_train)
-            K_test = torch.as_tensor(X_np, dtype=torch.double, device=dev)
+            K_test = torch.as_tensor(X_np, dtype=wdt, device=dev)
             if K_test.ndim != 2 or K_test.shape[1] != self.n_samples_fit_:
                 raise ValueError(
                     f"For kernel='precomputed', X must have shape (n_test, {self.n_samples_fit_})."
                 )
         else:
-            X_train_t = torch.as_tensor(self.X_fit_, dtype=torch.double)  # CPU
-            X_test_t = torch.as_tensor(X_np, dtype=torch.double)  # CPU
+            X_train_t = torch.as_tensor(self.X_fit_, dtype=wdt)  # CPU
+            X_test_t = torch.as_tensor(X_np, dtype=wdt)  # CPU
             K_test = self._compute_K_test(X_test_t, X_train_t, self.kernel_state_).to(
                 dev
             )
 
         with torch.no_grad():
-            scores = torch.mv(K_test, alpha_t) + b
+            scores = torch.mv(K_test, alpha_t.to(wdt)) + b
         return scores.detach().cpu().numpy()
 
     def predict(self, X: Any) -> np.ndarray:
@@ -796,6 +820,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 KKTeps=float(self.KKTeps),
                 kkt_scaled=bool(self.kkt_scaled),
                 device=dev,
+                dtype=self._work_dtype_,
             )
 
         if self._BACKEND == "dwd":
@@ -882,6 +907,10 @@ class TorchKMSVC(_TorchKMBaseBinaryClassifier):
         Device used for computation. If ``None``, CUDA is used when available;
         otherwise CPU is used. Requests for CUDA fall back to CPU when CUDA is
         unavailable.
+    dtype : {"float64", "float32"}, default="float64"
+        Precision of the kernel matrix, its eigendecomposition and the solution
+        path in exact mode (``low_rank=False``). ``"float32"`` halves the memory
+        of every ``n x n`` matrix. See :class:`torchkm.cvksvm.cvksvm`.
     rbf_sigma : float, optional
         RBF kernel scale. If omitted, ``sigest`` estimates a scale from the
         training data.
