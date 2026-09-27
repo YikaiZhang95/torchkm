@@ -226,6 +226,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             "_work_dtype_",
             "fit_timing_",
             "n_passes_",
+            "fit_profile_",
         )
         for attr in fitted_attrs:
             if hasattr(self, attr):
@@ -487,6 +488,20 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             None
             if npass is None or cvnpass is None
             else dict(path=int(npass.sum()), cross_validation=int(cvnpass.sum()))
+        )
+        # The same per lambda, and the fold fits' iterations per fold and lambda
+        # (the folds of a lambda are fitted together, so they share its time).
+        lam_t = getattr(backend, "lambda_timing", None)
+        self.fit_profile_ = (
+            None
+            if lam_t is None
+            else dict(
+                lambdas=backend.ulam.detach().cpu().tolist(),
+                path_seconds=list(lam_t["path"]),
+                cv_seconds=list(lam_t["cross_validation"]),
+                path_passes=npass.detach().cpu().tolist(),
+                cv_passes=backend.fold_passes.tolist(),
+            )
         )
 
         # free big GPU kernel tensor ASAP
@@ -1012,6 +1027,11 @@ class TorchKMSVC(_TorchKMBaseBinaryClassifier):
         Solver iterations of the last ``fit``, ``path`` and
         ``cross_validation`` (one per fold and lambda iteration); each costs a
         few matrix-vector products with the ``n x n`` kernel.
+    fit_profile_ : dict or None
+        Exact mode, per lambda of the path (in path order): ``lambdas``,
+        ``path_seconds`` and ``cv_seconds`` (the whole-data fit and the fold
+        fits, which run together), ``path_passes``, and ``cv_passes``, the
+        iterations of each fold (a ``cv x nC`` nested list).
 
     Notes
     -----

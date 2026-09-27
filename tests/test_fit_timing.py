@@ -25,6 +25,12 @@ def test_fit_timing_accounts_for_the_exact_fit():
     assert all(v >= 0.0 for v in t.values())
     assert sum(t[k] for k in PHASES) <= t["total"]
     assert clf.n_passes_["path"] > 0 and clf.n_passes_["cross_validation"] > 0
+    fp = clf.fit_profile_
+    assert len(fp["lambdas"]) == len(fp["cv_seconds"]) == len(fp["path_passes"]) == 3
+    assert len(fp["cv_passes"]) == 3 and all(len(f) == 3 for f in fp["cv_passes"])
+    assert abs(sum(fp["cv_seconds"]) - t["cross_validation"]) < 1e-9
+    assert sum(map(sum, fp["cv_passes"])) == clf.n_passes_["cross_validation"]
+    assert sum(fp["path_passes"]) == clf.n_passes_["path"]
 
 
 def test_fit_timing_low_rank_has_kernel_and_total():

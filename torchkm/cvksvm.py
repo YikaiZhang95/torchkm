@@ -277,8 +277,11 @@ class cvksvm:
             self.device
         )
         self.jerr = 0
-        # seconds spent in each phase of the last fit (see ``fit``)
+        # seconds spent in each phase of the last fit, in total and per lambda,
+        # and each fold's solver iterations per lambda (see ``fit``)
         self.timing = None
+        self.lambda_timing = None
+        self.fold_passes = None
 
     def fit(self):
         nobs = self.nobs
@@ -310,6 +313,10 @@ class cvksvm:
             ("eigendecomposition", "factorization_error", "path", "cross_validation"),
             0.0,
         )
+        # the path and the (batched) fold fits of each lambda, and each fold's
+        # iterations per lambda
+        lambda_timing = dict(path=[0.0] * nlam, cross_validation=[0.0] * nlam)
+        fold_passes = torch.zeros((nfolds, nlam), dtype=torch.int64, device=self.device)
         t = self._now()
         eigens, Umat = torch.linalg.eigh(Kmat)
         timing["eigendecomposition"] = self._now() - t
@@ -606,6 +613,7 @@ class cvksvm:
             self.anlam = l
             t_cv = self._now()
             timing["path"] += t_cv - t
+            lambda_timing["path"][l] = t_cv - t
 
             # Check if maximum iterations exceeded
             if torch.sum(npass) > self.maxit:
@@ -635,11 +643,13 @@ class cvksvm:
                     gval=gval,
                     delta_save=delta_save,
                     cvnpass=cvnpass,
+                    fold_passes=fold_passes,
                     l=l,
                     one=one,
                 )
                 self.anlam = l
-                timing["cross_validation"] += self._now() - t_cv
+                lambda_timing["cross_validation"][l] = self._now() - t_cv
+                timing["cross_validation"] += lambda_timing["cross_validation"][l]
                 continue
             for nf in range(nfolds):
                 # start = time.time()
@@ -732,6 +742,7 @@ class cvksvm:
                         loor = yn * (looalp[0] + torch.mv(Kmat, looalp[1:]))
 
                         cvnpass[l] += 1
+                        fold_passes[nf, l] += 1
 
                         # Check convergence
                         if torch.max(step_buf**2) < eps2 * (mul**2):
@@ -889,6 +900,7 @@ class cvksvm:
                                     dif_step = dif_step + alptmp - alp_old
                                     loor = yn * (alptmp[0] + torch.mv(Kmat, alptmp[1:]))
                                     cvnpass[l] += 1
+                                    fold_passes[nf, l] += 1
                                     mdd = torch.max(dif_step**2)
                                     # Check convergence
                                     if mdd < nobs * eps2 * mul**2:
@@ -923,9 +935,12 @@ class cvksvm:
                 # print(pred[loo_ind, l][:10])
                 # print(f'{nf}-fold: {time.time() - start}')
             self.anlam = l
-            timing["cross_validation"] += self._now() - t_cv
+            lambda_timing["cross_validation"][l] = self._now() - t_cv
+            timing["cross_validation"] += lambda_timing["cross_validation"][l]
 
         self.timing = timing
+        self.lambda_timing = lambda_timing
+        self.fold_passes = fold_passes.cpu()
         self.alpmat = alpmat
         self.npass = npass
         self.cvnpass = cvnpass
@@ -975,6 +990,7 @@ class cvksvm:
         gval,
         delta_save,
         cvnpass,
+        fold_passes,
         l,
         one,
     ):
@@ -1073,6 +1089,7 @@ class cvksvm:
                 )
 
                 cvnpass[l] += iter_cols.numel()
+                fold_passes[iter_cols, l] += 1
                 if torch.sum(cvnpass) > self.nmaxit:
                     break
 
