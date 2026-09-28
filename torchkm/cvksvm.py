@@ -6,7 +6,7 @@ import torch
 
 from .exceptions import ConvergenceWarning
 from .functions import *
-from .functions import brent_minimize
+from .functions import brent_minimize, brent_minimize_batch
 
 
 def _factorization_error(Kmat, Umat, eigens, iters=20):
@@ -1110,37 +1110,42 @@ class cvksvm:
             if sum(cvnpass) > self.nmaxit:
                 break
 
-            current_cols = torch.nonzero(active, as_tuple=False).squeeze(1)
-            for nf in current_cols.tolist():
-                looalp = looalp_batch[:, nf]
-                loor = loor_batch[:, nf].clone()
-                yn = yn_batch[:, nf]
-                dif_step = cv_step_buf[:, nf].clone()
-
-                ka = torch.mv(Kmat, looalp[1:])
-                aka = torch.dot(ka, looalp[1:])
-
-                obj_value = self.objfun(looalp[0], aka, ka, yn, al, nobs)
-                golden_s = self.golden_section_search(
-                    -100.0, 100.0, nobs, ka, aka, yn, al
-                )
-                int_new = golden_s[0]
-                obj_value_new = golden_s[1]
-                if obj_value_new < obj_value:
-                    dif_step[0] = dif_step[0] + int_new - looalp[0]
-                    loor = loor + y * (int_new - looalp[0])
-                    looalp[0] = int_new
-
-                loor_batch[:, nf] = loor
-                zvec = torch.where(
-                    loor < 1.0, -yn, torch.where(loor > 1.0, 0.0, -0.5 * yn)
-                )
-                KKT = zvec / float(nobs) + 2.0 * al * looalp[1:]
-                uo = max(al, 1.0)
-                KKT_norm = self._kkt_scale * torch.sum(KKT**2) / (uo**2)
-
-                if KKT_norm < self.KKTeps2:
-                    active[nf] = False
+            # The unfinished folds together: one product with K for all of them,
+            # their intercepts by searches run in step (one objective evaluation
+            # for all folds per step), then their KKT tests.
+            cols = torch.nonzero(active, as_tuple=False).squeeze(1)
+            alp = looalp_batch[:, cols]
+            yn = yn_batch[:, cols]
+            ka = torch.mm(Kmat, alp[1:])
+            aka = (ka * alp[1:]).sum(dim=0)
+            obj_value = self.objfun(alp[0], aka, ka, yn, al, nobs)
+            int_new, obj_value_new = brent_minimize_batch(
+                lambda b: self.objfun(
+                    torch.as_tensor(b, dtype=ka.dtype, device=ka.device),
+                    aka,
+                    ka,
+                    yn,
+                    al,
+                    nobs,
+                ),
+                -100.0,
+                100.0,
+                cols.numel(),
+            )
+            int_new = torch.as_tensor(int_new, dtype=alp.dtype, device=alp.device)
+            obj_value_new = torch.as_tensor(
+                obj_value_new, dtype=obj_value.dtype, device=obj_value.device
+            )
+            better = obj_value_new < obj_value
+            shift = torch.where(better, int_new - alp[0], torch.zeros_like(int_new))
+            loor = loor_batch[:, cols] + y.unsqueeze(1) * shift
+            looalp_batch[0, cols] = torch.where(better, int_new, alp[0])
+            loor_batch[:, cols] = loor
+            zvec = torch.where(loor < 1.0, -yn, torch.where(loor > 1.0, 0.0, -0.5 * yn))
+            KKT = zvec / float(nobs) + 2.0 * al * alp[1:]
+            uo = max(al, 1.0)
+            KKT_norm = self._kkt_scale * torch.sum(KKT**2, dim=0) / (uo**2)
+            active[cols[KKT_norm < self.KKTeps2]] = False
 
             if delta_id >= self.delta_len:
                 print(f"Exceeded maximum delta iterations for lambda {l}")
@@ -1240,7 +1245,8 @@ class cvksvm:
         xi = torch.where(xi_tmp > 0, xi_tmp, torch.zeros_like(xi_tmp))
 
         # Compute the objective value
-        objval = lam * aka + torch.sum(xi) / nobs
+        # per column when y and ka hold one column per fold
+        objval = lam * aka + torch.sum(xi, dim=0) / nobs
 
         return objval
 

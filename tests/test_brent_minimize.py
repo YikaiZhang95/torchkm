@@ -3,7 +3,7 @@
 
 import torch
 
-from torchkm.functions import brent_minimize
+from torchkm.functions import brent_minimize, brent_minimize_batch
 
 
 def test_brent_minimize_finds_the_minimum_with_one_read_per_evaluation():
@@ -32,3 +32,22 @@ def test_brent_minimize_on_a_hinge_intercept_matches_a_grid():
     grid = torch.linspace(-5.0, 5.0, 20001, dtype=torch.double)
     best = min(float(hinge(float(b))) for b in grid)
     assert fx <= best + 1e-4
+
+
+def test_brent_minimize_batch_takes_the_steps_of_each_search_alone():
+    centres = [0.3, -2.0, 7.5]
+    sizes = []
+
+    def f(bs):
+        sizes.append(len(bs))
+        return torch.tensor(
+            [abs(b - c) + 0.1 * (b - c) ** 2 for b, c in zip(bs, centres)]
+        )
+
+    xs, fxs = brent_minimize_batch(f, -100.0, 100.0, len(centres))
+    for c, x, fx in zip(centres, xs, fxs):
+        x1, fx1 = brent_minimize(
+            lambda b: torch.tensor(abs(b - c) + 0.1 * (b - c) ** 2), -100.0, 100.0
+        )
+        assert (x, fx) == (x1, fx1)
+    assert set(sizes) == {len(centres)}  # one evaluation per step for all searches

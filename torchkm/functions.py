@@ -194,57 +194,103 @@ def brent_minimize(f, lmin, lmax):
     Returns:
     - (x, fx) (float, float): Minimiser and objective value there.
     """
+    x, fx = brent_minimize_batch(lambda b: [float(f(b[0]))], lmin, lmax, 1)
+    return x[0], fx[0]
+
+
+def brent_minimize_batch(f, lmin, lmax, k):
+    """
+    ``k`` independent searches of :func:`brent_minimize` run in step, for
+    problems whose objectives are cheapest to evaluate together (the fold fits
+    of cross-validation): ``f`` maps a list of ``k`` points to their ``k``
+    objective values (a tensor or a sequence), read once per step for all of
+    them. Each search takes exactly the steps it would take alone.
+
+    Returns:
+    - (x, fx) (list, list): Minimisers and objective values, ``k`` each.
+    """
+
+    def floats(values):
+        if isinstance(values, torch.Tensor):
+            return [float(v) for v in values.reshape(-1).tolist()]
+        return [float(v) for v in values]
+
     eps = torch.finfo(torch.float64).eps
     tol3 = eps**0.25 / 3.0
     eps = math.sqrt(eps)
     gold = (3.0 - math.sqrt(5.0)) * 0.5
-    a, b = float(lmin), float(lmax)
-    x = w = v = a + gold * (b - a)
-    fx = fw = fv = float(f(x))
-    d = e = 0.0
+    a, b = [float(lmin)] * k, [float(lmax)] * k
+    x = [a[i] + gold * (b[i] - a[i]) for i in range(k)]
+    w, v, u = x[:], x[:], x[:]
+    fx = floats(f(x))
+    fw, fv = fx[:], fx[:]
+    d, e = [0.0] * k, [0.0] * k
+    done = [False] * k
     while True:
-        xm = (a + b) * 0.5
-        tol1 = eps * abs(x) + tol3
-        t2 = 2.0 * tol1
-        if abs(x - xm) <= t2 - (b - a) * 0.5:
-            break
-        p = q = r = 0.0
-        if abs(e) > tol1:
-            r = (x - w) * (fx - fv)
-            q = (x - v) * (fx - fw)
-            p = (x - v) * q - (x - w) * r
-            q = 2.0 * (q - r)
-            if q > 0.0:
-                p = -p
+        for i in range(k):
+            if done[i]:
+                continue
+            xm = (a[i] + b[i]) * 0.5
+            tol1 = eps * abs(x[i]) + tol3
+            t2 = 2.0 * tol1
+            if abs(x[i] - xm) <= t2 - (b[i] - a[i]) * 0.5:
+                done[i] = True
+                continue
+            p = q = r = 0.0
+            if abs(e[i]) > tol1:
+                r = (x[i] - w[i]) * (fx[i] - fv[i])
+                q = (x[i] - v[i]) * (fx[i] - fw[i])
+                p = (x[i] - v[i]) * q - (x[i] - w[i]) * r
+                q = 2.0 * (q - r)
+                if q > 0.0:
+                    p = -p
+                else:
+                    q = -q
+                r = e[i]
+                e[i] = d[i]
+            if (
+                abs(p) >= abs(0.5 * q * r)
+                or p <= q * (a[i] - x[i])
+                or p >= q * (b[i] - x[i])
+            ):
+                # golden-section step
+                e[i] = b[i] - x[i] if x[i] < xm else a[i] - x[i]
+                d[i] = gold * e[i]
             else:
-                q = -q
-            r = e
-            e = d
-        if abs(p) >= abs(0.5 * q * r) or p <= q * (a - x) or p >= q * (b - x):
-            # golden-section step
-            e = b - x if x < xm else a - x
-            d = gold * e
-        else:
-            # parabolic step
-            d = p / q
-            u = x + d
-            if u - a < t2 or b - u < t2:
-                d = tol1 if x < xm else -tol1
-        u = x + d if abs(d) >= tol1 else (x + tol1 if d > 0 else x - tol1)
-        fu = float(f(u))
-        if fu <= fx:
-            if u < x:
-                b = x
+                # parabolic step
+                d[i] = p / q
+                ui = x[i] + d[i]
+                if ui - a[i] < t2 or b[i] - ui < t2:
+                    d[i] = tol1 if x[i] < xm else -tol1
+            if abs(d[i]) >= tol1:
+                u[i] = x[i] + d[i]
             else:
-                a = x
-            v, fv, w, fw, x, fx = w, fw, x, fx, u, fu
-        else:
-            if u < x:
-                a = u
+                u[i] = x[i] + tol1 if d[i] > 0 else x[i] - tol1
+        if all(done):
+            return x, fx
+        fu = floats(f(u))
+        for i in range(k):
+            if done[i]:
+                continue
+            if fu[i] <= fx[i]:
+                if u[i] < x[i]:
+                    b[i] = x[i]
+                else:
+                    a[i] = x[i]
+                v[i], fv[i], w[i], fw[i], x[i], fx[i] = (
+                    w[i],
+                    fw[i],
+                    x[i],
+                    fx[i],
+                    u[i],
+                    fu[i],
+                )
             else:
-                b = u
-            if fu <= fw or w == x:
-                v, fv, w, fw = w, fw, u, fu
-            elif fu <= fv or v == x or v == w:
-                v, fv = u, fu
-    return x, fx
+                if u[i] < x[i]:
+                    a[i] = u[i]
+                else:
+                    b[i] = u[i]
+                if fu[i] <= fw[i] or w[i] == x[i]:
+                    v[i], fv[i], w[i], fw[i] = w[i], fw[i], u[i], fu[i]
+                elif fu[i] <= fv[i] or v[i] == x[i] or v[i] == w[i]:
+                    v[i], fv[i] = u[i], fu[i]

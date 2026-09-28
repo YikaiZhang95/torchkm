@@ -116,6 +116,18 @@ All notable changes to TorchKM are documented in this file.
   searched partly in float32 before (their constants were float32 tensors)
   and now search in float64, which moves their solutions within the solver
   tolerance (objectives within 1e-5 in our checks).
+- Cross-validation of the exact SVM solver (`cvksvm`) finishes each smoothing
+  round for all unfinished folds at once instead of fold by fold: one product
+  with the kernel for all folds instead of one per fold, the intercept
+  searches run in step with one objective evaluation per step for all folds
+  (`functions.brent_minimize_batch`; each search takes the steps it would take
+  alone), and one KKT test for all folds. On a 3,000-row fit (50 lambdas, 10
+  folds, float32, CPU) the cross-validation took 1.76 s instead of 2.65 s,
+  with 500 fewer full reads of the kernel and 4,089 device-to-host reads
+  instead of 17,811; the iterations and the selected lambda are unchanged.
+  The fold predictions can move where a fold's intercept objective is flat
+  (the hinge loss often is, over an interval) and rounding picks a different,
+  equally good point of it.
 - Predictions in exact mode build the test kernel on the fit's device in
   blocks of test rows instead of on the CPU, and copy only the scores back.
 - Exact-mode solvers no longer materialise the `n x n` matrix
