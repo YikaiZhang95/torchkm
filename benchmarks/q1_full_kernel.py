@@ -896,6 +896,13 @@ def main() -> None:
     ap.add_argument("--datasets", nargs="+", default=DATASETS)
     ap.add_argument("--methods", nargs="+", choices=METHODS, default=METHODS)
     ap.add_argument(
+        "--redo",
+        nargs="+",
+        choices=METHODS,
+        default=[],
+        help="on resume, compute these methods' cells again even if finished",
+    )
+    ap.add_argument(
         "--dtype",
         choices=["float32", "float64"],
         default="float32",
@@ -984,7 +991,11 @@ def main() -> None:
         # Keep a finished cell only if it was computed with this run's settings
         # for its method (e.g. TorchKM's tol and KKTeps); everything else is
         # dropped and computed again, so one table never mixes settings.
-        kept = [r for r in old.get("records", []) if reusable(r, args)]
+        kept = [
+            r
+            for r in old.get("records", [])
+            if reusable(r, args) and r["method"] not in args.redo
+        ]
         dropped = len(old.get("records", [])) - len(kept)
         doc["records"] = kept
         print(
