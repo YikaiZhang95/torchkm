@@ -2,6 +2,7 @@
 import torch
 
 from .functions import *
+from .functions import brent_minimize
 
 
 class cvknyssvm:
@@ -175,8 +176,10 @@ class cvknyssvm:
         r = torch.zeros(nobs, dtype=torch.double).to(self.device)
         kz = torch.zeros(np + 1, dtype=torch.double).to(self.device)
         alpmat = torch.zeros((np + 1, nlam), dtype=torch.double).to(self.device)
-        npass = torch.zeros(nlam, dtype=torch.int32).to(self.device)
-        cvnpass = torch.zeros(nlam, dtype=torch.int32).to(self.device)
+        # Iterations per lambda, counted on the host: reading a device counter
+        # on every iteration would make the CPU wait for the GPU each time.
+        npass = [0] * nlam
+        cvnpass = [0] * nlam
         alpvec = torch.zeros(np + 1, dtype=torch.double).to(self.device)
         pred = torch.zeros((self.nobs, self.nlam), dtype=torch.double).to(self.device)
         jerr = 0
@@ -290,7 +293,7 @@ class cvknyssvm:
                     if torch.max(step_buf**2) < (self.eps * mul * mul):
                         break
 
-                    if torch.sum(npass) > self.maxit:
+                    if sum(npass) > self.maxit:
                         jerr = -l - 1
                         break
 
@@ -342,7 +345,7 @@ class cvknyssvm:
             self.anlam = l
 
             # Check if maximum iterations exceeded
-            if torch.sum(npass) > self.maxit:
+            if sum(npass) > self.maxit:
                 self.jerr = -l - 1
                 break
             # print(f'Single fitting:{time.time() - start}')
@@ -382,7 +385,7 @@ class cvknyssvm:
                     # Compute residual r
                     told = one
 
-                    while torch.sum(cvnpass) <= self.nmaxit:
+                    while sum(cvnpass) <= self.nmaxit:
                         zvec = torch.where(
                             loor < omdelta,
                             -yn,
@@ -431,7 +434,7 @@ class cvknyssvm:
                         # Check convergence
                         if torch.max(step_buf**2) < eps2 * (mul**2):
                             break
-                    if torch.sum(cvnpass) > self.nmaxit:
+                    if sum(cvnpass) > self.nmaxit:
                         break
                     dif_step = step_buf.clone()
                     # dif_step = oldalpvec - alpvec
@@ -473,7 +476,7 @@ class cvknyssvm:
                             break
                         elif dif_norm > nobs and cvnpass[l] > 2:
                             break
-                        if torch.sum(cvnpass) > self.nmaxit:
+                        if sum(cvnpass) > self.nmaxit:
                             break
 
                     if delta_id >= self.delta_len:
@@ -499,8 +502,8 @@ class cvknyssvm:
             self.anlam = l
 
         self.alpmat = alpmat
-        self.npass = npass
-        self.cvnpass = cvnpass
+        self.npass = torch.tensor(npass, dtype=torch.int32, device=self.device)
+        self.cvnpass = torch.tensor(cvnpass, dtype=torch.int32, device=self.device)
         self.jerr = jerr
         self.pred = pred
         self.Z_test = Z_test
@@ -553,115 +556,9 @@ class cvknyssvm:
         return objval
 
     def golden_section_search(self, lmin, lmax, nobs, ka, aka, y, lam):
-        """
-        Optimize the intercept using golden section search (Brent's method).
-
-        Parameters:
-        - lmin (float): Lower bound for the search interval.
-        - lmax (float): Upper bound for the search interval.
-        - nobs (int): Number of observations.
-        - ka (torch.Tensor): Kernel matrix dot alpha vector (K * alpha).
-        - aka (float): Regularization term (alpha * K * alpha).
-        - y (torch.Tensor): Labels vector of shape (nobs,).
-        - lam (float): Regularization parameter.
-
-        Returns:
-        - lhat (float): Optimized intercept value.
-        - fx (float): Objective function value at the optimized intercept.
-        """
-        eps = torch.tensor(torch.finfo(torch.float64).eps)
-        tol = eps**0.25
-        tol1 = eps + 1.0
-        eps = torch.sqrt(eps)
-
-        # Golden ratio constant
-        gold = (3.0 - torch.sqrt(torch.tensor(5.0))) * 0.5
-
-        # Initialize variables
-        a = lmin
-        b = lmax
-        v = a + gold * (b - a)
-        w = v
-        x = v
-        d = 0.0
-        e = 0.0
-
-        # Evaluate the objective function at the initial x value
-        fx = self.objfun(x, aka, ka, y, lam, nobs)
-        fv = fx
-        fw = fx
-        tol3 = tol / 3.0
-        # Main optimization loop
-        while True:
-            xm = (a + b) * 0.5
-            tol1 = eps * abs(x) + tol3
-            t2 = 2.0 * tol1
-
-            # Check if the interval is small enough to exit
-            if abs(x - xm) <= t2 - (b - a) * 0.5:
-                break
-
-            p = 0.0
-            q = 0.0
-            r = 0.0
-            if abs(e) > tol1:
-                r = (x - w) * (fx - fv)
-                q = (x - v) * (fx - fw)
-                p = (x - v) * q - (x - w) * r
-                q = 2.0 * (q - r)
-                if q > 0.0:
-                    p = -p
-                else:
-                    q = -q
-                r = e
-                e = d
-            # Conditions to use golden section step
-            if (abs(p) >= abs(0.5 * q * r)) or (p <= q * (a - x)) or (p >= q * (b - x)):
-                if x < xm:
-                    e = b - x
-                else:
-                    e = a - x
-                d = gold * e
-            else:
-                # Parabolic interpolation step
-                d = p / q
-                u = x + d
-                if (u - a < t2) or (b - u < t2):
-                    d = tol1
-                    if x >= xm:
-                        d = -d
-
-            # Set the new point u
-            u = x + d if abs(d) >= tol1 else (x + tol1 if d > 0 else x - tol1)
-            # Evaluate the objective function at u
-            fu = self.objfun(u, aka, ka, y, lam, nobs)
-            # Update the search bounds and objective values
-            if fu <= fx:
-                if u < x:
-                    b = x
-                else:
-                    a = x
-                v = w
-                fv = fw
-                w = x
-                fw = fx
-                x = u
-                fx = fu
-            else:
-                if u < x:
-                    a = u
-                else:
-                    b = u
-                if fu <= fw or w == x:
-                    v = w
-                    fv = fw
-                    w = u
-                    fw = fu
-                elif fu <= fv or v == x or v == w:
-                    v = u
-                    fv = fu
-        # Return the optimal intercept and the objective value
-        lhat = x
-        res = self.objfun(x, aka, ka, y, lam, nobs)
-
-        return lhat, res
+        """Intercept minimising ``objfun`` on [lmin, lmax] by Brent's method
+        (``functions.brent_minimize``); returns (intercept, objective) as
+        floats."""
+        return brent_minimize(
+            lambda b: self.objfun(b, aka, ka, y, lam, nobs), lmin, lmax
+        )

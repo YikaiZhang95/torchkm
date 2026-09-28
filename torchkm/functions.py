@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: MIT
+import math
+
 import torch
 
 
@@ -171,3 +173,78 @@ def kernelMult(X, X_new, sigma):
     K = pairwise_dists.mul_(-2.0 * sigma).exp_()
 
     return K
+
+
+def brent_minimize(f, lmin, lmax):
+    """
+    Minimise a function of one variable on [lmin, lmax] by Brent's method
+    (golden-section steps with parabolic interpolation), as the solvers do for
+    their intercept.
+
+    The search's own arithmetic is in Python floats: ``f`` returns a scalar
+    (a one-element tensor or a float) and is read once per evaluation. On a
+    GPU that read is the only wait for the device per step; the solvers' old
+    per-method copies kept the search's state in device tensors, so every
+    comparison and update was a kernel launch and most of them a wait.
+
+    Parameters:
+    - f (callable): Objective of the intercept.
+    - lmin, lmax (float): Search interval.
+
+    Returns:
+    - (x, fx) (float, float): Minimiser and objective value there.
+    """
+    eps = torch.finfo(torch.float64).eps
+    tol3 = eps**0.25 / 3.0
+    eps = math.sqrt(eps)
+    gold = (3.0 - math.sqrt(5.0)) * 0.5
+    a, b = float(lmin), float(lmax)
+    x = w = v = a + gold * (b - a)
+    fx = fw = fv = float(f(x))
+    d = e = 0.0
+    while True:
+        xm = (a + b) * 0.5
+        tol1 = eps * abs(x) + tol3
+        t2 = 2.0 * tol1
+        if abs(x - xm) <= t2 - (b - a) * 0.5:
+            break
+        p = q = r = 0.0
+        if abs(e) > tol1:
+            r = (x - w) * (fx - fv)
+            q = (x - v) * (fx - fw)
+            p = (x - v) * q - (x - w) * r
+            q = 2.0 * (q - r)
+            if q > 0.0:
+                p = -p
+            else:
+                q = -q
+            r = e
+            e = d
+        if abs(p) >= abs(0.5 * q * r) or p <= q * (a - x) or p >= q * (b - x):
+            # golden-section step
+            e = b - x if x < xm else a - x
+            d = gold * e
+        else:
+            # parabolic step
+            d = p / q
+            u = x + d
+            if u - a < t2 or b - u < t2:
+                d = tol1 if x < xm else -tol1
+        u = x + d if abs(d) >= tol1 else (x + tol1 if d > 0 else x - tol1)
+        fu = float(f(u))
+        if fu <= fx:
+            if u < x:
+                b = x
+            else:
+                a = x
+            v, fv, w, fw, x, fx = w, fw, x, fx, u, fu
+        else:
+            if u < x:
+                a = u
+            else:
+                b = u
+            if fu <= fw or w == x:
+                v, fv, w, fw = w, fw, u, fu
+            elif fu <= fv or v == x or v == w:
+                v, fv = u, fu
+    return x, fx
