@@ -103,3 +103,21 @@ def test_torchkmkqr_tiny_cpu_fit_predict():
     assert pred.shape == (3,)
     assert np.isfinite(pred).all()
     assert hasattr(reg, "best_C_")
+
+
+def test_kernel_times_blocks_match_the_full_product():
+    from torchkm.estimators import _kernel_times
+    from torchkm.functions import kernelMult
+
+    torch.manual_seed(0)
+    X_train = torch.randn(20, 3, dtype=torch.double)
+    X_test = torch.randn(13, 3, dtype=torch.double)
+    alpha = torch.randn(20, dtype=torch.double)
+
+    def k_test(a, b, state):
+        return kernelMult(a, b, state["sigma"])
+
+    full = kernelMult(X_test, X_train, 0.4) @ alpha
+    # 50 entries per block = 2 test rows at a time, 7 blocks
+    blocked = _kernel_times(k_test, X_test, X_train, {"sigma": 0.4}, alpha, entries=50)
+    assert torch.allclose(blocked, full, rtol=0, atol=1e-12)

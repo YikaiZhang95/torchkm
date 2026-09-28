@@ -101,6 +101,23 @@ All notable changes to TorchKM are documented in this file.
   archived JSON results).
 
 ### Changed
+- Fewer waits for the GPU. The solvers' intercept search (Brent's method, one
+  copy per solver) kept its state in device tensors, so each of its steps
+  launched several tiny kernels and made the CPU wait for the GPU several
+  times; the nine copies are now one function, `functions.brent_minimize`,
+  whose bookkeeping is in Python floats and which reads the objective once
+  per evaluation. The solvers count their iterations on the host instead of
+  summing a device counter on every iteration (`npass` and `cvnpass` are
+  still int32 tensors after `fit`), and the unused row sums of the kernel
+  (`Ksum`) are gone. On a 3,000-row SVM fit (50 lambdas, 10 folds) the
+  device-to-host reads dropped from 159,850 to 17,811 with the same
+  iterations. Results of the float64 SVM and of kernel quantile regression
+  are unchanged; the DWD, logistic, squared-hinge, Huber and Nystrom solvers
+  searched partly in float32 before (their constants were float32 tensors)
+  and now search in float64, which moves their solutions within the solver
+  tolerance (objectives within 1e-5 in our checks).
+- Predictions in exact mode build the test kernel on the fit's device in
+  blocks of test rows instead of on the CPU, and copy only the scores back.
 - Exact-mode solvers no longer materialise the `n x n` matrix
   `diag(1/eigenvalues) U^T`; the projection applies it on the fly. Peak
   memory drops by `8 n^2` bytes.

@@ -61,6 +61,18 @@ def _now(dev: str) -> float:
     return time.perf_counter()
 
 
+def _kernel_times(compute_K_test, X_test, X_train, state, alpha, entries=2**25):
+    """K(X_test, X_train) @ alpha, the test kernel built on the inputs' device in
+    blocks of test rows, so at most ``entries`` of its entries exist at once."""
+    rows = max(1, entries // max(1, X_train.shape[0]))
+    return torch.cat(
+        [
+            torch.mv(compute_K_test(X_test[i : i + rows], X_train, state), alpha)
+            for i in range(0, X_test.shape[0], rows)
+        ]
+    )
+
+
 def _make_ulam(nC: int, Cs: Optional[Any], C_max: float, C_min: float) -> torch.Tensor:
     if Cs is not None:
         u = torch.as_tensor(_as_numpy(Cs), dtype=torch.double)
@@ -536,15 +548,24 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 raise ValueError(
                     f"For kernel='precomputed', X must have shape (n_test, {self.n_samples_fit_})."
                 )
-        else:
-            X_train_t = torch.as_tensor(self.X_fit_, dtype=wdt)  # CPU
-            X_test_t = torch.as_tensor(X_np, dtype=wdt)  # CPU
-            K_test = self._compute_K_test(X_test_t, X_train_t, self.kernel_state_).to(
-                dev
-            )
+            with torch.no_grad():
+                scores = torch.mv(K_test, alpha_t.to(wdt)) + b
+            return scores.detach().cpu().numpy()
 
+        # the test kernel is built on the fit's device (the GPU when there is one)
+        X_train_t = torch.as_tensor(self.X_fit_, dtype=wdt, device=dev)
+        X_test_t = torch.as_tensor(X_np, dtype=wdt, device=dev)
         with torch.no_grad():
-            scores = torch.mv(K_test, alpha_t.to(wdt)) + b
+            scores = (
+                _kernel_times(
+                    self._compute_K_test,
+                    X_test_t,
+                    X_train_t,
+                    self.kernel_state_,
+                    alpha_t.to(wdt),
+                )
+                + b
+            )
         return scores.detach().cpu().numpy()
 
     def predict(self, X: Any) -> np.ndarray:
@@ -1473,15 +1494,24 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
                 raise ValueError(
                     f"For kernel='precomputed', X must have shape (n_test, {self.n_samples_fit_})."
                 )
-        else:
-            X_train_t = torch.as_tensor(self.X_fit_, dtype=torch.double)
-            X_test_t = torch.as_tensor(X_np, dtype=torch.double)
-            K_test = self._compute_K_test(X_test_t, X_train_t, self.kernel_state_).to(
-                dev
-            )
+            with torch.no_grad():
+                scores = torch.mv(K_test, alpha_t) + b
+            return scores.detach().cpu().numpy()
 
+        # the test kernel is built on the fit's device (the GPU when there is one)
+        X_train_t = torch.as_tensor(self.X_fit_, dtype=torch.double, device=dev)
+        X_test_t = torch.as_tensor(X_np, dtype=torch.double, device=dev)
         with torch.no_grad():
-            scores = torch.mv(K_test, alpha_t) + b
+            scores = (
+                _kernel_times(
+                    self._compute_K_test,
+                    X_test_t,
+                    X_train_t,
+                    self.kernel_state_,
+                    alpha_t,
+                )
+                + b
+            )
         return scores.detach().cpu().numpy()
 
     def score(self, X: Any, y: Any) -> float:
