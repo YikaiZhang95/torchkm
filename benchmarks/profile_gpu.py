@@ -18,9 +18,10 @@ Q1 protocol (50 lambdas, 10 folds). Three measurements:
    every .item(), float() or Python comparison on a GPU tensor), each of which
    makes the CPU wait until the GPU has finished all queued work.
 
-Usage:
+Usage (section 3 only with --ops: it fits again under the profiler and then
+summarises every recorded event, which takes long at large n):
   python benchmarks/profile_gpu.py --n 20000 --p 100 --dtype float32
-  python benchmarks/profile_gpu.py --n 20000 --p 100 --dtype float64 --trace t.json
+  python benchmarks/profile_gpu.py --n 5000 --p 100 --dtype float32 --ops --trace t.json
 The trace opens in chrome://tracing or https://ui.perfetto.dev: gaps between
 GPU kernels are the host-side waits.
 """
@@ -88,7 +89,14 @@ def main() -> None:
     ap.add_argument("--tol", type=float, default=1e-5)
     ap.add_argument("--max-iter", type=int, default=100_000)
     ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--trace", default=None, help="write a Chrome trace here")
+    ap.add_argument(
+        "--ops",
+        action="store_true",
+        help="also profile one more fit per operator (section 3; slow at large n)",
+    )
+    ap.add_argument(
+        "--trace", default=None, help="write a Chrome trace here (with --ops)"
+    )
     args = ap.parse_args()
     dev = (
         "cuda"
@@ -190,7 +198,9 @@ def main() -> None:
     else:
         print("\n2. memory: CUDA only")
 
-    # 3. operators
+    # 3. operators (another fit under the profiler, then summarising every event)
+    if not args.ops:
+        return
     from torch.profiler import ProfilerActivity, profile
 
     acts = [ProfilerActivity.CPU] + ([ProfilerActivity.CUDA] if dev == "cuda" else [])
