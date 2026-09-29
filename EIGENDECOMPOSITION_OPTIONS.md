@@ -704,9 +704,11 @@ Reading it:
 - **Against the shipped solver:** truncated at gap 1e-4 takes the same time,
   16.7 against 16.8 s. The shipped solver ends up to 18% above the optimum
   on its path (certified afterwards), and uses 5× the memory.
-- **Fallbacks.** In float32 the safeguard took the fallback step 279 and 83
-  times, out of about 3,600 and 4,500 iterations. It never did in the
-  float64 CPU runs.
+- **Fallbacks.** In float32 the safeguard took the fallback step in 279 and
+  83 column steps. It never did in the float64 CPU runs.
+  - The rate needs `column_iterations` from the run's JSON. The reads column
+    is not the denominator: one n × n product serves up to 10 fold columns,
+    and reads also count the spectrum, the certificate and the refreshes.
   - Float32 Ritz vectors commute with K only to rounding, and the step checks
     see float32 noise.
   - Every λ and fold still certified.
