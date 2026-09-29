@@ -28,10 +28,13 @@ from typing import Optional, Union
 import torch
 
 #: Number of ``n x n`` matrices' worth of memory that exact mode holds at its
-#: peak (kernel matrix, eigenvector matrix, eigensolver workspace). A CPU
-#: sweep (LAPACK ``syevd``, PyTorch 2.14) measured 4.2; calibrate the CUDA
-#: value with ``benchmarks/bench_memory_envelope.py``.
-EXACT_MODE_COPIES: float = 4.0
+#: peak: the kernel matrix, eigh's copy of it (which becomes the eigenvectors)
+#: and cuSOLVER ``syevd``'s workspace of 4.01 more. Measured 6.01 on an L40S
+#: (PyTorch 2.6, CUDA 12.4), in float32 at n = 20,000 and in float64 at
+#: n = 16,100. A CPU sweep (LAPACK ``syevd``) measured 4.2, so on the CPU the
+#: estimate is conservative. ``benchmarks/bench_memory_envelope.py`` measures
+#: a build.
+EXACT_MODE_COPIES: float = 6.0
 
 #: Largest ``n`` whose eigendecomposition cuSOLVER accepts, whatever the device
 #: memory. Measured with PyTorch 2.6 and CUDA 12.4 on an L40S

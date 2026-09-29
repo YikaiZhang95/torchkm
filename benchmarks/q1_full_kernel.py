@@ -133,7 +133,8 @@ from _common import (  # noqa: E402
     synthetic_dataset,
 )
 
-# The paper's sets that fit the full kernel on one 48 GB GPU (n_train <= 33k).
+# The paper's sets that fit the full kernel on one 48 GB GPU (n_train <= 32,768,
+# the largest n cuSOLVER's eigendecomposition accepts; a9a has 32,561).
 DATASETS = [
     "a7a",
     "a8a",

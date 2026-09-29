@@ -42,21 +42,23 @@ max_exact_n(48e9)                           # largest n for a 48 GB card
 ```
 
 Predicted ceilings for common cards, from `max_exact_n` with the default
-constant and 10% headroom for the CUDA context. The first column counts memory
-only (`size_limit=None`); the second adds the eigensolver's size limit (below),
-as `max_exact_n` does by default:
+constant, 10% headroom for the CUDA context and the eigensolver's size limit
+(below). Where the size limit binds, the value memory alone would allow
+(`size_limit=None`) is in parentheses:
 
-| Device memory | Largest \(n\), memory only (predicted) | Largest \(n\) for exact mode |
+| Device memory | Largest \(n\), float64 | Largest \(n\), float32 (`TorchKMSVC`) |
 |---|---|---|
-| 8 GB | ≈ 15,000 | ≈ 15,000 |
-| 16 GB | ≈ 21,200 | ≈ 21,200 |
-| 24 GB | ≈ 26,000 | ≈ 26,000 |
-| 48 GB | ≈ 36,700 | 32,768 |
-| 80 GB | ≈ 47,400 | 32,768 |
+| 8 GB | ≈ 12,200 | ≈ 17,300 |
+| 16 GB | ≈ 17,300 | ≈ 24,500 |
+| 24 GB | ≈ 21,200 | ≈ 30,000 |
+| 48 GB | ≈ 30,000 | 32,768 (≈ 42,400) |
+| 80 GB | 32,768 (≈ 38,700) | 32,768 (≈ 54,800) |
 
-A CPU sweep of the same code path (LAPACK eigensolver) measured 4.2 resident
-copies, which is where the default constant of 4 comes from; the CUDA
-eigensolver's workspace differs, so the GPU sweep is the number to quote.
+The default constant of 6 is the GPU measurement. On an L40S (PyTorch 2.6,
+CUDA 12.4) a fit peaks at 6.01 copies, in float32 and float64 alike: the
+kernel matrix, cuSOLVER's copy of it, which becomes the eigenvectors, and a
+workspace of 4.01 more. A CPU sweep of the same code path (LAPACK eigensolver)
+measured 4.2 copies, so on the CPU the prediction is conservative.
 
 Every exact-mode estimator (`TorchKMSVC`, `TorchKMDWD`, `TorchKMLogit`,
 `TorchKMKQR`) shares the same decomposition, so the envelope is the same for
@@ -72,10 +74,10 @@ sizes outright. With PyTorch 2.6 and CUDA 12.4 on an NVIDIA L40S, it accepts
 query, before anything is allocated, so it applies on every card.
 
 Exact mode on a GPU therefore stops at \(n = 32{,}768\)
-(`torchkm.memory.EXACT_MODE_MAX_N_CUDA`), however much memory the card has:
-on 48 GB and 80 GB cards this limit, not memory, sets the ceiling, and
-float32's \(\sqrt{2}\) helps only up to it. `max_exact_n` caps its answer at
-this size; pass `size_limit=None` to count memory alone. Above it, the exact solvers raise a
+(`torchkm.memory.EXACT_MODE_MAX_N_CUDA`), however much memory the card has.
+It binds wherever memory would allow more: from 48 GB up in float32 and at
+80 GB in float64 (the values in parentheses above). `max_exact_n` caps its
+answer at this size; pass `size_limit=None` to count memory alone. Above it, the exact solvers raise a
 `torch.linalg.LinAlgError` that names the limit and the alternatives, instead
 of cuSOLVER's own message.
 

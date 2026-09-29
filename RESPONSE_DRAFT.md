@@ -120,14 +120,18 @@ where it can; the tables list each method's device.
 
 ## 4. The operating envelope is never characterised
 
-**Answered in form, GPU numbers pending.** Peak memory in exact mode is
-`c · 8 n² + 16 n L` bytes: c resident n×n float64 matrices (kernel,
-eigenvectors, eigensolver workspace) plus the n×L path. A CPU sweep of the
-same code measured c = 4.2 for n = 2,000 to 8,000; the CUDA eigensolver's
-workspace differs, so `benchmarks/bench_memory_envelope.py` on the L40S is
-the number to quote. With c = 4 the predicted ceiling on a 48 GB card is
-about n = 37,000, which is why Table 3 stopped at 24,692 and Table 4 began at
-32,561 on the Nyström path.
+**Answered, measured on the GPU.** Peak memory in exact mode is
+`c · 8 n² + 16 n L` bytes in float64 (half in float32): c resident n×n
+matrices plus the n×L path. On the L40S (PyTorch 2.6, CUDA 12.4) the peak is
+c = 6.01 in float32 and float64 alike: the kernel, cuSOLVER's copy of it
+(which becomes the eigenvectors) and a 4.01-copy eigensolver workspace.
+After the factorization only the kernel and the eigenvectors stay resident.
+A CPU sweep measured c = 4.2 for n = 2,000 to 8,000. A second limit does not
+depend on memory: cuSOLVER's eigendecomposition refuses n above 32,768
+(float32; float64 accepts 32,768 and refuses 33,000), before allocating
+anything. The predicted ceiling on a 48 GB card is therefore about
+n = 30,000 in float64 and 32,768 in float32, which is why Table 3 stopped at
+24,692 and Table 4 began at 32,561 on the Nyström path.
 
 Package changes on this branch make the envelope explicit: one of the n×n
 copies is no longer materialised (it was only used by the projection step,
@@ -136,7 +140,8 @@ instead of the host, every fitted estimator reports `peak_gpu_memory_bytes_`,
 `torchkm.exact_mode_memory_estimate` and `torchkm.max_exact_n` predict the
 requirement and the largest feasible n, and an exact-mode out-of-memory error
 now states the requirement, the device total, the feasible n and the
-`low_rank=True` alternative. A user-guide page ("Operating envelope") states
+`low_rank=True` alternative. Above cuSOLVER's size limit, the exact solvers
+raise an error that names it. A user-guide page ("Operating envelope") states
 the model and a table per card size.
 
 The new Figure 1 will be time and peak memory versus n, exact mode up to the
@@ -216,7 +221,7 @@ are scikit-learn compatible, with a test. The section cannot stay as is.
 | 3 | covtype accounted for | rank-30 configuration (answered); `bench_covtype_rank.py` curve | answered; curve ready to run |
 | 4 | AUC / balanced accuracy under imbalance | harness metrics on every table | done |
 | 5 | Kernel-natural problem in the exact range | ijcnn1-30k, MNIST pairs, covtype-30k, each with linear baselines | ready to run |
-| 6 | Memory envelope | `bench_memory_envelope.py`, `peak_gpu_memory_bytes_`, envelope page | model and helpers done; GPU sweep pending |
+| 6 | Memory envelope | `bench_memory_envelope.py`, `peak_gpu_memory_bytes_`, envelope page | model calibrated on the L40S (c = 6.01); cuSOLVER's size limit measured (n ≤ 32,768); envelope sweep for Figure 1 pending |
 | 7 | Reduced appendix, derivations cited, behaviour documented online | docs pages done; manuscript edits pending | pending |
 
 ## Decisions for the authors

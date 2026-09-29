@@ -59,7 +59,7 @@ def test_max_exact_n_stops_at_the_eigensolver_size_limit():
     # than EXACT_MODE_MAX_N_CUDA
     assert max_exact_n(80e9, size_limit=None) > EXACT_MODE_MAX_N_CUDA
     assert max_exact_n(80e9) == EXACT_MODE_MAX_N_CUDA == 32_768
-    assert max_exact_n(8e9) == max_exact_n(8e9, size_limit=None) == 15_000
+    assert max_exact_n(8e9) == max_exact_n(8e9, size_limit=None) == 12_247
 
 
 def test_estimate_rejects_negative_n():

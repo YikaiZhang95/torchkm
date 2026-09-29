@@ -36,14 +36,13 @@ First results (CPU only, archived under `benchmarks/results/20260920-cpu-smoke/`
   to make the rule scale-aware (e.g. compare `n * sum(KKT**2)`), which changes
   every solver's stopping behaviour and the paper's timings.
 - **Envelope (CPU).** Host memory grows by 4.2 x 8 n^2 bytes per exact-mode
-  fit for n = 2,000 to 8,000; `EXACT_MODE_COPIES` is set to 4 until the CUDA
-  sweep calibrates it.
+  fit for n = 2,000 to 8,000. `EXACT_MODE_COPIES` is 6, measured on the L40S
+  (6.01 in float32 and float64).
 
 Still to do: run the scripts on the GPU workstation (commands on the
 reproduction page), run the R scripts (untested here: no R in this
 environment; check the `fastkqr` / `kerndwd` argument names against the
-installed versions), calibrate `EXACT_MODE_COPIES` from the CUDA envelope
-sweep, decide on the KKT rule, the float32 stretch goal, and Phase 4
+installed versions), decide on the KKT rule, the float32 stretch goal, and Phase 4
 (manuscript and response letter).
 
 Working plan for answering the JMLR MLOSS decision letter (`rev.txt`). The

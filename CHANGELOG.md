@@ -124,9 +124,14 @@ All notable changes to TorchKM are documented in this file.
 
 ### Changed
 - `max_exact_n` stops at `EXACT_MODE_MAX_N_CUDA` by default; `size_limit=None`
-  counts memory only. The 'Operating envelope' page gives both: on 48 GB and
-  80 GB cards exact mode now stops at n = 32,768, not at the 36,700 and 47,400
-  their memory would allow.
+  counts memory only.
+- `EXACT_MODE_COPIES` is 6, the GPU measurement, instead of the CPU sweep's 4.
+  An L40S fit peaks at 6.01 copies of the n x n matrix: the kernel, cuSOLVER's
+  copy of it and a 4.01-copy workspace. Exact-mode memory estimates,
+  `max_exact_n` and the out-of-memory message had overstated the largest n on
+  a GPU by about 1.2x. The 'Operating envelope' table is recomputed: a 48 GB
+  card now reads about 30,000 in float64 (36,700 before) and 32,768 in
+  float32, where the size limit binds.
 - Fewer waits for the GPU. The solvers' intercept search (Brent's method, one
   copy per solver) kept its state in device tensors, so each of its steps
   launched several tiny kernels and made the CPU wait for the GPU several

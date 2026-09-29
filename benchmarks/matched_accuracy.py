@@ -19,17 +19,23 @@ Each run reports:
 A run too large for the card's memory, or for cuSOLVER's eigh, becomes a row
 with the error.
 
-The data is Table 2's simulation (as in profile_gpu.py), with an RBF kernel
-at the sigest bandwidth.
+The data is Table 2's simulation (as in profile_gpu.py) or, with --dataset,
+one of Q1's real data sets, loaded and split as in q1_full_kernel.py. The
+kernel is RBF at the sigest bandwidth. Test predictions are built in row
+blocks, so the peak memory counts K and the solver only.
 
 Usage:
   python benchmarks/matched_accuracy.py --n 20000 --gaps 1e-3 1e-4 --out m20k.json
   python benchmarks/matched_accuracy.py --n 20000 --grid hard --gaps 1e-3
   python benchmarks/matched_accuracy.py --n 60000 --solvers truncated --gaps 1e-3
   python benchmarks/matched_accuracy.py --n 20000 --no-cv --gaps 1e-3  # smallest
+  python benchmarks/matched_accuracy.py --dataset a9a --data-dir ~/libsvm_data \
+      --seed 52 --gaps 1e-3
 
-In the default --grid q1, lambda runs over 1e3 .. 1e-3. In --grid hard it
-runs over 1e-2 .. 2e-5, and the shipped solver then uses KKTeps 1e-6.
+The lambda grid follows Q1. --grid q1 (the default for the simulation, as in
+Q1_sim) runs over 1e3 .. 1e-3, with the shipped solver at KKTeps 1e-3.
+--grid hard (the default for a real data set, as in Q1_real) runs over
+1e-2 .. 2e-5, with the shipped solver at KKTeps 1e-6.
 """
 
 from __future__ import annotations
@@ -48,7 +54,7 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _common import PeakMemory, env_snapshot, make_folds  # noqa: E402
-from _common import synthetic_dataset  # noqa: E402
+from _common import load_dataset, synthetic_dataset  # noqa: E402
 
 from torchkm import sigest  # noqa: E402
 from torchkm.cvksvm import cvksvm  # noqa: E402
@@ -79,11 +85,22 @@ def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("--n", type=int, default=20000)
-    ap.add_argument("--p", type=int, default=100)
+    ap.add_argument(
+        "--dataset",
+        default="sim",
+        help="sim (Table 2's simulation at --n, --p) or a Q1 real data set, e.g. a9a",
+    )
+    ap.add_argument("--data-dir", default=None, help="directory of LIBSVM files")
+    ap.add_argument("--n", type=int, default=20000, help="simulation rows")
+    ap.add_argument("--p", type=int, default=100, help="simulation features")
     ap.add_argument("--dtype", choices=["float32", "float64"], default="float32")
     ap.add_argument("--device", default="cuda")
-    ap.add_argument("--grid", choices=["q1", "hard"], default="q1")
+    ap.add_argument(
+        "--grid",
+        choices=["q1", "hard"],
+        default=None,
+        help="default: q1 for the simulation, hard for a real data set",
+    )
     ap.add_argument("--nlam", type=int, default=50)
     ap.add_argument("--folds", type=int, default=10)
     ap.add_argument("--no-cv", action="store_true", help="path only")
@@ -105,18 +122,26 @@ def main():
         else "cpu"
     )
     dtype = getattr(torch, args.dtype)
-    n = args.n
 
-    d = synthetic_dataset(n, args.p, args.seed, n_test=max(n // 10, 10))
+    if args.dataset == "sim":
+        name = f"sim_{args.n}x{args.p}"
+        d = synthetic_dataset(
+            args.n, args.p, args.seed, name=name, n_test=max(args.n // 10, 10)
+        )
+    else:
+        d = load_dataset(args.dataset, args.data_dir, seed=args.seed)
+    args.grid = args.grid or ("q1" if args.dataset == "sim" else "hard")
+    n = d["n_train"]
     X = torch.from_numpy(d["Xtr"])
     torch.manual_seed(args.seed)
     sig = float(sigest(X))
     y = torch.from_numpy(d["ytr"]).to(dev, dtype)
+    Xd = X.to(dev, dtype)
     t = time.perf_counter()
-    K = rbf_kernel(X.to(dev, dtype), sig)
+    K = rbf_kernel(Xd, sig)
     sync(dev)
     kernel_seconds = time.perf_counter() - t
-    Kte = kernelMult(torch.from_numpy(d["Xte"]).to(dev, dtype), X.to(dev, dtype), sig)
+    Xte = torch.from_numpy(d["Xte"]).to(dev, dtype)
     yte = torch.from_numpy(d["yte"]).to(dev, dtype)
     unit = K.element_size() * n * n
     if args.grid == "q1":
@@ -130,7 +155,7 @@ def main():
     )
     lmax = top_eigenvalue(K)
     print(
-        f"n={n} p={args.p} {args.dtype} on {dev}"
+        f"{d['name']}: n={n} p={d['p']} n_test={d['n_test']} {args.dtype} on {dev}"
         + (f" ({torch.cuda.get_device_name()})" if dev == "cuda" else "")
         + f"; grid {args.grid}, {args.nlam} lambdas, "
         + ("no CV" if foldid is None else f"{args.folds} folds")
@@ -139,7 +164,14 @@ def main():
     )
 
     def test_accuracy(alphas, j):
-        f = Kte @ alphas[1:, j] + alphas[0, j]
+        # the test kernel in row blocks: never resident during a fit
+        f = torch.cat(
+            [
+                kernelMult(Xte[i : i + 4096], Xd, sig) @ alphas[1:, j]
+                for i in range(0, len(Xte), 4096)
+            ]
+        )
+        f = f + alphas[0, j]
         return float((torch.where(f > 0, 1.0, -1.0) == yte).double().mean())
 
     solvers = list(args.solvers)

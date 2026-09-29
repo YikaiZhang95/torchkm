@@ -843,6 +843,26 @@ python benchmarks/probe_eigh_size.py --dtype float64 >> $RESULTS/probe_eigh_size
 cat $RESULTS/probe_eigh_size.log
 ```
 
+Real data: the Q1 data sets, loaded and split as in `q1_full_kernel.py`,
+with Q1_real's grid (λ from 1e-2 to 2e-5, the shipped solver at KKTeps 1e-6)
+as the default for a real set:
+
+```bash
+for ds in a7a a8a a9a w7a mnist_3v8 mnist_4v9 ijcnn1_30k covtype_30k; do
+  python benchmarks/matched_accuracy.py --dataset $ds --data-dir /home/yzhang705/libsvm_data \
+    --seed 52 --gaps 1e-3 --out $RESULTS/matched_$ds.json > $RESULTS/matched_$ds.log 2>&1
+done
+```
+
+- From this version on, test predictions are built in row blocks, so the
+  peak counts K and the solver only. The simulation runs above also held a
+  test kernel of 0.1 units during the fits. On real data the test set can be
+  larger than the training set (ijcnn1), so a resident test kernel would
+  dominate the peak.
+- At λ = 2e-5, C = 1/(2nλ) is at most 2.1 for these sizes. On a 300-row
+  CPU check, fold fits at C = 24 and 83 hit the 20,000-iteration cap
+  (`fit_cap`) and did not certify.
+
 Each log ends with one table:
 - time;
 - peak memory in n × n units and in NVML GiB;
