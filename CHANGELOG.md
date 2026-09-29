@@ -46,7 +46,8 @@ All notable changes to TorchKM are documented in this file.
   - Steps are checked and fall back to a scalar majorizer when needed.
   - Iterations use FISTA momentum with restart.
   - `benchmarks/matched_accuracy.py` compares the two spectra at equal
-    certified gaps on the GPU.
+    certified gaps on the GPU. `benchmarks/probe_eigh_size.py` finds the
+    sizes cuSOLVER's eigh refuses (n = 60,000 in float32 on the L40S).
   - Not part of the stable API.
 - `dtype` on the exact SVM solver (`cvksvm(dtype=torch.float32)`,
   `TorchKMSVC(dtype="float32")`): the kernel, its eigendecomposition and the

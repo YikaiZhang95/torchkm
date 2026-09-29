@@ -16,6 +16,8 @@ Each run reports:
 - fallback steps;
 - the largest certified gaps;
 - the selected lambda, its CV error and the test accuracy.
+A run too large for the card's memory, or for cuSOLVER's eigh, becomes a row
+with the error.
 
 The data is Table 2's simulation (as in profile_gpu.py), with an RBF kernel
 at the sigest bandwidth.
@@ -188,10 +190,14 @@ def main():
                         ).fit()
                     sync(dev)
                     seconds = time.perf_counter() - t
-            except torch.cuda.OutOfMemoryError as err:
-                row.update(error=f"out of memory: {str(err).splitlines()[0]}")
+            except (torch.cuda.OutOfMemoryError, torch.linalg.LinAlgError) as err:
+                # Too large for the card's memory, or for cuSOLVER's eigh: at
+                # n = 60,000 (float32) its workspace-size query fails before
+                # anything is allocated (see probe_eigh_size.py).
+                msg = str(err).splitlines()[0]
+                row.update(error=msg.split(", when calling")[0].split(". Tried")[0])
                 runs.append(row)
-                print(f"{solver} gap {gap_tol}: out of memory", flush=True)
+                print(f"{solver} gap {gap_tol}: {msg}", flush=True)
                 continue
             peak = mem.result
             row.update(

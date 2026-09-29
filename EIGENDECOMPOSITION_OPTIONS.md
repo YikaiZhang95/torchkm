@@ -72,9 +72,10 @@ matrix: 4n² bytes in float32, 8n² in float64.
   - It selects the same λ and reaches the same accuracy.
   - At gap 1e-4 it takes the same time as the shipped, uncertified solver
     (16.7 against 16.8 s).
-  - At n = 60,000 the eigh-based solvers would need about 82 GiB. There,
-    truncated certified every λ and fold at 1e-3 in 82 s, peaking at 1.15
-    units (16.6 GiB), with about as many n × n reads as at n = 20,000.
+  - At n = 60,000 cuSOLVER's eigh refused the problem size outright
+    (measured), and would need about 82 GiB anyway. There, truncated
+    certified every λ and fold at 1e-3 in 82 s, peaking at 1.15 units
+    (16.6 GiB), with about as many n × n reads as at n = 20,000.
 - **Review.** Round 1, with the corrections it led to, is in
   `EIGENDECOMPOSITION_REVIEW_REPLY.md`.
 
@@ -107,6 +108,10 @@ Largest n on a 48 GB card (about 45 GB usable) for a given peak:
 | 5 (in place) | 47,400 | 33,500 |
 | 2 | 75,000 | 53,000 |
 | 1 | 106,000 | 75,000 |
+
+This counts memory only. cuSOLVER's eigh also refuses sizes: it refused
+n = 60,000 in float32 before allocating anything (section 7.3). Where that
+starts is not yet measured.
 
 ## 2. What the solver needs from the eigendecomposition
 
@@ -729,9 +734,17 @@ Reading it:
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | truncated | 1e-3 | 81.7 | 1.15 | 16.6 | 3,399 | 8.7e-4 | 8.1e-4 | 83 | 0.001 | 0.0004 | 0.9995 |
 
-- **Only the truncated spectrum fits.** One unit is 13.4 GiB. The eigh-based
-  solvers peak at 6.1 units, about 82 GiB, more than the card's 48 GB
-  (*projected* from the n = 20,000 run; the command below checks it).
+- **Only the truncated spectrum runs.** cuSOLVER's eigh refused n = 60,000
+  (measured).
+  - The shipped solver stopped in cuSOLVER's workspace-size query
+    (`cusolverDnXsyevd_bufferSize`: CUSOLVER_STATUS_INVALID_VALUE), before
+    anything was allocated. The full spectrum calls the same eigh.
+  - So the refusal is about the problem size, not the memory. Even with the
+    size accepted, the eigh-based solvers would peak at 6.1 units (one unit is
+    13.4 GiB), about 82 GiB: more than the card's 48 GB (*projected*).
+  - The size where cuSOLVER starts refusing is *pending*
+    (`benchmarks/probe_eigh_size.py`). It is above 20,000 in float32 and
+    16,100 in float64, the sizes measured in section 1.
 - **Every λ and fold certified:** path gaps up to 8.7e-4, fold gaps up to
   8.1e-4.
 - **The number of n × n reads did not grow with n:** 3,399, against 3,603 at
@@ -766,11 +779,20 @@ Then n = 60,000, which only the truncated spectrum fits (about 1 unit of
 nohup python benchmarks/matched_accuracy.py --n 60000 --solvers truncated --gaps 1e-3 --out $RESULTS/matched_60k.json > $RESULTS/matched_60k.log 2>&1 &
 ```
 
-To check that eigh does not fit at n = 60,000 (both rows should read "out
-of memory"):
+At n = 60,000 the eigh-based solvers stop with cuSOLVER's error, which the
+script records as a row:
 
 ```bash
 nohup python benchmarks/matched_accuracy.py --n 60000 --solvers shipped full --gaps 1e-3 --out $RESULTS/matched_60k_eigh.json > $RESULTS/matched_60k_eigh.log 2>&1 &
+```
+
+Where cuSOLVER starts refusing: memory is capped so that nothing is
+factorized, so each size takes about a second.
+
+```bash
+python benchmarks/probe_eigh_size.py > $RESULTS/probe_eigh_size.log 2>&1
+python benchmarks/probe_eigh_size.py --dtype float64 >> $RESULTS/probe_eigh_size.log 2>&1
+cat $RESULTS/probe_eigh_size.log
 ```
 
 Each log ends with one table:
