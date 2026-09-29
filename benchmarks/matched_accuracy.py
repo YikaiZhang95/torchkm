@@ -209,8 +209,14 @@ def main():
             )
             if solver == "shipped":
                 alphas = m.alpmat
+                # CV misclassification from the held-out scores (cvksvm.cv
+                # expects labels on the CPU; this stays on the fit's device)
                 cverr = (
-                    m.cv(m.pred, y).numpy()
+                    (torch.where(m.pred > 0, 1.0, -1.0) != y[:, None])
+                    .double()
+                    .mean(0)
+                    .cpu()
+                    .numpy()
                     if foldid is not None
                     else np.zeros(len(lams))
                 )
