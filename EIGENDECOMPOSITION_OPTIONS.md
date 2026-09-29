@@ -66,7 +66,12 @@ matrix: 4n² bytes in float32, 8n² in float64.
     same accuracy against libsvm with about 3× fewer n × n reads.
   - Its limit: separable data at tiny λ, where it does not certify in
     reasonable time.
-  - The GPU comparison to run is in section 7.3.
+  - **Measured on the L40S** (n = 20,000, float32, 50 λ × 10 folds; section
+    7.3): at the same certified gap (1e-3 or 1e-4), truncated is 2.8× faster
+    than full and peaks at 1.25 units of memory against 6.11.
+  - It selects the same λ and reaches the same accuracy.
+  - At gap 1e-4 it takes the same time as the shipped, uncertified solver
+    (16.7 against 16.8 s).
 - **Review.** Round 1, with the corrections it led to, is in
   `EIGENDECOMPOSITION_REVIEW_REPLY.md`.
 
@@ -676,6 +681,41 @@ Reading the table:
 The matched-accuracy experiment: n = 20,000, p = 100, float32, the Q1 grid
 (50 λ, 10 folds), gap 1e-3 and then 1e-4. It compares the shipped solver,
 full and truncated.
+
+**Measured on the L40S** (`benchmarks/matched_accuracy.py`):
+
+| solver | gap target | time (s) | peak (n × n units) | peak NVML (GiB) | n × n reads | path gap max | fold gap max | fallbacks | selected λ | CV error | test acc |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| shipped `cvksvm` | its tolerances | 16.8 | 6.12 | 10.3 | | 1.8e-1 | | | 0.00954 | 0.0003 | 1.0000 |
+| full | 1e-3 | 37.5 | 6.11 | 10.3 | 9,880 | 7.2e-4 | 8.6e-4 | 0 | 0.0126 | 0.0003 | 1.0000 |
+| full | 1e-4 | 47.1 | 6.11 | 10.3 | 13,188 | 8.9e-5 | 9.6e-5 | 0 | 0.0126 | 0.0003 | 1.0000 |
+| truncated | 1e-3 | 13.5 | 1.25 | 3.1 | 3,603 | 7.7e-4 | 9.2e-4 | 279 | 0.0126 | 0.0003 | 1.0000 |
+| truncated | 1e-4 | 16.7 | 1.25 | 3.1 | 4,481 | 9.3e-5 | 9.9e-5 | 83 | 0.0126 | 0.0003 | 1.0000 |
+
+Reading it:
+
+- **At the same certified gap, truncated is 2.8× faster than full** (13.5
+  against 37.5 s at 1e-3; 16.7 against 47.1 s at 1e-4).
+  - It needs 2.7–2.9× fewer n × n reads.
+  - It selects the same λ, with the same CV error and test accuracy.
+- **Peak memory falls from 6.11 to 1.25 units** (10.3 to 3.1 GiB in NVML).
+  At 1.25 units, a 48 GB card holds about n = 95,000 in float32, against
+  43,000 with eigh.
+- **Against the shipped solver:** truncated at gap 1e-4 takes the same time,
+  16.7 against 16.8 s. The shipped solver ends up to 18% above the optimum
+  on its path (certified afterwards), and uses 5× the memory.
+- **Fallbacks.** In float32 the safeguard took the fallback step 279 and 83
+  times, out of about 3,600 and 4,500 iterations. It never did in the
+  float64 CPU runs.
+  - Float32 Ritz vectors commute with K only to rounding, and the step checks
+    see float32 noise.
+  - Every λ and fold still certified.
+  - A noise floor for the check in float32 might remove most of them
+    (*untested*).
+- **Limits of this evidence.**
+  - This is one simulated data set, nearly separable at the selected λ (CV
+    error 0.0003).
+  - Real data (the Q1 data sets) and n = 60,000 are the next runs.
 
 ```bash
 pkill -f matched_accuracy.py
