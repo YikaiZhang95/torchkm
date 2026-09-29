@@ -16,11 +16,20 @@ matrix: 4n² bytes in float32, 8n² in float64.
   - one 4.01-unit cuSOLVER workspace (measured, section 7).
 
   Once the factorization is done, only K and U stay resident (2 units).
+- **It also sets a size ceiling, whatever the memory.** cuSOLVER's eigh
+  (PyTorch 2.6, CUDA 12.4) accepts n = 32,500 and refuses n = 33,000, in
+  float32 and float64 alike (measured, section 7.3).
+  - So the float32 exact solver stops near n = 32,700 on the L40S, not at
+    the 43,000 its memory would allow, and at the same n on a larger card.
+  - The truncated spectrum calls no dense eigensolver on the n × n matrix,
+    so only memory limits it.
 - **Keeping a full eigendecomposition, the cheapest cut is 6 → 5 units.**
   Factorize in place and rebuild K afterwards. This was measured at the same
   speed and has since been reverted. MAGMA or host LAPACK get the peak down to
   2 units, but run 4× and 12× slower (measured). We know of no full dense
   eigensolver that gives both lower memory and cuSOLVER's speed.
+  - Under the size ceiling, the cut no longer raises the largest n in
+    float32, and in float64 only from 30,600 to about 32,700.
 - **Proposal: don't compute the full eigendecomposition.**
   - The solver only needs a curvature matrix K̃ ⪰ K for which (K̃ + cI)⁻¹ is
     cheap for every c.
@@ -109,9 +118,15 @@ Largest n on a 48 GB card (about 45 GB usable) for a given peak:
 | 2 | 75,000 | 53,000 |
 | 1 | 106,000 | 75,000 |
 
-This counts memory only. cuSOLVER's eigh also refuses sizes: it refused
-n = 60,000 in float32 before allocating anything (section 7.3). Where that
-starts is not yet measured.
+This counts memory only. cuSOLVER's eigh also has a size limit: it accepts
+n = 32,500 and refuses n = 33,000, in both precisions (measured, section
+7.3).
+- In the rows that call it (6 and 5 units), the float32 limit is therefore
+  about 32,700, and so is the float64 limit at 5 units.
+- MAGMA and host LAPACK (2 units) usually take the workspace size as a 32-bit
+  integer too, so they may hit the same limit (*untested*).
+- The truncated spectrum (about 1 unit) calls no dense eigensolver on the
+  n × n matrix.
 
 ## 2. What the solver needs from the eigendecomposition
 
@@ -152,6 +167,8 @@ matrix. The proposal in section 4 builds on both.
 | e. Two-stage tridiagonalization (MAGMA dsyevdx_2stage, ELPA) | 2–3 | 2 | unknown; two-stage beats one-stage at large n | *untested*; not exposed by PyTorch | high |
 | f. Several GPUs (cusolverMg, cuSOLVERMp) | 6/G per GPU | | similar | *untested*; not exposed by PyTorch | high |
 
+- **cuSOLVER's size limit caps options a–c at n ≈ 32,700** (section 7.3),
+  whatever their peak. Option d may share it (*untested*).
 - **Caveat for option b.** It replaces K by UEUᵀ: a 1e-13 relative change in
   float64 and about 1e-6 in float32. In exchange, U(e + γ)Uᵀ dominates that
   kernel exactly, so float32 would no longer need the error shift.
@@ -553,12 +570,17 @@ All three solve a different problem, so the results are no longer exact.
 ## 6. Recommendation
 
 1. **Restore the in-place factorization (3a).** It takes one unit off the
-   peak at no cost in speed and has already been tested.
+   peak at no cost in speed and has already been tested. Under cuSOLVER's
+   size limit it no longer raises the largest float32 n on a 48 GB card.
 2. **The truncated majorizer, prototyped** as
-   `torchkm.experimental.SpectralSVMPath` (section 7.2). Next:
-   - run the matched-accuracy experiment on the L40S (section 7.3);
-   - if it holds up, give `cvksvm` an opt-in, e.g. `spectrum_rank=r`, with
-     today's full eigendecomposition as the default.
+   `torchkm.experimental.SpectralSVMPath` (section 7.2).
+   - On the L40S (section 7.3) it matches the full spectrum at the same
+     certified gap, 2.8× faster and with a fifth of the memory. It is also
+     the only route past cuSOLVER's size limit.
+   - Next: the same comparison on real data (the Q1 data sets).
+   - If it holds up there, give `cvksvm` an opt-in, e.g. `spectrum_rank=r`,
+     with today's full eigendecomposition as the default below the size
+     limit.
 3. **If the full eigendecomposition stays the default, add spectral
    coordinates (3b)** for faster iterations.
 
@@ -708,8 +730,9 @@ Reading it:
   - It selects the same λ, with the same CV error and test accuracy.
 - **Peak memory falls from 6.11 to 1.25 units** (10.3 to 3.1 GiB in NVML).
   At 1.25 units, a 48 GB card holds about n = 95,000 in float32 (about
-  100,000 at the 1.15 units measured at n = 60,000, below), against 43,000
-  with eigh.
+  100,000 at the 1.15 units measured at n = 60,000, below). With eigh the
+  limit is about 32,700, cuSOLVER's size limit (below); memory alone would
+  allow 43,000.
 - **Against the shipped solver:** truncated at gap 1e-4 takes the same time,
   16.7 against 16.8 s. The shipped solver ends up to 18% above the optimum
   on its path (certified afterwards), and uses 5× the memory.
@@ -728,7 +751,7 @@ Reading it:
     error 0.0003).
   - Real data (the Q1 data sets) is the next run.
 
-**n = 60,000** (measured, L40S; truncated only, gap 1e-3):
+**n = 60,000** (measured, L40S, gap 1e-3):
 
 | solver | gap target | time (s) | peak (n × n units) | peak NVML (GiB) | n × n reads | path gap max | fold gap max | fallbacks | selected λ | CV error | test acc |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -744,9 +767,7 @@ Reading it:
   - So the refusal is about the problem size, not the memory. Even with the
     size accepted, the eigh-based solvers would peak at 6.1 units (one unit is
     13.4 GiB), about 82 GiB: more than the card's 48 GB (*projected*).
-  - The size where cuSOLVER starts refusing is *pending*
-    (`benchmarks/probe_eigh_size.py`). It is above 20,000 in float32 and
-    16,100 in float64, the sizes measured in section 1.
+  - cuSOLVER refuses every n from 33,000 up, in both precisions (below).
 - **Every λ and fold certified:** path gaps up to 8.7e-4, fold gaps up to
   8.1e-4.
 - **The number of n × n reads did not grow with n:** 3,399, against 3,603 at
@@ -764,6 +785,25 @@ Reading it:
 - **The selected λ is the smallest on the grid (1e-3).** The CV optimum may
   lie below the grid. This does not affect the time and memory comparison.
 - **Fallbacks:** 83, against 279 at n = 20,000 and the same gap.
+
+**cuSOLVER's size limit** (measured with `benchmarks/probe_eigh_size.py`;
+PyTorch 2.6.0+cu124, CUDA 12.4, L40S):
+
+| n | float32 | float64 |
+|---|---|---|
+| 16,000; 17,000; 20,000; 23,000; 23,500; 32,500 | accepted | accepted |
+| 33,000; 46,000; 46,500 | refused | refused |
+| 60,000 | refused | not tested (two n × n matrices do not fit) |
+
+- "Accepted" means the workspace-size query passed. The probe caps memory so
+  that nothing is factorized.
+- The limit is the same in both precisions, so it counts elements, not
+  bytes.
+- The eigenvector workspace of LAPACK's syevd is 1 + 6n + 2n² elements. It
+  passes 2³¹ − 1 at n = 32,767, inside the bracket. A 32-bit workspace count
+  is therefore the likely cause (*hypothesis*; `--sizes 32766 32767` tests
+  it).
+- Newer CUDA releases may differ (*untested*).
 
 ```bash
 pkill -f matched_accuracy.py
@@ -833,6 +873,10 @@ Round 1 answers, with the corrections they led to, are in
 6. cuSOLVER syevd's workspace is one 4.01-unit allocation (float32,
    n = 20,000). Would syevdx or a two-stage solver need less without losing
    speed?
+7. cuSOLVER's syevd refuses n ≥ 33,000 (CUDA 12.4, section 7.3). Is there a
+   dense GPU eigensolver without this limit and at similar speed (syevj,
+   syevdx, an ILP64 MAGMA, a newer cuSOLVER)? Or is the truncated spectrum
+   the practical route past it?
 
 ## Appendix: the emulation's core (CPU, float64)
 

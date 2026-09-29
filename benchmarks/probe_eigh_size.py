@@ -3,7 +3,8 @@
 
 At n = 60,000 (float32, L40S) torch.linalg.eigh stops in cuSOLVER's
 workspace-size query (cusolverDnXsyevd_bufferSize: INVALID_VALUE), before any
-allocation. This finds where that starts.
+allocation. This finds where that starts. Measured with PyTorch 2.6 and CUDA
+12.4: 32,500 is accepted and 33,000 refused, in float32 and float64 alike.
 
 For each n the process may hold 2.5 n x n matrices. The input and eigh's copy
 of it fit, the workspace (about 4 more) does not. So a size cuSOLVER accepts
