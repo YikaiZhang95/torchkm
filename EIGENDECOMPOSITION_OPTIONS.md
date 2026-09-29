@@ -72,6 +72,9 @@ matrix: 4n² bytes in float32, 8n² in float64.
   - It selects the same λ and reaches the same accuracy.
   - At gap 1e-4 it takes the same time as the shipped, uncertified solver
     (16.7 against 16.8 s).
+  - At n = 60,000 the eigh-based solvers would need about 82 GiB. There,
+    truncated certified every λ and fold at 1e-3 in 82 s, peaking at 1.15
+    units (16.6 GiB), with about as many n × n reads as at n = 20,000.
 - **Review.** Round 1, with the corrections it led to, is in
   `EIGENDECOMPOSITION_REVIEW_REPLY.md`.
 
@@ -699,8 +702,9 @@ Reading it:
   - It needs 2.7–2.9× fewer n × n reads.
   - It selects the same λ, with the same CV error and test accuracy.
 - **Peak memory falls from 6.11 to 1.25 units** (10.3 to 3.1 GiB in NVML).
-  At 1.25 units, a 48 GB card holds about n = 95,000 in float32, against
-  43,000 with eigh.
+  At 1.25 units, a 48 GB card holds about n = 95,000 in float32 (about
+  100,000 at the 1.15 units measured at n = 60,000, below), against 43,000
+  with eigh.
 - **Against the shipped solver:** truncated at gap 1e-4 takes the same time,
   16.7 against 16.8 s. The shipped solver ends up to 18% above the optimum
   on its path (certified afterwards), and uses 5× the memory.
@@ -717,7 +721,34 @@ Reading it:
 - **Limits of this evidence.**
   - This is one simulated data set, nearly separable at the selected λ (CV
     error 0.0003).
-  - Real data (the Q1 data sets) and n = 60,000 are the next runs.
+  - Real data (the Q1 data sets) is the next run.
+
+**n = 60,000** (measured, L40S; truncated only, gap 1e-3):
+
+| solver | gap target | time (s) | peak (n × n units) | peak NVML (GiB) | n × n reads | path gap max | fold gap max | fallbacks | selected λ | CV error | test acc |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| truncated | 1e-3 | 81.7 | 1.15 | 16.6 | 3,399 | 8.7e-4 | 8.1e-4 | 83 | 0.001 | 0.0004 | 0.9995 |
+
+- **Only the truncated spectrum fits.** One unit is 13.4 GiB. The eigh-based
+  solvers peak at 6.1 units, about 82 GiB, more than the card's 48 GB
+  (*projected* from the n = 20,000 run; the command below checks it).
+- **Every λ and fold certified:** path gaps up to 8.7e-4, fold gaps up to
+  8.1e-4.
+- **The number of n × n reads did not grow with n:** 3,399, against 3,603 at
+  n = 20,000.
+  - The time grew 6.1× (13.5 → 81.7 s) for 9× the entries.
+  - Streaming K once takes at least 16.7 ms at the card's 864 GB/s, so the
+    reads take at least 57 of the 82 s (arithmetic, not measured). At
+    n = 20,000 the same bound is 6.7 of 13.5 s.
+- **Memory: 1.15 units** (15.4 GiB allocated).
+  - K and the benchmark's test kernel take 1.1 units. The solver's own share
+    fell from 0.15 units at n = 20,000 to 0.05 here. Both are about seven
+    n × 420 blocks, so the share is O(nr), not O(n²).
+  - On a 48 GB card that puts the float32 limit near n = 100,000
+    (*projected*).
+- **The selected λ is the smallest on the grid (1e-3).** The CV optimum may
+  lie below the grid. This does not affect the time and memory comparison.
+- **Fallbacks:** 83, against 279 at n = 20,000 and the same gap.
 
 ```bash
 pkill -f matched_accuracy.py
@@ -733,6 +764,13 @@ Then n = 60,000, which only the truncated spectrum fits (about 1 unit of
 
 ```bash
 nohup python benchmarks/matched_accuracy.py --n 60000 --solvers truncated --gaps 1e-3 --out $RESULTS/matched_60k.json > $RESULTS/matched_60k.log 2>&1 &
+```
+
+To check that eigh does not fit at n = 60,000 (both rows should read "out
+of memory"):
+
+```bash
+nohup python benchmarks/matched_accuracy.py --n 60000 --solvers shipped full --gaps 1e-3 --out $RESULTS/matched_60k_eigh.json > $RESULTS/matched_60k_eigh.log 2>&1 &
 ```
 
 Each log ends with one table:
