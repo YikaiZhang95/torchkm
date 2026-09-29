@@ -26,8 +26,13 @@ matrix: 4n² bytes in float32, 8n² in float64.
     cheap for every c.
   - Keep the top r eigenpairs exactly and replace the rest of the spectrum by
     one constant τ ≥ e_{r+1}.
-  - The iteration keeps the same fixed point. Every λ is still accepted by the
-    same KKT test on the true K, so the answer is exact, not approximated.
+  - The kernel is not approximated. The iteration keeps the same fixed
+    point, and every λ is accepted by the same test on the true K.
+    - That test is the shipped solver's heuristic, not a certificate. 4.11
+      proposes a duality-gap certificate.
+  - Descent is guaranteed only with exact eigenvectors. With Ritz vectors a
+    step can go uphill (a reviewer's 2×2 example). 4.7 adds a safeguard that
+    costs no extra product with K.
   - The O(n³) eigendecomposition becomes O(n² r) matrix products. At
     n = 20,000 on the L40S, the top 400 eigenpairs take 0.09 s against 10.2 s
     for the full eigh (measured).
@@ -54,11 +59,8 @@ matrix: 4n² bytes in float32, 8n² in float64.
       n × n matrix instead of three.
     - On the Q1 grid that rule changes nothing.
     - Relative suboptimality below ~1e-4 needs a larger r.
-- **Open points for review** (section 8):
-  - the majorization argument;
-  - Ritz vectors, which commute with K only approximately;
-  - how to get a rigorous τ;
-  - the stopping rule.
+- **Review.** Round 1, with the corrections it led to, is in
+  `EIGENDECOMPOSITION_REVIEW_REPLY.md`.
 
 ## 1. Where the memory and time go (measured, L40S 48 GB)
 
@@ -167,19 +169,24 @@ the step the exact solution of M̃Δ = −∇F, where
 
   M̃ = M + diag(0, K(K̃ − K)/(2δ)).
 
-### 4.3 Why the answer stays exact
+### 4.3 What stays exact, and what is proven
 
 1. **Majorization (exact eigenvectors).** K̃ commutes with K and K̃ ⪰ K, so
    K(K̃ − K) ⪰ 0 and M̃ ⪰ M ⪰ ∇²F. Each step minimises a quadratic upper
    bound of F. With over-relaxation,
    F(θ − mul·M̃⁻¹g) ≤ F(θ) − mul(1 − mul/2)·gᵀM̃⁻¹g, so F still decreases
-   monotonically for mul < 2.
+   monotonically for mul < 2. For singular K the argument holds on range(K).
+   **This needs K̃ to commute with K.** With Ritz vectors K(K̃ − K) is not
+   symmetric, and K̃ ⪰ K alone does not give descent (4.7).
 2. **Fixed point.** The update is zero exactly when ∇F = 0, for any invertible
    M̃. So r, τ and the accuracy of V change the route to the solution, not the
    solution.
-3. **Certificate.** A λ, or a fold, is accepted only by the existing test on
-   the unsmoothed hinge, KKT = z/n + 2λα. That test uses residuals
+3. **Same acceptance test.** A λ, or a fold, is accepted only by the existing
+   test on the unsmoothed hinge, KKT = z/n + 2λα. That test uses residuals
    y(b + Kα) computed with the true K and never touches the eigendecomposition.
+   It is a finite-tolerance heuristic, not a certificate of optimality: on the
+   Q1 grid it stops 1.9–29% above the optimum at the smallest λ (4.6). 4.11
+   proposes a certificate.
 
 ### 4.4 What truncation costs in speed
 
@@ -190,13 +197,20 @@ by I − mul·P̃(DK + cI). Its eigenvalues μ solve
 
 which is a symmetric pencil when K̃ commutes with K.
 
-- **Worst case is unchanged.** Full spectrum: μ ∈ [c/(e₁ + c), 1].
-  Truncated: μ ∈ [c/(e₁ + c), 1] too, since K̃'s largest eigenvalue is still
-  e₁. So the worst-case contraction per iteration is the same.
-- **More directions are slow.** A direction with eigenvalue eᵢ < τ moves from
-  μ = (dᵢeᵢ + c)/(eᵢ + c) to (dᵢeᵢ + c)/(τ + c), where dᵢ ∈ [0, 1] is the
-  direction's weight on margin rows. When c = 4nδλ ≪ τ, many directions are
-  slow instead of a few.
+- **Worst case is unchanged** [proven, for commuting K̃ ⪰ K and any
+  0 ⪯ D ⪯ I, intercept left out].
+  - Full spectrum: μ ∈ [c/(e₁ + c), 1].
+  - Truncated: μ ∈ [c/(e₁ + c), 1] too, since K̃'s largest eigenvalue is
+    still e₁.
+  - So the worst-case contraction per iteration is the same.
+- **More directions are slow** [heuristic: this treats D as diagonal in K's
+  eigenbasis, which it is not].
+  - A direction with eigenvalue eᵢ < τ moves from μ = (dᵢeᵢ + c)/(eᵢ + c) to
+    (dᵢeᵢ + c)/(τ + c), where dᵢ ∈ [0, 1] is the direction's weight on
+    margin rows.
+  - When c = 4nδλ ≪ τ, many directions are slow instead of a few.
+  - r changes speed, and where a finite tolerance or iteration cap stops. It
+    does not change the limit point.
 - **Choosing r.** The relevant ratio is c/τ = 4nδλ/e_{r+1}. Kernel eigenvalues
   grow like n·μₖ, where μₖ are the eigenvalues of the kernel's integral
   operator.
@@ -359,17 +373,42 @@ Reading the hard grid:
     - The tail is flat beyond about 400, so a larger r lowers τ very little.
     - At the last Q1 λ, c = 80δ. So c ≥ τ in the first two smoothing rounds,
       as in the n = 3,000 emulation.
-- **τ.** Run 30 Lanczos steps on (I − VVᵀ)K(I − VVᵀ) from a random start and
-  take τ = θ/0.95 + ρ.
-  - Kuczyński–Woźniakowski: θ ≥ 0.95 λ_max with probability at least
-    1 − 1.648 √n e^{−√0.05 (2k − 1)}. For k = 30 and n = 10⁵ that is about
-    1 − 1e-3.
-  - Cost: 30 K-products.
+- **Notation.** τ₀ ≥ λ_max(WᵀKW) is the unshifted bound on the complement.
+  K̃ uses Θ + ρ on V and τ₀ + ρ on the complement, so ρ is added once to
+  each block. In the formulas of 4.1 and 4.2, τ then stands for τ₀ + ρ, and
+  Θ for Θ + ρ.
+- **τ₀.** Run k Lanczos steps on (I − VVᵀ)K(I − VVᵀ) from a random start and
+  take τ₀ = θ/(1 − ε).
+  - Kuczyński–Woźniakowski: θ ≥ (1 − ε)λ_max with probability at least
+    1 − 1.648 √n e^{−√ε (2k − 1)}. With ε = 0.05, k = 30 and n = 10⁵, that is
+    about 1 − 1e-3; k = 60 gives about 1 − 1e-9.
+  - Cost: k K-products.
+  - A deterministic bound: λ_max(WᵀKW) ≤ ‖QKQ‖_F, with
+    ‖QKQ‖_F² = ‖K‖_F² − ‖Θ‖_F² − 2‖R‖_F², computed in one pass over K.
+    - It equals the root of the sum of squared tail eigenvalues, so on a flat
+      tail it is many times e_{r+1}.
+    - It is useful only as a cap.
+  - The emulation's 1.05 × (50 power iterations) has no such certificate. The
+    emulation checked K̃ ⪰ K directly instead (4.6).
 - **Ritz vectors do not commute with K.**
   - The shift keeps K̃ ⪰ K exactly: in the [V, W] basis,
-    K̃ − K = [[ρI, −B], [−Bᵀ, (τ + ρ)I − WᵀKW]] with ‖B‖ = ‖KV − VΘ‖ = ρ.
+    K̃ − K = [[ρI, −B], [−Bᵀ, (τ₀ + ρ)I − WᵀKW]] with ‖B‖ = ‖KV − VΘ‖ = ρ.
+  - The shift can be split: any a·b ≥ ρ² works, with +a on V and +b on the
+    tail. A small b keeps the tail close to τ₀.
   - But K(K̃ − K) is no longer symmetric, so argument 1 of 4.3 does not apply.
-  - Arguments 2 and 3 (fixed point, KKT certificate) still hold.
+  - K̃ ⪰ K alone does not give descent. A reviewer's example:
+    - K = [[99, √98], [√98, 2]], V = e₁, ρ = √98, τ₀ = 2, c = 0.1;
+    - γ = [1, −2]ᵀ gives γᵀK(K̃ + cI)⁻¹γ = −0.257 < 0;
+    - with the intercept, the full 4.2 step raises F from 674.02 to 976.63.
+  - The mechanism: in the [V, W] basis, K = diag(Θ, C) + [[0, B], [Bᵀ, 0]].
+    The coupling B can outweigh the positive terms in complement directions
+    of small curvature.
+  - On realistic kernels it did not happen [observation, n = 3,000]:
+    - sym(K(K̃ + cI)⁻¹) was positive definite for every tested c, at p = 10
+      and 100, and for Ritz vectors as crude as q = 0, r = 100
+      (ρ ≈ 0.9 τ₀);
+    - none of 23,659 emulated path steps was an ascent step.
+  - Arguments 2 and 3 (fixed point, same acceptance test) still hold.
 - **Alternative with K̃ ⪰ K by construction:** a randomized Nyström factor
   (*untested* here).
   - Â = (KΩ)(ΩᵀKΩ)⁺(KΩ)ᵀ = VΛ̂Vᵀ satisfies Â ⪯ K.
@@ -377,12 +416,32 @@ Reading the hard grid:
     K̃ = Â + τ₀I = V(Λ̂ + τ₀I)Vᵀ + τ₀(I − VVᵀ) dominates K without any
     residual shift.
   - It has the same shape and cost as above.
+  - It does not commute with K either, so it also needs the safeguard.
   - "Nyström" here is only the curvature bound. The problem stays the exact
     one.
-- **Safeguard.** F is available every iteration for O(n) extra work: the loss
-  from the residuals, and αᵀKα from the Kα already computed. If a step raises
-  F, reject it, reset mul (told = 1) and inflate τ. Accepted steps then never
-  raise F, whatever V and τ are.
+- **Safeguard, with exact gradients at no extra product.**
+  - Replace the per-iteration product Kα by Kz, and keep Kα up to date: with
+    KV stored from the Rayleigh–Ritz setup,
+    KP̃γ = (τ + c)⁻¹Kγ + (KV)D_c(Vᵀγ) costs O(nr).
+  - One product per iteration then gives:
+    - the exact gradient g = (g_b, Kγ), with Kγ = Kz + 2nλKα;
+    - each candidate step's directional derivative;
+    - F at any step length, in O(n).
+  - The fallback step uses K̃ = σI with σ = max(θ₁, τ₀) + ρ ≥ λ_max(K). It
+    commutes with K, is a valid majorizer, and its K-image is O(n).
+  - **Rule.** Take the fast step (backtracking t ∈ {1, ½, ¼}) if both hold:
+    - gᵀΔ_f ≤ η·gᵀΔ_s;
+    - Armijo holds on the step actually taken.
+
+    Otherwise take the fallback and reset mul.
+  - **Guarantee** [proof sketch]. Every step then lowers F by at least
+    κ·gᵀM_s⁻¹g, so ‖g‖ → 0 within a round.
+  - With exact eigenvectors M̃ ⪯ M_s, so the fast step always passes. The
+    safeguard costs nothing there.
+  - Refresh Kα with a real product at the end of each round, against
+    rounding drift.
+  - Details and the proof sketch: `EIGENDECOMPOSITION_REVIEW_REPLY.md`,
+    item 2.
 - **Matrix-free K** (optional, for n beyond one stored unit): form products Kx
   in tiles on the fly, KeOps-style.
   - Cost per product: 2n²p flops plus n² exps, compute-bound, instead of
@@ -427,8 +486,39 @@ about 13 ms per iteration and does not change. That is why the range is
 
 **What is different here.**
 - The preconditioner is a majorizer: steps are monotone and need no step size.
+  This holds for exact eigenvectors (4.3); with Ritz vectors it needs the
+  safeguard of 4.7.
 - One factorization serves every c = 4nδλ, i.e. all λ, all δ and all folds,
   as the full eigendecomposition does now.
+
+### 4.11 A certificate: the duality gap
+
+The shipped acceptance test (4.3, point 3) does not bound suboptimality. The
+unsmoothed problem has a dual that does, and it works for any positive
+semidefinite K, singular included.
+
+- **Primal:** P(α, b) = mean(max(0, 1 − yᵢ(Kᵢα + b))) + λαᵀKα.
+- **Dual:** D(β) = 1ᵀβ − (β∘y)ᵀK(β∘y)/(4λ), with 0 ≤ β ≤ 1/n and βᵀy = 0.
+- **Weak duality:** D(β) ≤ P* ≤ P(α, b). It needs no subgradient choice at the
+  elbows, and βᵀy = 0 covers the intercept.
+- **Dual point from the iterate.**
+  - Margin rows (|rᵢ − 1| ≤ t) get βᵢ = 2λyᵢαᵢ, violators 1/n, the rest 0.
+  - Clip to [0, 1/n], and restore βᵀy = 0 with a monotone shift found by
+    bisection.
+  - Keep the best over t ∈ {1e-2, 1e-3, 1e-4}. Each costs one product with K.
+- **Tested against libsvm optima** [observation, n = 3,000]: the Q1 grid at
+  p = 10 and 100, and the hard grid at p = 10.
+  - D stayed at or below the optimum, and the gap at or above the true excess,
+    at every λ.
+  - Where the excess is above 1e-5, the gap is 1–4× the excess on the Q1
+    grid, and 3–30× on the hard grid.
+  - The gap is loose at the two or three largest λ (up to 2.9e-3 against a
+    tiny excess). A few projected-gradient steps on D should tighten it
+    (*untested*).
+- **Rule.** Accept a λ, and each fold, when (P − D)/P ≤ tol_gap.
+- **Inner loop.** It can stop on the smoothed stationarity, (g_b, Kγ), which
+  the safeguard of 4.7 computes anyway. That test does not depend on the
+  preconditioner.
 
 ## 5. Approximations that change the problem
 
@@ -445,8 +535,12 @@ All three solve a different problem, so the results are no longer exact.
    peak at no cost in speed and has already been tested.
 2. **Prototype the truncated majorizer (section 4) in `cvksvm`** behind an
    opt-in, e.g. `spectrum_rank=r` (default: today's full eigendecomposition).
-   Use eps/10 in the smoothing rounds where c < τ, and add the objective
-   safeguard (4.7).
+   It should include:
+   - the safeguarded step with exact gradients (4.7);
+   - stopping on the duality gap (4.11);
+   - Lanczos τ₀ and q = 4 subspace passes;
+   - eps/10 in the smoothing rounds where c < τ, while the step-size test
+     remains in use.
    - Validate it on the L40S at n = 20,000 against the full method.
    - Then run n = 50,000–100,000, where the full method cannot run.
 3. **If the full eigendecomposition stays the default, add spectral
@@ -493,12 +587,28 @@ nohup python benchmarks/probe_eigh.py --n 20000 --p 100 --dtype float32 > $RESUL
 head -3 $RESULTS/probe_eigh.log
 ```
 
-**Next:** build a prototype of section 4 in `cvksvm`.
-- Measure it against the full method at n = 20,000: time, peak memory,
-  passes, objective, selected λ.
-- Then run it at n = 50,000–100,000, where the full method does not fit.
+**Next: a matched-accuracy comparison** on a prototype of section 4 in
+`cvksvm`.
+- **Setup.**
+  - Data: n = 20,000, p = 100, float32; the Q1 grid (50 λ, 10 folds) and one
+    hard grid.
+  - Solvers: the full-eigh solver, and the truncated one (r = 400, q = 4,
+    with the safeguard).
+- **Matching.** Both solvers stop at the same certified gap, 1e-3 and then
+  1e-4, for every path λ and every fold.
+- **Report:**
+  - wall time by phase;
+  - peak memory, allocator and NVML;
+  - products with K, and fallbacks taken;
+  - certified gaps;
+  - selected λ, CV error, test accuracy.
+- **Then** n = 60,000, truncated only, where the full method does not fit.
+- **Smallest useful version:** path only, Q1 grid, gap 1e-3.
 
 ## 8. Questions for the reviewer
+
+Round 1 answers, with the corrections they led to, are in
+`EIGENDECOMPOSITION_REVIEW_REPLY.md`.
 
 1. Is the majorization argument in 4.3 correct, including over-relaxation
    with mul ∈ [1, 2)? The claim: M̃ = M + diag(0, K(K̃ − K)/(2δ)) ⪰ M when K̃
@@ -512,9 +622,9 @@ head -3 $RESULTS/probe_eigh.log
    deterministic one?
 4. What stopping test should the inner loop use? The step-size test fires
    earlier under a looser majorizer. eps/10 in the rounds where c < τ works on
-   these grids. The scaling eps·(c/(τ + c))² fails when c → 0 (4.5). Should the test use a
-   preconditioner-free quantity instead, such as the smoothed KKT residual
-   ‖γ‖/n?
+   these grids. The scaling eps·(c/(τ + c))² fails when c → 0 (4.5). Should
+   the test use a preconditioner-free quantity instead, such as the smoothed
+   KKT residual ‖γ‖/n?
 5. Is anything known about the iteration count of MM with a truncated spectral
    majorizer as c → 0 (small λ, late smoothing rounds)?
 6. cuSOLVER syevd's workspace is one 4.01-unit allocation (float32,
@@ -547,3 +657,8 @@ def hval(z, alp, s_d, v_d, delta, lam, n, eps):   # 1'z + 2 n eps b - v'(z + 2 n
 
 With the full spectrum (r = n), these helpers reproduce the shipped solver:
 identical iteration counts, and objectives equal to within 3e-6.
+
+The Ritz rows used τ = 1.05 × (50 power iterations) + ρ. That carries no
+probabilistic certificate. Instead, the emulation computed λ_max(WᵀKW)
+exactly and checked min eig(K̃ − K) > 0 in every run. A method should use
+Lanczos with 1/(1 − ε) (4.7).
