@@ -2,19 +2,23 @@
 """Memory-envelope helpers, peak-memory reporting, Nyström seeding, and the
 solver changes that reduce exact-mode memory (no ``eU`` copy, in-place kernel)."""
 
+import importlib
+
 import numpy as np
 import pytest
 import torch
 from sklearn.datasets import make_classification, make_regression
 
 import torchkm
-from torchkm import functions
+from torchkm import functions, memory
 from torchkm.estimators import TorchKMKQR, TorchKMSVC
 from torchkm.memory import (
     EXACT_MODE_COPIES,
+    EXACT_MODE_MAX_N_CUDA,
     exact_mode_memory_estimate,
     exact_mode_oom_message,
     format_bytes,
+    kernel_eigh,
     max_exact_n,
 )
 
@@ -43,11 +47,19 @@ def test_estimate_follows_the_quadratic_model():
 
 def test_max_exact_n_inverts_the_estimate_with_headroom():
     budget = 48e9
-    n = max_exact_n(budget)
+    n = max_exact_n(budget, size_limit=None)
     assert exact_mode_memory_estimate(n) <= budget
     assert exact_mode_memory_estimate(int(n * 1.1)) > 0.9 * budget
     assert max_exact_n(0) == 0
-    assert max_exact_n(budget, usable_fraction=1.0) > n
+    assert max_exact_n(budget, usable_fraction=1.0, size_limit=None) > n
+
+
+def test_max_exact_n_stops_at_the_eigensolver_size_limit():
+    # memory alone would allow n = 47,434 in 80 GB; cuSOLVER refuses more
+    # than EXACT_MODE_MAX_N_CUDA
+    assert max_exact_n(80e9, size_limit=None) > EXACT_MODE_MAX_N_CUDA
+    assert max_exact_n(80e9) == EXACT_MODE_MAX_N_CUDA == 32_768
+    assert max_exact_n(8e9) == max_exact_n(8e9, size_limit=None) == 15_000
 
 
 def test_estimate_rejects_negative_n():
@@ -67,6 +79,76 @@ def test_oom_message_names_the_size_and_the_remedy():
     assert "GB" in msg
     # No CUDA device in a CPU test: the device-total clause is omitted.
     assert "device reports" not in msg
+
+
+_REFUSAL = (
+    "cusolver error: CUSOLVER_STATUS_INVALID_VALUE, when calling "
+    "`cusolverDnXsyevd_bufferSize( handle, params, jobz, uplo, n, ...)`"
+)
+
+
+def _refusing_eigh(monkeypatch, message=_REFUSAL, limit=10):
+    """eigh fails above ``limit`` as cuSOLVER does above 32,768."""
+    real = torch.linalg.eigh
+
+    def eigh(A, *args, **kwargs):
+        if A.shape[-1] > limit:
+            raise torch.linalg.LinAlgError(message)
+        return real(A, *args, **kwargs)
+
+    monkeypatch.setattr(torch.linalg, "eigh", eigh)
+    monkeypatch.setattr(memory, "EXACT_MODE_MAX_N_CUDA", limit)
+
+
+def test_kernel_eigh_names_the_size_limit(monkeypatch):
+    _refusing_eigh(monkeypatch)
+    with pytest.raises(torch.linalg.LinAlgError, match="n_samples=20") as info:
+        kernel_eigh(torch.eye(20, dtype=torch.float64))
+    assert "low_rank=True" in str(info.value)
+    assert "cusolver" in str(info.value.__cause__)
+    e, _ = kernel_eigh(torch.eye(5, dtype=torch.float64))  # within the limit
+    torch.testing.assert_close(e, torch.ones(5, dtype=torch.float64))
+
+
+def test_kernel_eigh_passes_other_errors_through(monkeypatch):
+    _refusing_eigh(monkeypatch, message="linalg.eigh: failed to converge")
+    with pytest.raises(torch.linalg.LinAlgError, match="failed to converge"):
+        kernel_eigh(torch.eye(20, dtype=torch.float64))
+
+
+@pytest.mark.parametrize(
+    "name, extra",
+    [
+        ("cvksvm", {}),
+        ("cvkdwd", {}),
+        ("cvklogit", {}),
+        ("cvksqsvm", {}),
+        ("cvkqr", {"tau": 0.5}),
+        ("cvkhuber", {"delta": 1.0}),
+    ],
+)
+def test_exact_solvers_name_the_size_limit(monkeypatch, name, extra):
+    _refusing_eigh(monkeypatch)
+    X, y = _binary(n=40, p=4)
+    solver = getattr(importlib.import_module(f"torchkm.{name}"), name)(
+        Kmat=functions.rbf_kernel(torch.as_tensor(X, dtype=torch.double), 0.5),
+        y=torch.as_tensor(y, dtype=torch.double),
+        nlam=2,
+        ulam=torch.tensor([0.1, 0.01], dtype=torch.double),
+        foldid=torch.arange(40) % 2 + 1,
+        nfolds=2,
+        device="cpu",
+        **extra,
+    )
+    with pytest.raises(torch.linalg.LinAlgError, match="n_samples=40"):
+        solver.fit()
+
+
+def test_estimator_names_the_size_limit(monkeypatch):
+    _refusing_eigh(monkeypatch)
+    X, y = _binary()
+    with pytest.raises(torch.linalg.LinAlgError, match="n_samples=90"):
+        TorchKMSVC(kernel="rbf", nC=2, cv=2, device="cpu", max_iter=20).fit(X, y)
 
 
 def test_memory_helpers_are_exported():

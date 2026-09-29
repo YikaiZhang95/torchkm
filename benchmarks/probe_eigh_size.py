@@ -4,8 +4,8 @@
 At n = 60,000 (float32, L40S) torch.linalg.eigh stops in cuSOLVER's
 workspace-size query (cusolverDnXsyevd_bufferSize: INVALID_VALUE), before any
 allocation. This finds where that starts. Measured with PyTorch 2.6 and CUDA
-12.4: 32,767 is accepted and 33,000 refused (float32; float64 agrees at
-32,500 and 33,000).
+12.4 on an L40S: in float32, 32,768 is accepted and 32,769 refused; float64
+accepts 32,768 and refuses 33,000.
 
 For each n the process may hold 2.5 n x n matrices. The input and eigh's copy
 of it fit, the workspace (about 4 more) does not. So a size cuSOLVER accepts
@@ -33,7 +33,7 @@ def main() -> None:
         type=int,
         nargs="+",
         default=[16000, 17000, 20000, 23000, 23500, 32500, 32767, 32768]
-        + [33000, 46000, 46500, 60000],
+        + [32769, 33000, 46000, 46500, 60000],
     )
     ap.add_argument("--dtype", choices=["float32", "float64"], default="float32")
     args = ap.parse_args()

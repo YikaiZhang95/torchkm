@@ -20,6 +20,7 @@ import time
 import torch
 
 from ..functions import brent_minimize_batch
+from ..memory import kernel_eigh
 
 
 def smoothed_hinge(r, delta):
@@ -188,7 +189,7 @@ class _FullSpectrum:
     def __init__(self, K, count):
         from ..cvksvm import _factorization_error
 
-        e, U = torch.linalg.eigh(K)
+        e, U = kernel_eigh(K)
         e.clamp_min_(0.0)
         err = _factorization_error(K, U, e)
         self.U, self.e, self.et, self.count = U, e, e + 2.0 * err, count

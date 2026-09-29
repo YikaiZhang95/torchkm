@@ -3,6 +3,7 @@ import torch
 
 from .functions import *
 from .functions import brent_minimize
+from .memory import kernel_eigh
 
 # First smoothing bandwidth of the check loss. The cross-validation reuses the
 # preconditioners the path built for each bandwidth, so both start here.
@@ -242,7 +243,7 @@ class cvkqr:
         one = torch.ones((), dtype=torch.double, device=self.device)
         step_buf = torch.empty(nobs + 1, dtype=torch.double, device=self.device)
 
-        eigens, Umat = torch.linalg.eigh(Kmat)
+        eigens, Umat = kernel_eigh(Kmat)
         eigens = eigens.double().to(self.device)
         Umat = Umat.double().to(self.device)
         Kmat = Kmat.double().to(self.device)

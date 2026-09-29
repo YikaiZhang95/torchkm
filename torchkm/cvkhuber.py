@@ -3,6 +3,7 @@ import torch
 
 from .functions import *
 from .functions import brent_minimize
+from .memory import kernel_eigh
 
 
 class cvkhuber:
@@ -76,7 +77,7 @@ class cvkhuber:
 
         # Kinv = torch.linalg.inv(Kmat)
 
-        eigens, Umat = torch.linalg.eigh(Kmat)
+        eigens, Umat = kernel_eigh(Kmat)
         eigens = eigens.double().to(self.device)
         Umat = Umat.double().to(self.device)
         Kmat = Kmat.double().to(self.device)

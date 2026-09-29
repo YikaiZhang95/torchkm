@@ -4,8 +4,9 @@ TorchKM's exact mode eigendecomposes the full \(n \times n\) kernel matrix
 once and reuses it across every fold and every regularization value. That is
 where the speed comes from, and it is also the binding constraint: peak device
 memory grows with \(n^2\), so a given GPU supports exact mode only up to some
-\(n\). This page states that envelope, shows how to read it off a fitted
-model, and says what to do beyond it.
+\(n\), and on any GPU the eigendecomposition itself stops at
+\(n = 32{,}768\). This page states that envelope, shows how to read it off a
+fitted model, and says what to do beyond it.
 
 ## Memory model
 
@@ -22,7 +23,8 @@ values). The prediction TorchKM uses is
 with \(c\) the number of resident \(n \times n\) copies,
 `torchkm.memory.EXACT_MODE_COPIES`. `TorchKMSVC(dtype="float32")` stores
 every \(n \times n\) matrix in 4 bytes per entry instead of 8, which halves
-the peak and raises the largest feasible \(n\) by about \(\sqrt{2}\); pass
+the peak and raises the largest feasible \(n\) by about \(\sqrt{2}\), up to
+the size limit below; pass
 `dtype=torch.float32` to `exact_mode_memory_estimate` and `max_exact_n` for
 its envelope. The other exact solvers run in float64. The constant is calibrated, not derived:
 `benchmarks/bench_memory_envelope.py` fits exact mode at increasing \(n\)
@@ -40,15 +42,17 @@ max_exact_n(48e9)                           # largest n for a 48 GB card
 ```
 
 Predicted ceilings for common cards, from `max_exact_n` with the default
-constant and 10% headroom for the CUDA context:
+constant and 10% headroom for the CUDA context. The first column counts memory
+only (`size_limit=None`); the second adds the eigensolver's size limit (below),
+as `max_exact_n` does by default:
 
-| Device memory | Largest \(n\) for exact mode (predicted) |
-|---|---|
-| 8 GB | ≈ 15,000 |
-| 16 GB | ≈ 21,200 |
-| 24 GB | ≈ 26,000 |
-| 48 GB | ≈ 36,700 |
-| 80 GB | ≈ 47,400 |
+| Device memory | Largest \(n\), memory only (predicted) | Largest \(n\) for exact mode |
+|---|---|---|
+| 8 GB | ≈ 15,000 | ≈ 15,000 |
+| 16 GB | ≈ 21,200 | ≈ 21,200 |
+| 24 GB | ≈ 26,000 | ≈ 26,000 |
+| 48 GB | ≈ 36,700 | 32,768 |
+| 80 GB | ≈ 47,400 | 32,768 |
 
 A CPU sweep of the same code path (LAPACK eigensolver) measured 4.2 resident
 copies, which is where the default constant of 4 comes from; the CUDA
@@ -57,6 +61,26 @@ eigensolver's workspace differs, so the GPU sweep is the number to quote.
 Every exact-mode estimator (`TorchKMSVC`, `TorchKMDWD`, `TorchKMLogit`,
 `TorchKMKQR`) shares the same decomposition, so the envelope is the same for
 all of them.
+
+## Size limit of the GPU eigensolver
+
+Memory is not the only limit. On CUDA, exact mode eigendecomposes the kernel
+matrix with cuSOLVER (through `torch.linalg.eigh`), and cuSOLVER refuses large
+sizes outright. With PyTorch 2.6 and CUDA 12.4 on an NVIDIA L40S, it accepts
+\(n = 32{,}768\) and refuses \(n = 32{,}769\) in float32; float64 accepts
+32,768 and refuses 33,000. The refusal comes from cuSOLVER's workspace-size
+query, before anything is allocated, so it applies on every card.
+
+Exact mode on a GPU therefore stops at \(n = 32{,}768\)
+(`torchkm.memory.EXACT_MODE_MAX_N_CUDA`), however much memory the card has:
+on 48 GB and 80 GB cards this limit, not memory, sets the ceiling, and
+float32's \(\sqrt{2}\) helps only up to it. `max_exact_n` caps its answer at
+this size; pass `size_limit=None` to count memory alone. Above it, the exact solvers raise a
+`torch.linalg.LinAlgError` that names the limit and the alternatives, instead
+of cuSOLVER's own message.
+
+Other PyTorch and CUDA builds may differ. `benchmarks/probe_eigh_size.py`
+checks a build in seconds, without factorizing anything.
 
 ## Reading the envelope off a fitted model
 

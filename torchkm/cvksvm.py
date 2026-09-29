@@ -7,6 +7,7 @@ import torch
 from .exceptions import ConvergenceWarning
 from .functions import *
 from .functions import brent_minimize, brent_minimize_batch
+from .memory import kernel_eigh
 
 
 def _factorization_error(Kmat, Umat, eigens, iters=20):
@@ -319,7 +320,7 @@ class cvksvm:
         lambda_timing = dict(path=[0.0] * nlam, cross_validation=[0.0] * nlam)
         fold_passes = torch.zeros((nfolds, nlam), dtype=torch.int64, device=self.device)
         t = self._now()
-        eigens, Umat = torch.linalg.eigh(Kmat)
+        eigens, Umat = kernel_eigh(Kmat)
         timing["eigendecomposition"] = self._now() - t
         # K is positive semi-definite, so a negative eigenvalue is rounding error.
         eigens.clamp_min_(0.0)

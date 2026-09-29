@@ -34,6 +34,14 @@ All notable changes to TorchKM are documented in this file.
   `max_iter=100000` takes 7 s instead of 103 s.
 
 ### Added
+- Exact mode's size limit on the GPU. The exact solvers eigendecompose the
+  kernel with cuSOLVER on CUDA, and cuSOLVER refuses n above 32,768 whatever
+  the memory: in float32, 32,768 is accepted and 32,769 refused; float64
+  accepts 32,768 and refuses 33,000 (PyTorch 2.6, CUDA 12.4, measured on an
+  L40S). `torchkm.memory.EXACT_MODE_MAX_N_CUDA` records the limit. Above it
+  the exact solvers raise a `torch.linalg.LinAlgError` that names the limit and
+  the alternatives, instead of cuSOLVER's workspace-query error.
+  `benchmarks/probe_eigh_size.py` finds the limit of another build in seconds.
 - Experimental: `torchkm.experimental.SpectralSVMPath`, an exact-kernel SVM
   path with K-fold CV that stops every lambda and every fold at a certified
   duality gap (`hinge_duality_gap`), and that can replace the full
@@ -46,9 +54,7 @@ All notable changes to TorchKM are documented in this file.
   - Steps are checked and fall back to a scalar majorizer when needed.
   - Iterations use FISTA momentum with restart.
   - `benchmarks/matched_accuracy.py` compares the two spectra at equal
-    certified gaps on the GPU. `benchmarks/probe_eigh_size.py` finds the
-    sizes cuSOLVER's eigh refuses: from n = 33,000 on, in float32 and float64
-    (CUDA 12.4; 32,767 is accepted).
+    certified gaps on the GPU.
   - Not part of the stable API.
 - `dtype` on the exact SVM solver (`cvksvm(dtype=torch.float32)`,
   `TorchKMSVC(dtype="float32")`): the kernel, its eigendecomposition and the
@@ -117,6 +123,10 @@ All notable changes to TorchKM are documented in this file.
   archived JSON results).
 
 ### Changed
+- `max_exact_n` stops at `EXACT_MODE_MAX_N_CUDA` by default; `size_limit=None`
+  counts memory only. The 'Operating envelope' page gives both: on 48 GB and
+  80 GB cards exact mode now stops at n = 32,768, not at the 36,700 and 47,400
+  their memory would allow.
 - Fewer waits for the GPU. The solvers' intercept search (Brent's method, one
   copy per solver) kept its state in device tensors, so each of its steps
   launched several tiny kernels and made the CPU wait for the GPU several
