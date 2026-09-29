@@ -3,17 +3,19 @@
 **Question.** Can the eigendecomposition of the n x n kernel use less GPU
 memory without getting slower?
 
-**How to read this.** This is a proposal for review. Section 1 is measured on
-the L40S (48 GB). Section 4.6 comes from a CPU emulation at n = 3,000. Anything
-marked *projected* or *untested* has not been run. A "unit" means one n x n
+**How to read this.** This is a proposal for review. Sections 1 and 7 are
+measured on the L40S (48 GB). Section 4.6 comes from a CPU emulation at
+n = 3,000. Anything marked *projected* or *untested* has not been run. A "unit" means one n x n
 matrix: 4n² bytes in float32, 8n² in float64.
 
 ## Summary
 
 - **The eigendecomposition sets the memory ceiling.** A fit peaks at 6 units:
-  the kernel K (1), the eigenvectors U (1), and about 4 units of cuSOLVER
-  workspace. Once the factorization is done, only K and U stay resident
-  (2 units).
+  - the kernel K (1);
+  - the eigenvectors U (1);
+  - one 4.01-unit cuSOLVER workspace (measured, section 7).
+
+  Once the factorization is done, only K and U stay resident (2 units).
 - **Keeping a full eigendecomposition, the cheapest cut is 6 → 5 units.**
   Factorize in place and rebuild K afterwards. This was measured at the same
   speed and has since been reverted. MAGMA or host LAPACK get the peak down to
@@ -26,8 +28,11 @@ matrix: 4n² bytes in float32, 8n² in float64.
     one constant τ ≥ e_{r+1}.
   - The iteration keeps the same fixed point. Every λ is still accepted by the
     same KKT test on the true K, so the answer is exact, not approximated.
-  - The O(n³) eigendecomposition becomes O(n² r) matrix products.
-  - The eigensolver workspace disappears: the peak is about 1 unit plus n·r.
+  - The O(n³) eigendecomposition becomes O(n² r) matrix products. At
+    n = 20,000 on the L40S, the top 400 eigenpairs take 0.09 s against 10.2 s
+    for the full eigh (measured).
+  - The eigensolver workspace disappears. The peak is K plus 0.16 units
+    (measured), against 6.01.
   - Each iteration reads one n × n matrix (K) instead of three (K once, U
     twice).
 - **Evidence** (CPU emulation, n = 3,000, 50 λ × 10 folds, p = 10 and
@@ -60,12 +65,17 @@ matrix: 4n² bytes in float32, 8n² in float64.
 | run | n | dtype | eigh time | peak during eigh (units) | resident after |
 |---|---:|---|---:|---:|---:|
 | whole fit, cuSOLVER (torch.linalg.eigh) | 20,000 | float32 | 21.4 s of 66.0 s (32%) | 6.01 (8.98 GiB) | 2.01 (K, U) |
+| eigh alone, cuSOLVER (probe, section 7) | 20,000 | float32 | 10.2 s | 6.01: K 1 + working copy 1.00 + workspace 4.01 | 2 |
 | eigh alone, cuSOLVER | 16,100 | float64 | 21.5 s | 6.01 | 2 |
 | eigh alone, MAGMA (one-stage) | 16,100 | float64 | 85.4 s | 2.00 | 2 |
 | eigh alone, host LAPACK (IDAS CPU) | 16,100 | float64 | 253.6 s | 2.00 on the GPU | 2 |
 
 - The table uses the PyTorch allocator peak. NVML reads 0.4–0.7 units more
   (float64 Q1 runs on a7a, a8a and w7a); that difference is allocator slack.
+- The same float32 eigh at n = 20,000 took 10.2 s in the probe and 21.4 s
+  inside the profiled fit. The matrix and data were the same, and the
+  difference is not explained; other work on the GPU during the profile is
+  one possibility.
 - The rest of the float32 fit at n = 20,000:
   - path: 11.7 s over 410 iterations;
   - CV: 32.5 s over 2,525 fold-iterations;
@@ -114,7 +124,7 @@ matrix. The proposal in section 4 builds on both.
 |---|---:|---:|---|---|---|
 | a. In place: hand eigh K's own storage, rebuild K afterwards (one GEMM, 0.04 s at n = 20k) | 5 | 2 | same | measured, fits bitwise identical (commit c4c0cac; reverted in b9ca1a3) | small: restore |
 | b. Spectral coordinates: drop K after eigh and keep β = Uᵀα. One pass U[β, e∘β] gives α and Kα; a second gives Uᵀγ | 5–6 | 1 | 2 unit reads per iteration instead of 3, about 1.5× faster path and CV (*projected*) | *untested* | moderate |
-| c. Call cuSOLVER directly: in place with an explicit workspace, or syevdx / syevj | 1 + workspace | 1–2 | same (syevj slower) | *untested*; probe A in section 7 measures the workspace | moderate |
+| c. Call cuSOLVER directly: in place with an explicit workspace, or syevdx / syevj | 5 with syevd | 1–2 | same (syevj slower) | syevd's workspace is one 4.01-unit allocation (probe A), so an in-place syevd call equals (a); syevdx / syevj *untested* | moderate |
 | d. MAGMA one-stage or host LAPACK | 2 | 2 | 4× / 12× slower | measured | in git history |
 | e. Two-stage tridiagonalization (MAGMA dsyevdx_2stage, ELPA) | 2–3 | 2 | unknown; two-stage beats one-stage at large n | *untested*; not exposed by PyTorch | high |
 | f. Several GPUs (cusolverMg, cuSOLVERMp) | 6/G per GPU | | similar | *untested*; not exposed by PyTorch | high |
@@ -123,8 +133,9 @@ matrix. The proposal in section 4 builds on both.
   float64 and about 1e-6 in float32. In exchange, U(e + γ)Uᵀ dominates that
   kernel exactly, so float32 would no longer need the error shift.
 - **Conclusion.** With a full eigendecomposition, the peak cannot drop below
-  the eigensolver's output plus its workspace, which is about 5 units with
-  cuSOLVER. Going lower (MAGMA, host) costs speed.
+  the eigensolver's output plus its workspace. With cuSOLVER syevd that is
+  5 units: the 1-unit output and 4.01 units of workspace, both measured.
+  Going lower (MAGMA, host) costs speed.
 
 ## 4. Proposal: truncated-spectrum majorizer (no full eigendecomposition)
 
@@ -337,9 +348,17 @@ Reading the hard grid:
   - Cost: (q + 2) products of K with an n × (r + 20) block, plus thin QRs,
     i.e. O(n²r) flops, all GEMM.
   - Memory: a few n × (r + 20) blocks.
-  - *Projected* at n = 20,000, r = 400, q = 2: about 1.3e12 flops, well under
-    a second on the L40S, versus 21.4 s for eigh. Probe B in section 7
-    measures it.
+  - **Measured** at n = 20,000, float32, on the L40S (probe B, section 7),
+    against 10.2 s for the full eigh:
+    - r = 400: 0.09 s with q = 2 (ρ/e₁ = 2.7e-4) and 0.13 s with q = 4
+      (ρ/e₁ = 1.6e-4);
+    - r = 1000: 0.24–0.33 s;
+    - extra memory: 0.16 units for r = 400, 0.37 for r = 1000.
+  - **That spectrum** (p = 100): e₁ = 2693, e₁₀₁ ≈ 38, e₄₀₁ ≈ 2.6,
+    e₁₀₀₁ ≈ 1.8.
+    - The tail is flat beyond about 400, so a larger r lowers τ very little.
+    - At the last Q1 λ, c = 80δ. So c ≥ τ in the first two smoothing rounds,
+      as in the n = 3,000 emulation.
 - **τ.** Run 30 Lanczos steps on (I − VVᵀ)K(I − VVᵀ) from a random start and
   take τ = θ/0.95 + ρ.
   - Kuczyński–Woźniakowski: θ ≥ 0.95 λ_max with probability at least
@@ -372,14 +391,14 @@ Reading the hard grid:
     versus 0.125 s to read a stored float32 K at 320 GB/s.
   - Memory: O(n(p + r)).
 
-### 4.8 Cost at n = 20,000, float32 (*projected* from the measured unit costs)
+### 4.8 Cost at n = 20,000, float32 (factorization measured; iterations *projected*)
 
 | | now (measured) | truncated, r = 400 |
 |---|---|---|
-| factorization | 21.4 s eigh + 0.3 s error check | ~0.5 s (subspace iteration and τ) |
-| peak memory | 6.01 units (8.98 GiB) | ~1.1 units: K (1.5 GiB) plus n × (r + 20) blocks (~0.1 GiB) |
+| factorization | 10.2 s (probe) to 21.4 s (profiled fit) eigh, + 0.3 s error check | 0.09 s for V (q = 2, measured), + ~0.15 s for τ (30 K-products, *projected*) |
+| peak memory | 6.01 units (8.98 GiB) | 1.16 units during the factorization (measured): K plus 0.16 units of n × (r + 20) blocks |
 | unit reads per iteration | 3 | 1, plus 2 products of n·r |
-| whole fit | 66 s | roughly 20–30 s if iteration counts hold |
+| whole fit | 66 s (profiled) | roughly 20–30 s if iteration counts hold (*projected*) |
 
 The path's non-matvec overhead (Brent search, KKT test, elementwise work) is
 about 13 ms per iteration and does not change. That is why the range is
@@ -433,17 +452,37 @@ All three solve a different problem, so the results are no longer exact.
 3. **If the full eigendecomposition stays the default, add spectral
    coordinates (3b)** for faster iterations.
 
-## 7. Next measurements (GPU)
+## 7. GPU measurements (L40S) and next step
 
-`benchmarks/probe_eigh.py`, added with this note, takes a few minutes on the
-L40S. It measures two things:
+`benchmarks/probe_eigh.py`, run at n = 20,000, p = 100, float32. It uses the
+same data as `profile_gpu.py`.
 
-- **A. Every device allocation inside `torch.linalg.eigh`.** This shows
-  whether the ~4 extra units are one cuSOLVER workspace (then option 3c gains
-  nothing over 3a) or something PyTorch adds.
-- **B. The cost of the top-r eigenpairs by subspace iteration**, for
-  r = 100, 400, 1000 and q = 0, 2, 4, next to the full eigh time: time, extra
-  memory, residual ρ and eigenvalue error. These replace the projection in 4.8.
+**A. Allocations inside `torch.linalg.eigh`** (10.2 s): 1.00 unit, which is
+the working copy that becomes U, and 4.01 units of cuSOLVER workspace. So the
+6.01-unit peak is K + 1.00 + 4.01. An in-place call can remove only the copy,
+which gives 5 units; option 3c gains nothing over 3a.
+
+**B. The top-r eigenpairs by subspace iteration** (block r + 20, then
+Rayleigh–Ritz). Errors are relative to e₁ = 2693.
+
+| r | q | time (s) | share of eigh | extra memory (units) | ρ/e₁ | eigenvalue error/e₁ | e_{r+1}/e₁ |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 100 | 0 | 0.03 | 0.3% | 0.050 | 1.1e-2 | 1.0e-2 | 1.4e-2 |
+| 100 | 2 | 0.02 | 0.2% | 0.050 | 1.5e-3 | 3.3e-5 | 1.4e-2 |
+| 100 | 4 | 0.04 | 0.3% | 0.050 | 9.1e-5 | 9.2e-7 | 1.4e-2 |
+| 400 | 0 | 0.06 | 0.6% | 0.157 | 3.8e-3 | 1.4e-3 | 9.5e-4 |
+| 400 | 2 | 0.09 | 0.9% | 0.157 | 2.7e-4 | 2.0e-4 | 9.5e-4 |
+| 400 | 4 | 0.13 | 1.3% | 0.157 | 1.6e-4 | 1.1e-4 | 9.5e-4 |
+| 1000 | 0 | 0.14 | 1.4% | 0.374 | 1.7e-3 | 4.4e-4 | 6.5e-4 |
+| 1000 | 2 | 0.24 | 2.3% | 0.374 | 2.1e-4 | 1.3e-4 | 6.5e-4 |
+| 1000 | 4 | 0.33 | 3.2% | 0.374 | 1.4e-4 | 8.2e-5 | 6.5e-4 |
+
+- The factorization the proposal needs costs about 1% of the eigh's time and
+  a sixth of one unit of memory.
+- Its residuals are smaller, relative to e₁, than those of the Ritz vectors
+  that worked in the emulation (q = 2, r = 400: 7.0e-4 at n = 3,000).
+
+To rerun the probe:
 
 ```bash
 pkill -f probe_eigh.py
@@ -454,9 +493,10 @@ nohup python benchmarks/probe_eigh.py --n 20000 --p 100 --dtype float32 > $RESUL
 head -3 $RESULTS/probe_eigh.log
 ```
 
-After that, build a prototype of section 4 in `cvksvm` and measure it against
-the full method at n = 20,000: time, peak memory, passes, objective, selected
-λ. Then run it at n = 50,000–100,000.
+**Next:** build a prototype of section 4 in `cvksvm`.
+- Measure it against the full method at n = 20,000: time, peak memory,
+  passes, objective, selected λ.
+- Then run it at n = 50,000–100,000, where the full method does not fit.
 
 ## 8. Questions for the reviewer
 
@@ -477,8 +517,9 @@ the full method at n = 20,000: time, peak memory, passes, objective, selected
    ‖γ‖/n?
 5. Is anything known about the iteration count of MM with a truncated spectral
    majorizer as c → 0 (small λ, late smoothing rounds)?
-6. Is cuSOLVER syevd's ~4-unit workspace inherent? Would syevdx or a
-   two-stage solver reduce it without losing speed?
+6. cuSOLVER syevd's workspace is one 4.01-unit allocation (float32,
+   n = 20,000). Would syevdx or a two-stage solver need less without losing
+   speed?
 
 ## Appendix: the emulation's core (CPU, float64)
 
