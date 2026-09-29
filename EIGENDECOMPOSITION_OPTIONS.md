@@ -17,9 +17,9 @@ matrix: 4n² bytes in float32, 8n² in float64.
 
   Once the factorization is done, only K and U stay resident (2 units).
 - **It also sets a size ceiling, whatever the memory.** cuSOLVER's eigh
-  (PyTorch 2.6, CUDA 12.4) accepts n = 32,500 and refuses n = 33,000, in
-  float32 and float64 alike (measured, section 7.3).
-  - So the float32 exact solver stops near n = 32,700 on the L40S, not at
+  (PyTorch 2.6, CUDA 12.4) accepts n = 32,767 and refuses n = 33,000
+  (measured, section 7.3). Float64 behaves the same at the sizes tested.
+  - So the float32 exact solver stops near n = 32,800 on the L40S, not at
     the 43,000 its memory would allow, and at the same n on a larger card.
   - The truncated spectrum calls no dense eigensolver on the n × n matrix,
     so only memory limits it.
@@ -29,7 +29,7 @@ matrix: 4n² bytes in float32, 8n² in float64.
   2 units, but run 4× and 12× slower (measured). We know of no full dense
   eigensolver that gives both lower memory and cuSOLVER's speed.
   - Under the size ceiling, the cut no longer raises the largest n in
-    float32, and in float64 only from 30,600 to about 32,700.
+    float32, and in float64 only from 30,600 to about 32,800.
 - **Proposal: don't compute the full eigendecomposition.**
   - The solver only needs a curvature matrix K̃ ⪰ K for which (K̃ + cI)⁻¹ is
     cheap for every c.
@@ -119,10 +119,10 @@ Largest n on a 48 GB card (about 45 GB usable) for a given peak:
 | 1 | 106,000 | 75,000 |
 
 This counts memory only. cuSOLVER's eigh also has a size limit: it accepts
-n = 32,500 and refuses n = 33,000, in both precisions (measured, section
-7.3).
+n = 32,767 and refuses n = 33,000 (measured, section 7.3). Float64 behaves
+the same at the sizes tested.
 - In the rows that call it (6 and 5 units), the float32 limit is therefore
-  about 32,700, and so is the float64 limit at 5 units.
+  about 32,800, and so is the float64 limit at 5 units.
 - MAGMA and host LAPACK (2 units) usually take the workspace size as a 32-bit
   integer too, so they may hit the same limit (*untested*).
 - The truncated spectrum (about 1 unit) calls no dense eigensolver on the
@@ -167,7 +167,7 @@ matrix. The proposal in section 4 builds on both.
 | e. Two-stage tridiagonalization (MAGMA dsyevdx_2stage, ELPA) | 2–3 | 2 | unknown; two-stage beats one-stage at large n | *untested*; not exposed by PyTorch | high |
 | f. Several GPUs (cusolverMg, cuSOLVERMp) | 6/G per GPU | | similar | *untested*; not exposed by PyTorch | high |
 
-- **cuSOLVER's size limit caps options a–c at n ≈ 32,700** (section 7.3),
+- **cuSOLVER's size limit caps options a–c at n ≈ 32,800** (section 7.3),
   whatever their peak. Option d may share it (*untested*).
 - **Caveat for option b.** It replaces K by UEUᵀ: a 1e-13 relative change in
   float64 and about 1e-6 in float32. In exchange, U(e + γ)Uᵀ dominates that
@@ -731,7 +731,7 @@ Reading it:
 - **Peak memory falls from 6.11 to 1.25 units** (10.3 to 3.1 GiB in NVML).
   At 1.25 units, a 48 GB card holds about n = 95,000 in float32 (about
   100,000 at the 1.15 units measured at n = 60,000, below). With eigh the
-  limit is about 32,700, cuSOLVER's size limit (below); memory alone would
+  limit is about 32,800, cuSOLVER's size limit (below); memory alone would
   allow 43,000.
 - **Against the shipped solver:** truncated at gap 1e-4 takes the same time,
   16.7 against 16.8 s. The shipped solver ends up to 18% above the optimum
@@ -792,6 +792,7 @@ PyTorch 2.6.0+cu124, CUDA 12.4, L40S):
 | n | float32 | float64 |
 |---|---|---|
 | 16,000; 17,000; 20,000; 23,000; 23,500; 32,500 | accepted | accepted |
+| 32,766; 32,767 | accepted | not tested |
 | 33,000; 46,000; 46,500 | refused | refused |
 | 60,000 | refused | not tested (two n × n matrices do not fit) |
 
@@ -799,10 +800,11 @@ PyTorch 2.6.0+cu124, CUDA 12.4, L40S):
   that nothing is factorized.
 - The limit is the same in both precisions, so it counts elements, not
   bytes.
-- The eigenvector workspace of LAPACK's syevd is 1 + 6n + 2n² elements. It
-  passes 2³¹ − 1 at n = 32,767, inside the bracket. A 32-bit workspace count
-  is therefore the likely cause (*hypothesis*; `--sizes 32766 32767` tests
-  it).
+- It is not LAPACK's syevd workspace, 1 + 6n + 2n² elements, counted in
+  32 bits: that count passes 2³¹ − 1 at n = 32,767, which is accepted.
+- 2n² alone passes 2³¹ − 1 at n = 32,768 = 2¹⁵. A 32-bit count of 2n²
+  elements would put the limit at n ≤ 32,767 (*hypothesis*;
+  `--sizes 32768` tests it).
 - Newer CUDA releases may differ (*untested*).
 
 ```bash
