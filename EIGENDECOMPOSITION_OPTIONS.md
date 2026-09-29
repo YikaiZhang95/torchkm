@@ -59,6 +59,14 @@ matrix: 4n² bytes in float32, 8n² in float64.
       n × n matrix instead of three.
     - On the Q1 grid that rule changes nothing.
     - Relative suboptimality below ~1e-4 needs a larger r.
+- **Prototype built:** `torchkm.experimental.SpectralSVMPath` (section 7.2).
+  Every λ and every fold stops at the same certified duality gap.
+  - CPU results, n = 3,000: on the Q1 grid and the p = 10 hard grid the
+    truncated spectrum is 1.6–1.8× faster than the full one. It reaches the
+    same accuracy against libsvm with about 3× fewer n × n reads.
+  - Its limit: separable data at tiny λ, where it does not certify in
+    reasonable time.
+  - The GPU comparison to run is in section 7.3.
 - **Review.** Round 1, with the corrections it led to, is in
   `EIGENDECOMPOSITION_REVIEW_REPLY.md`.
 
@@ -533,20 +541,17 @@ All three solve a different problem, so the results are no longer exact.
 
 1. **Restore the in-place factorization (3a).** It takes one unit off the
    peak at no cost in speed and has already been tested.
-2. **Prototype the truncated majorizer (section 4) in `cvksvm`** behind an
-   opt-in, e.g. `spectrum_rank=r` (default: today's full eigendecomposition).
-   It should include:
-   - the safeguarded step with exact gradients (4.7);
-   - stopping on the duality gap (4.11);
-   - Lanczos τ₀ and q = 4 subspace passes;
-   - eps/10 in the smoothing rounds where c < τ, while the step-size test
-     remains in use.
-   - Validate it on the L40S at n = 20,000 against the full method.
-   - Then run n = 50,000–100,000, where the full method cannot run.
+2. **The truncated majorizer, prototyped** as
+   `torchkm.experimental.SpectralSVMPath` (section 7.2). Next:
+   - run the matched-accuracy experiment on the L40S (section 7.3);
+   - if it holds up, give `cvksvm` an opt-in, e.g. `spectrum_rank=r`, with
+     today's full eigendecomposition as the default.
 3. **If the full eigendecomposition stays the default, add spectral
    coordinates (3b)** for faster iterations.
 
-## 7. GPU measurements (L40S) and next step
+## 7. The GPU probe, the prototype, and the GPU run
+
+### 7.1 The probe (measured, L40S)
 
 `benchmarks/probe_eigh.py`, run at n = 20,000, p = 100, float32. It uses the
 same data as `profile_gpu.py`.
@@ -587,23 +592,117 @@ nohup python benchmarks/probe_eigh.py --n 20000 --p 100 --dtype float32 > $RESUL
 head -3 $RESULTS/probe_eigh.log
 ```
 
-**Next: a matched-accuracy comparison** on a prototype of section 4 in
-`cvksvm`.
-- **Setup.**
-  - Data: n = 20,000, p = 100, float32; the Q1 grid (50 λ, 10 folds) and one
-    hard grid.
-  - Solvers: the full-eigh solver, and the truncated one (r = 400, q = 4,
-    with the safeguard).
-- **Matching.** Both solvers stop at the same certified gap, 1e-3 and then
-  1e-4, for every path λ and every fold.
-- **Report:**
-  - wall time by phase;
-  - peak memory, allocator and NVML;
-  - products with K, and fallbacks taken;
-  - certified gaps;
-  - selected λ, CV error, test accuracy.
-- **Then** n = 60,000, truncated only, where the full method does not fit.
-- **Smallest useful version:** path only, Q1 grid, gap 1e-3.
+### 7.2 The prototype: `torchkm.experimental.SpectralSVMPath`
+
+It solves the same problem as `cvksvm`: the smoothed hinge, smoothing
+rounds, and folds that zero the held-out labels and start from the
+whole-data fit at the same λ. `spectrum="full"` uses eigh as `cvksvm` does;
+`spectrum="truncated"` uses sections 4.1–4.7. What differs from `cvksvm`:
+
+- **Every λ and every fold stops at a certified duality gap (4.11)**, not at
+  the KKT threshold.
+- **FISTA momentum with a function-value restart** replaces the relaxation
+  factor mul. On one hard λ it needed 4.5–11× fewer iterations at small δ.
+- **Smoothing.** δ stops shrinking once the smoothing bias is below half the
+  tolerance. The bias bound is δ/4 times the share of rows in the smoothing
+  band. From then on, iterations run in chunks, each followed by the
+  certificate.
+- **Inner stops are scale-free**: a step's predicted decrease against the
+  objective. An absolute step-size test calls every step converged when α is
+  about 1e-7, as it is at large λ.
+- **Warm-started fits** (the next λ, the folds) start one smoothing level
+  above the level where their starting point was certified.
+- **Bounded work.** A λ, or a batch of folds, stops certifying after
+  `fit_cap` iterations and is reported as not converged; a non-finite
+  iterate raises an error.
+- **Truncated spectrum:**
+  - r = 400 Ritz pairs from 4 subspace passes;
+  - τ₀ from 40 Lanczos steps with factor 1/0.95;
+  - the ρ shift;
+  - exact gradients from K z and K V;
+  - the safeguard with the scalar fallback.
+- Not part of the stable API. Tests are in `tests/test_experimental_spectral.py`.
+
+**CPU validation** (n = 3,000, float64, 50 λ, 10 folds; gap target 1e-3
+unless marked). "Excess" is how far the path's objective ends above libsvm's
+optimum, as max / median over the 50 λ.
+
+| setting | solver | time (s) | excess, max / median | all certified | n × n reads in iterations | selected λ | CV error | test acc |
+|---|---|---:|---:|---|---:|---:|---:|---:|
+| Q1 grid, p = 10 | shipped `cvksvm` | 5.2 | 1.9e-2 / 5.6e-7 | (no certificate) | | 0.001 | 0.1683 | 0.830 |
+| | full | 26.5 | 1.3e-4 / 4.9e-8 | yes | 10,815 | 0.001 | 0.1643 | 0.828 |
+| | truncated | 15.9 | 1.3e-4 / 4.9e-8 | yes | 3,655 | 0.001 | 0.1643 | 0.828 |
+| Q1 grid, p = 10, gap 1e-4 | full | 41.9 | 2.9e-5 / 4.9e-8 | yes | 15,257 | 0.001 | 0.1647 | 0.828 |
+| | truncated | 23.5 | 3.4e-5 / 4.9e-8 | yes | 4,717 | 0.001 | 0.1643 | 0.828 |
+| hard grid, p = 10 | shipped `cvksvm` | 26.7 | 1.1e-3 / 4.1e-4 | (no certificate) | | 3.7e-4 | 0.1640 | 0.825 |
+| | full | 64.8 | 9.3e-4 / 2.3e-4 | yes | 23,786 | 7.9e-4 | 0.1640 | 0.827 |
+| | truncated | 38.6 | 9.2e-4 / 2.1e-4 | yes | 7,958 | 4.8e-4 | 0.1637 | 0.825 |
+| Q1 grid, p = 100 | shipped `cvksvm` | 5.4 | 2.3e-1 / 8.2e-7 | (no certificate) | | 0.0126 | 0.000 | 1.000 |
+| | full | 24.9 | 2.0e-4 / 1.9e-7 | yes | 9,251 | 0.0168 | 0.000 | 1.000 |
+| | truncated | 15.1 | 1.5e-4 / 1.9e-7 | yes | 3,226 | 0.0168 | 0.000 | 1.000 |
+| hard grid, p = 100 (separable) | shipped `cvksvm` | 14.3 | 5.3e-1 / 1.1e-2 | (no certificate) | | 0.01 | 0.000 | 1.000 |
+| | full | 384.4 | 9.2e-4 / 3.6e-4 | yes | 116,302 | 0.01 | 0.000 | 1.000 |
+| | truncated | 289.6 | 9.4e-4 / 2.7e-4 | path yes; some folds end at 5.5e-3 | 43,537 | 0.01 | 0.000 | 1.000 |
+
+Reading the table:
+
+- **At matched certified accuracy, truncated is 1.3–1.8× faster than full on
+  this CPU**, and reads the n × n matrices about 3× less often.
+  - It also keeps the same selected λ, CV error and test accuracy, except at
+    p = 10 on the hard grid, where the two pick different λ at CV errors
+    0.1640 and 0.1637. Iteration counts are within a few percent.
+  - No step fell back in any run.
+  - On the GPU the reads dominate and the eigendecomposition disappears, so
+    the gap there should be larger (*projected*; 7.3 measures it).
+- **Certification costs time.** On the first three settings the certified
+  solvers take 1.4–5× as long as the shipped solver at its default
+  tolerances. On the separable hard grid they take 20–27× as long. The
+  shipped solver, for its part, stops 1.9% (p = 10) and 23% (p = 100) above
+  the optimum at the smallest λ of the Q1 grid.
+- **The separable hard grid is the expensive case, and truncation's limit.**
+  - The objective goes down to 0.0025, so a relative gap of 1e-3 needs
+    δ ≈ 4e-6. Then c = 4nδλ ≈ 1e-6, far below τ ≈ 1.2, and the truncated
+    spectrum's tail directions move at a rate of about c/τ per step.
+  - The run in the table ended its folds early. With the final exit rule
+    (tighten, then cap each fit at `fit_cap` = 20,000 iterations), a rerun of
+    the last 10 λ went past 30 minutes without certifying every fold, and was
+    stopped.
+  - The full spectrum certifies this grid, in 384 s.
+  - So in this regime the truncated spectrum is not the method to use; the
+    Q1 grid is where it pays off.
+
+### 7.3 The GPU run
+
+The matched-accuracy experiment: n = 20,000, p = 100, float32, the Q1 grid
+(50 λ, 10 folds), gap 1e-3 and then 1e-4. It compares the shipped solver,
+full and truncated.
+
+```bash
+pkill -f matched_accuracy.py
+cd ~/torchkm-revision/repo && git pull --ff-only
+conda activate q1
+export RESULTS=/home/yzhang705/torchkm-revision/repo/revision_results
+nohup python benchmarks/matched_accuracy.py --n 20000 --gaps 1e-3 1e-4 --out $RESULTS/matched_20k.json > $RESULTS/matched_20k.log 2>&1 &
+head -3 $RESULTS/matched_20k.log
+```
+
+Then n = 60,000, which only the truncated spectrum fits (about 1 unit of
+14.4 GB, against 6 units, 86 GB, for eigh):
+
+```bash
+nohup python benchmarks/matched_accuracy.py --n 60000 --solvers truncated --gaps 1e-3 --out $RESULTS/matched_60k.json > $RESULTS/matched_60k.log 2>&1 &
+```
+
+Each log ends with one table:
+- time;
+- peak memory in n × n units and in NVML GiB;
+- n × n reads;
+- certified gaps;
+- fallbacks;
+- selected λ, CV error, test accuracy.
+
+The hard grid is optional (`--grid hard`). For p = 100 it is the separable
+stress case above.
 
 ## 8. Questions for the reviewer
 

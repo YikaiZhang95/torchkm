@@ -34,6 +34,20 @@ All notable changes to TorchKM are documented in this file.
   `max_iter=100000` takes 7 s instead of 103 s.
 
 ### Added
+- Experimental: `torchkm.experimental.SpectralSVMPath`, an exact-kernel SVM
+  path with K-fold CV that stops every lambda and every fold at a certified
+  duality gap (`hinge_duality_gap`), and that can replace the full
+  eigendecomposition by a truncated spectrum. See
+  `EIGENDECOMPOSITION_OPTIONS.md`.
+  - The truncated spectrum keeps the top-r Ritz pairs from subspace iteration
+    and a Lanczos bound on the rest. The eigendecomposition's O(n^3) work and
+    its workspace are gone, and each iteration reads the kernel once instead
+    of reading the kernel and the eigenvectors three times in all.
+  - Steps are checked and fall back to a scalar majorizer when needed.
+  - Iterations use FISTA momentum with restart.
+  - `benchmarks/matched_accuracy.py` compares the two spectra at equal
+    certified gaps on the GPU.
+  - Not part of the stable API.
 - `dtype` on the exact SVM solver (`cvksvm(dtype=torch.float32)`,
   `TorchKMSVC(dtype="float32")`): the kernel, its eigendecomposition and the
   solution path in single precision, half the memory of every `n x n` matrix.

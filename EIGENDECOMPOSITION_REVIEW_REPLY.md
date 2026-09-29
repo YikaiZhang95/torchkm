@@ -307,3 +307,14 @@ test", and it will say that.
   plan. **Section 7:** the matched-accuracy experiment.
 - **Appendix.** Notes that the emulation's 1.05 factor is uncertified, and
   that K̃ ⪰ K was verified directly.
+
+## After this reply: the prototype
+
+Items 2 and 3 are now implemented in `torchkm.experimental.SpectralSVMPath`:
+- the safeguarded step, with exact gradients from K z and K V;
+- the scalar fallback;
+- the duality-gap certificate, as the stopping rule for every λ and fold.
+
+It also replaces the relaxation factor with FISTA momentum and a restart.
+EIGENDECOMPOSITION_OPTIONS.md, section 7.2, has the CPU validation against
+libsvm optima; section 7.3 has the GPU experiment of item 6.
