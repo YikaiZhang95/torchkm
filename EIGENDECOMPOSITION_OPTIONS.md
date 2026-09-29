@@ -732,13 +732,15 @@ Reading it:
 
 | solver | gap target | time (s) | peak (n × n units) | peak NVML (GiB) | n × n reads | path gap max | fold gap max | fallbacks | selected λ | CV error | test acc |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| shipped `cvksvm` | its tolerances | refused by cuSOLVER | | | | | | | | | |
+| full | 1e-3 | refused by cuSOLVER | | | | | | | | | |
 | truncated | 1e-3 | 81.7 | 1.15 | 16.6 | 3,399 | 8.7e-4 | 8.1e-4 | 83 | 0.001 | 0.0004 | 0.9995 |
 
 - **Only the truncated spectrum runs.** cuSOLVER's eigh refused n = 60,000
   (measured).
-  - The shipped solver stopped in cuSOLVER's workspace-size query
-    (`cusolverDnXsyevd_bufferSize`: CUSOLVER_STATUS_INVALID_VALUE), before
-    anything was allocated. The full spectrum calls the same eigh.
+  - The shipped solver and the full spectrum both stopped in cuSOLVER's
+    workspace-size query (`cusolverDnXsyevd_bufferSize`:
+    CUSOLVER_STATUS_INVALID_VALUE), before anything was allocated.
   - So the refusal is about the problem size, not the memory. Even with the
     size accepted, the eigh-based solvers would peak at 6.1 units (one unit is
     13.4 GiB), about 82 GiB: more than the card's 48 GB (*projected*).
