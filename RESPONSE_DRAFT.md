@@ -122,16 +122,27 @@ where it can; the tables list each method's device.
 
 **Answered, measured on the GPU.** Peak memory in exact mode is
 `c · 8 n² + 16 n L` bytes in float64 (half in float32): c resident n×n
-matrices plus the n×L path. On the L40S (PyTorch 2.6, CUDA 12.4) the peak is
-c = 6.01 in float32 and float64 alike: the kernel, cuSOLVER's copy of it
-(which becomes the eigenvectors) and a 4.01-copy eigensolver workspace.
-After the factorization only the kernel and the eigenvectors stay resident.
-A CPU sweep measured c = 4.2 for n = 2,000 to 8,000. A second limit does not
-depend on memory: cuSOLVER's eigendecomposition refuses n above 32,768
-(float32; float64 accepts 32,768 and refuses 33,000), before allocating
-anything. The predicted ceiling on a 48 GB card is therefore about
-n = 30,000 in float64 and 32,768 in float32, which is why Table 3 stopped at
-24,692 and Table 4 began at 32,561 on the Nyström path.
+matrices plus the n×L path. On the L40S (PyTorch 2.6, CUDA 12.4)
+cuSOLVER's eigendecomposition takes a 4.01-copy workspace, in float32 and
+float64 alike. The original code factorized a copy of the kernel, so its peak
+was c = 6.01 (measured), about n = 30,000 on a 48 GB card in float64. That is
+why Table 3 stopped at 24,692 and Table 4 began at 32,561 on the Nyström path.
+The revision factorizes the kernel in place and rebuilds it afterwards
+(bitwise-identical fits, same speed), so c = 5.01. After the factorization
+only the kernel and the eigenvectors stay resident. A CPU sweep measured
+c = 4.2 for n = 2,000 to 8,000. A second limit does not depend on memory:
+cuSOLVER's eigendecomposition refuses n above 32,768 (float32; float64
+accepts 32,768 and refuses 33,000), before allocating anything. With c = 5.01
+the ceiling on a 48 GB card is therefore n = 32,768, in float32 and float64
+alike.
+
+Past that, the revision adds an experimental exact-kernel option,
+`TorchKMSVC(spectrum="truncated")`. The solver keeps only the kernel's top
+eigenpairs, so there is no full eigendecomposition, and every λ and every
+fold stops at a certified duality gap. Its peak is about 1.2 n×n matrices
+(measured in float32: 1.25 at n = 20,000, and 1.15 at n = 60,000, where the
+full eigendecomposition cannot run). On Table 2's simulation at n = 20,000 it
+took the same time as the default solver while certifying a gap of 1e-4.
 
 Package changes on this branch make the envelope explicit: one of the n×n
 copies is no longer materialised (it was only used by the projection step,

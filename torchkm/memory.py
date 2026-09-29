@@ -28,13 +28,15 @@ from typing import Optional, Union
 import torch
 
 #: Number of ``n x n`` matrices' worth of memory that exact mode holds at its
-#: peak: the kernel matrix, eigh's copy of it (which becomes the eigenvectors)
-#: and cuSOLVER ``syevd``'s workspace of 4.01 more. Measured 6.01 on an L40S
-#: (PyTorch 2.6, CUDA 12.4), in float32 at n = 20,000 and in float64 at
-#: n = 16,100. A CPU sweep (LAPACK ``syevd``) measured 4.2, so on the CPU the
-#: estimate is conservative. ``benchmarks/bench_memory_envelope.py`` measures
-#: a build.
-EXACT_MODE_COPIES: float = 6.0
+#: peak. On the GPU the eigendecomposition sets it: cuSOLVER ``syevd``'s
+#: workspace of 4.01 matrices plus the kernel, whose storage the estimators let
+#: the eigensolver overwrite with the eigenvectors (the kernel is rebuilt
+#: afterwards), so 5.01. With eigh's working copy (a precomputed kernel, or a
+#: solver called without ``rebuild_kmat``) it is one more: 6.01, measured on an
+#: L40S (PyTorch 2.6, CUDA 12.4) in float32 at n = 20,000 and in float64 at
+#: n = 16,100. A CPU sweep (LAPACK ``syevd``) measured 4.2.
+#: ``benchmarks/bench_memory_envelope.py`` measures a build.
+EXACT_MODE_COPIES: float = 5.0
 
 #: Largest ``n`` whose eigendecomposition cuSOLVER accepts, whatever the device
 #: memory. Measured with PyTorch 2.6 and CUDA 12.4 on an L40S
@@ -168,14 +170,27 @@ def exact_mode_size_message(n_samples: int) -> str:
     )
 
 
-def kernel_eigh(K: torch.Tensor):
+def kernel_eigh(K: torch.Tensor, overwrite: bool = False):
     """``torch.linalg.eigh(K)`` for the exact solvers.
+
+    ``torch.linalg.eigh`` factorizes a working copy of its input. With
+    ``overwrite=True`` it factorizes ``K``'s own storage instead: ``K`` is
+    symmetric, so its transpose view is the same matrix in the column-major
+    layout the eigensolver works in, and passed as both input and output it is
+    overwritten by the eigenvectors. That removes the copy from the peak (6 to
+    5 ``n x n`` matrices on the GPU) and gives the same eigenpairs; the caller
+    rebuilds ``K`` if it needs it afterwards.
 
     When cuSOLVER refuses the size (``n`` above :data:`EXACT_MODE_MAX_N_CUDA`),
     the error names the limit and the alternatives instead of cuSOLVER's
     workspace query.
     """
     try:
+        if overwrite:
+            V = K.mT
+            w = torch.empty(K.shape[-1], dtype=K.dtype, device=K.device)
+            torch.linalg.eigh(V, out=(w, V))
+            return w, V
         return torch.linalg.eigh(K)
     except torch.linalg.LinAlgError as err:
         n = K.shape[-1]

@@ -24,8 +24,12 @@ class cvklogit:
         KKTeps=1e-3,
         KKTeps2=1e-3,
         device="cuda",
+        rebuild_kmat=None,
     ):
+        # rebuild_kmat: returns Kmat again; the eigendecomposition then
+        # overwrites Kmat (one n x n copy less at the peak), see cvksvm
         self.device = device
+        self.rebuild_kmat = rebuild_kmat
         self.Kmat = Kmat.double().to(self.device)
         self.y = y.double().to(self.device)
         # self.Kmat = None
@@ -78,7 +82,12 @@ class cvklogit:
 
         # Kinv = torch.linalg.inv(Kmat)
 
-        eigens, Umat = kernel_eigh(Kmat)
+        # Given rebuild_kmat, the eigenvectors overwrite Kmat's storage (one
+        # n x n copy less at the peak) and Kmat is rebuilt for the rest of the fit.
+        eigens, Umat = kernel_eigh(Kmat, overwrite=self.rebuild_kmat is not None)
+        if self.rebuild_kmat is not None:
+            Kmat = self.rebuild_kmat().double().to(self.device)
+            self.Kmat = Kmat
         eigens = eigens.double().to(self.device)
         Umat = Umat.double().to(self.device)
         Kmat = Kmat.double().to(self.device)

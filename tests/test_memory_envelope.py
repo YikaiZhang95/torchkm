@@ -55,11 +55,11 @@ def test_max_exact_n_inverts_the_estimate_with_headroom():
 
 
 def test_max_exact_n_stops_at_the_eigensolver_size_limit():
-    # memory alone would allow n = 47,434 in 80 GB; cuSOLVER refuses more
+    # memory alone would allow n = 42,426 in 80 GB; cuSOLVER refuses more
     # than EXACT_MODE_MAX_N_CUDA
     assert max_exact_n(80e9, size_limit=None) > EXACT_MODE_MAX_N_CUDA
     assert max_exact_n(80e9) == EXACT_MODE_MAX_N_CUDA == 32_768
-    assert max_exact_n(8e9) == max_exact_n(8e9, size_limit=None) == 12_247
+    assert max_exact_n(8e9) == max_exact_n(8e9, size_limit=None) == 13_416
 
 
 def test_estimate_rejects_negative_n():
@@ -116,32 +116,95 @@ def test_kernel_eigh_passes_other_errors_through(monkeypatch):
         kernel_eigh(torch.eye(20, dtype=torch.float64))
 
 
-@pytest.mark.parametrize(
-    "name, extra",
-    [
-        ("cvksvm", {}),
-        ("cvkdwd", {}),
-        ("cvklogit", {}),
-        ("cvksqsvm", {}),
-        ("cvkqr", {"tau": 0.5}),
-        ("cvkhuber", {"delta": 1.0}),
-    ],
-)
-def test_exact_solvers_name_the_size_limit(monkeypatch, name, extra):
-    _refusing_eigh(monkeypatch)
+_EXACT = [
+    ("cvksvm", {}),
+    ("cvkdwd", {}),
+    ("cvklogit", {}),
+    ("cvksqsvm", {}),
+    ("cvkqr", {"tau": 0.5}),
+    ("cvkhuber", {"delta": 1.0}),
+]
+
+
+def _exact_solver(name, extra, rebuild=False):
+    """One of the six exact solvers on a 40-row RBF problem; with ``rebuild`` it
+    factorizes the kernel in place and rebuilds it."""
     X, y = _binary(n=40, p=4)
-    solver = getattr(importlib.import_module(f"torchkm.{name}"), name)(
-        Kmat=functions.rbf_kernel(torch.as_tensor(X, dtype=torch.double), 0.5),
+    Xt = torch.as_tensor(X, dtype=torch.double)
+    return getattr(importlib.import_module(f"torchkm.{name}"), name)(
+        Kmat=functions.rbf_kernel(Xt, 0.5),
         y=torch.as_tensor(y, dtype=torch.double),
         nlam=2,
         ulam=torch.tensor([0.1, 0.01], dtype=torch.double),
         foldid=torch.arange(40) % 2 + 1,
         nfolds=2,
+        maxit=100,
         device="cpu",
+        rebuild_kmat=(lambda: functions.rbf_kernel(Xt, 0.5)) if rebuild else None,
         **extra,
     )
+
+
+@pytest.mark.parametrize("name, extra", _EXACT)
+def test_exact_solvers_name_the_size_limit(monkeypatch, name, extra):
+    _refusing_eigh(monkeypatch)
     with pytest.raises(torch.linalg.LinAlgError, match="n_samples=40"):
-        solver.fit()
+        _exact_solver(name, extra).fit()
+
+
+@pytest.mark.parametrize("dtype", [torch.float64, torch.float32])
+def test_kernel_eigh_in_place_gives_the_same_eigenpairs(dtype):
+    torch.manual_seed(0)
+    A = torch.randn(30, 30, dtype=torch.float64)
+    K = (A @ A.T).to(dtype)
+    w, U = kernel_eigh(K.clone())
+    K2 = K.clone()
+    w2, U2 = kernel_eigh(K2, overwrite=True)
+    assert torch.equal(w, w2) and torch.equal(U, U2)
+    assert U2.data_ptr() == K2.data_ptr()  # the eigenvectors took K's storage
+
+
+@pytest.mark.parametrize("name, extra", _EXACT)
+def test_exact_solvers_factorize_in_place_with_the_same_fit(name, extra):
+    copy = _exact_solver(name, extra)
+    copy.fit()
+    inplace = _exact_solver(name, extra, rebuild=True)
+    inplace.fit()
+    assert torch.equal(inplace.alpmat, copy.alpmat)
+    assert torch.equal(inplace.pred, copy.pred)
+
+
+@pytest.mark.parametrize("estimator", [TorchKMSVC, TorchKMKQR])
+def test_estimators_factorize_in_place_but_not_a_precomputed_kernel(
+    monkeypatch, estimator
+):
+    module = importlib.import_module(
+        "torchkm.cvksvm" if estimator is TorchKMSVC else "torchkm.cvkqr"
+    )
+    real = module.kernel_eigh
+    seen = []
+
+    def spy(K, overwrite=False):
+        seen.append(overwrite)
+        return real(K, overwrite=overwrite)
+
+    X, y = _binary()
+    kw = dict(nC=2, cv=2, device="cpu", max_iter=20)
+    monkeypatch.setattr(module, "kernel_eigh", spy)
+    a = estimator(kernel="rbf", rbf_sigma=0.5, **kw).fit(X, y)
+    # the same fit through the copying path
+    monkeypatch.setattr(module, "kernel_eigh", lambda K, overwrite=False: real(K))
+    b = estimator(kernel="rbf", rbf_sigma=0.5, **kw).fit(X, y)
+    assert seen == [True]
+    np.testing.assert_array_equal(a.alpha_, b.alpha_)
+    assert a.intercept_ == b.intercept_
+    # a precomputed kernel is the caller's array: factorized as a copy
+    K = functions.rbf_kernel(torch.as_tensor(X, dtype=torch.double), 0.5).numpy()
+    K0 = K.copy()
+    monkeypatch.setattr(module, "kernel_eigh", spy)
+    estimator(kernel="precomputed", **kw).fit(K, y)
+    assert seen[-1] is False
+    np.testing.assert_array_equal(K, K0)
 
 
 def test_estimator_names_the_size_limit(monkeypatch):

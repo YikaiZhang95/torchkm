@@ -324,8 +324,11 @@ class SpectralSVMPath:
 
     Parameters
     ----------
-    K : tensor (n, n)
-        Kernel matrix; its dtype and device are the working ones.
+    K : tensor (n, n) or operator
+        Kernel matrix; its dtype and device are the working ones. With the
+        truncated spectrum only products ``K @ B`` are used, so ``K`` may also
+        be an operator that is never stored, such as
+        :class:`torchkm.experimental.RBFKernelOperator` (matrix-free).
     y : tensor (n,)
         Labels in {-1, +1}.
     lambdas : sequence of float
@@ -404,6 +407,11 @@ class SpectralSVMPath:
     ):
         if spectrum not in ("truncated", "full"):
             raise ValueError("spectrum must be 'truncated' or 'full'")
+        if spectrum == "full" and not torch.is_tensor(K):
+            raise ValueError(
+                "spectrum='full' eigendecomposes K, so it needs the matrix itself; "
+                "a kernel operator needs spectrum='truncated'"
+            )
         self.K = K
         self.y = torch.as_tensor(y, dtype=K.dtype, device=K.device).reshape(-1)
         self.lambdas = [float(v) for v in lambdas]

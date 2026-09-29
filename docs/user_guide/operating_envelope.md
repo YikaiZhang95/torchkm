@@ -11,8 +11,10 @@ fitted model, and says what to do beyond it.
 ## Memory model
 
 At its peak an exact-mode fit holds a small number of \(n \times n\) float64
-matrices on the device: the kernel matrix, the eigenvector matrix, and the
-eigensolver's workspace. The regularization path adds two \(n \times L\)
+matrices on the device: the kernel matrix, whose storage the
+eigendecomposition overwrites with the eigenvectors (the kernel is rebuilt
+afterwards, with the same values), and the eigensolver's workspace. The
+regularization path adds two \(n \times L\)
 matrices (coefficients and out-of-fold predictions for \(L\) candidate
 values). The prediction TorchKM uses is
 
@@ -48,17 +50,19 @@ constant, 10% headroom for the CUDA context and the eigensolver's size limit
 
 | Device memory | Largest \(n\), float64 | Largest \(n\), float32 (`TorchKMSVC`) |
 |---|---|---|
-| 8 GB | ≈ 12,200 | ≈ 17,300 |
-| 16 GB | ≈ 17,300 | ≈ 24,500 |
-| 24 GB | ≈ 21,200 | ≈ 30,000 |
-| 48 GB | ≈ 30,000 | 32,768 (≈ 42,400) |
-| 80 GB | 32,768 (≈ 38,700) | 32,768 (≈ 54,800) |
+| 8 GB | ≈ 13,400 | ≈ 19,000 |
+| 16 GB | ≈ 19,000 | ≈ 26,800 |
+| 24 GB | ≈ 23,200 | 32,768 (≈ 32,900) |
+| 48 GB | 32,768 (≈ 32,900) | 32,768 (≈ 46,500) |
+| 80 GB | 32,768 (≈ 42,400) | 32,768 (≈ 60,000) |
 
-The default constant of 6 is the GPU measurement. On an L40S (PyTorch 2.6,
-CUDA 12.4) a fit peaks at 6.01 copies, in float32 and float64 alike: the
-kernel matrix, cuSOLVER's copy of it, which becomes the eigenvectors, and a
-workspace of 4.01 more. A CPU sweep of the same code path (LAPACK eigensolver)
-measured 4.2 copies, so on the CPU the prediction is conservative.
+The default constant of 5 comes from the GPU. On an L40S (PyTorch 2.6,
+CUDA 12.4) cuSOLVER's eigendecomposition takes a workspace of 4.01 copies, in
+float32 and float64 alike. With the kernel's own storage overwritten, the
+peak is 5.01 copies. A precomputed kernel is the caller's array, so it is
+factorized as a copy, and the peak is 6.01 copies (measured). A CPU sweep of
+the same code path (LAPACK eigensolver) measured 4.2 copies, so on the CPU
+the prediction is conservative.
 
 Every exact-mode estimator (`TorchKMSVC`, `TorchKMDWD`, `TorchKMLogit`,
 `TorchKMKQR`) shares the same decomposition, so the envelope is the same for
@@ -75,8 +79,8 @@ query, before anything is allocated, so it applies on every card.
 
 Exact mode on a GPU therefore stops at \(n = 32{,}768\)
 (`torchkm.memory.EXACT_MODE_MAX_N_CUDA`), however much memory the card has.
-It binds wherever memory would allow more: from 48 GB up in float32 and at
-80 GB in float64 (the values in parentheses above). `max_exact_n` caps its
+It binds wherever memory would allow more: from 24 GB up in float32 and from
+48 GB up in float64 (the values in parentheses above). `max_exact_n` caps its
 answer at this size; pass `size_limit=None` to count memory alone. Above it, the exact solvers raise a
 `torch.linalg.LinAlgError` that names the limit and the alternatives, instead
 of cuSOLVER's own message.
@@ -98,6 +102,21 @@ print(clf.peak_gpu_memory_bytes_ / 1e9, "GB")
 When an exact-mode fit does run out of memory, the `torch.cuda.OutOfMemoryError`
 TorchKM raises names the training size, the predicted requirement, the device's
 total memory, the largest \(n\) it supports, and the alternatives below.
+
+## Beyond the envelope: the truncated spectrum (experimental)
+
+`TorchKMSVC(spectrum="truncated")` keeps the exact kernel but not its full
+eigendecomposition. The solver's curvature uses only the top `spectrum_rank`
+eigenpairs (default 400), found with a few products with the kernel, and every
+regularization value and every fold stops at a certified relative duality gap,
+`gap_tol` (default 1e-3). With no eigensolver workspace and no size limit, the
+peak is the kernel plus a few \(n \times\) `spectrum_rank` blocks: about 1.2
+\(n \times n\) matrices on an L40S in float32 (1.25 at \(n = 20{,}000\), 1.15
+at \(n = 60{,}000\)), so about \(n = 100{,}000\) fits on a 48 GB card. On
+Table 2's simulation at \(n = 20{,}000\) it took the same time as the default
+solver (16.7 against 16.8 s) while certifying a gap of 1e-4 at every lambda and
+fold. It solves the hinge-loss SVM only, and `tol`, `max_iter`, `KKTeps`,
+`delta_len` and `kkt_scaled` do not apply to it.
 
 ## Beyond the envelope: the Nyström path
 

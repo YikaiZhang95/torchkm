@@ -76,6 +76,13 @@ class cvkqr:
     device : {'cuda', 'cpu'}, default=None
         Device to perform computations on. Defaults to 'cuda' if available, else 'cpu'.
 
+    rebuild_kmat : callable, optional
+        Returns ``Kmat`` again, with the same values. When given, the
+        eigendecomposition overwrites ``Kmat``'s storage with the eigenvectors
+        instead of factorizing a copy, which lowers the peak by one ``n x n``
+        matrix, and ``Kmat`` is rebuilt with it afterwards. The fit is the same.
+        The estimators pass their kernel construction here.
+
     Attributes
     ----------
     self.alpmat : ndarray or tensor
@@ -150,10 +157,12 @@ class cvkqr:
         KKTeps2=1e-3,
         device=None,
         kkt_scaled=False,
+        rebuild_kmat=None,
     ):
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = torch.device(device)
+        self.rebuild_kmat = rebuild_kmat
 
         # --- Check Kmat ---
         if not isinstance(Kmat, torch.Tensor):
@@ -243,7 +252,12 @@ class cvkqr:
         one = torch.ones((), dtype=torch.double, device=self.device)
         step_buf = torch.empty(nobs + 1, dtype=torch.double, device=self.device)
 
-        eigens, Umat = kernel_eigh(Kmat)
+        # Given rebuild_kmat, the eigenvectors overwrite Kmat's storage (one
+        # n x n copy less at the peak) and Kmat is rebuilt for the rest of the fit.
+        eigens, Umat = kernel_eigh(Kmat, overwrite=self.rebuild_kmat is not None)
+        if self.rebuild_kmat is not None:
+            Kmat = self.rebuild_kmat().double().to(self.device)
+            self.Kmat = Kmat
         eigens = eigens.double().to(self.device)
         Umat = Umat.double().to(self.device)
         Kmat = Kmat.double().to(self.device)

@@ -31,6 +31,12 @@ Usage:
   python benchmarks/matched_accuracy.py --n 20000 --no-cv --gaps 1e-3  # smallest
   python benchmarks/matched_accuracy.py --dataset a9a --data-dir ~/libsvm_data \
       --seed 52 --gaps 1e-3
+  python benchmarks/matched_accuracy.py --n 100000 --solvers matrix_free --gaps 1e-3
+
+--solvers matrix_free runs the truncated spectrum on
+torchkm.experimental.RBFKernelOperator: K is never stored, and every product
+recomputes it in blocks of rows. Alone, it builds no n x n matrix at all, so
+its peak memory is its own.
 
 The lambda grid follows Q1. --grid q1 (the default for the simulation, as in
 Q1_sim) runs over 1e3 .. 1e-3, with the shipped solver at KKTeps 1e-3.
@@ -58,7 +64,11 @@ from _common import load_dataset, synthetic_dataset  # noqa: E402
 
 from torchkm import sigest  # noqa: E402
 from torchkm.cvksvm import cvksvm  # noqa: E402
-from torchkm.experimental import SpectralSVMPath, hinge_duality_gap  # noqa: E402
+from torchkm.experimental import (  # noqa: E402
+    RBFKernelOperator,
+    SpectralSVMPath,
+    hinge_duality_gap,
+)
 from torchkm.functions import kernelMult, rbf_kernel  # noqa: E402
 
 
@@ -108,8 +118,10 @@ def main():
     ap.add_argument(
         "--solvers",
         nargs="+",
-        choices=["shipped", "full", "truncated"],
+        choices=["shipped", "full", "truncated", "matrix_free"],
         default=["shipped", "full", "truncated"],
+        help="matrix_free: the truncated spectrum on a kernel that is never "
+        "stored; run it alone to measure its memory (no n x n matrix is built)",
     )
     ap.add_argument("--rank", type=int, default=400)
     ap.add_argument("--passes", type=int, default=4)
@@ -137,13 +149,15 @@ def main():
     sig = float(sigest(X))
     y = torch.from_numpy(d["ytr"]).to(dev, dtype)
     Xd = X.to(dev, dtype)
+    # the stored kernel, unless every solver is matrix-free
+    stored = any(s != "matrix_free" for s in args.solvers)
     t = time.perf_counter()
-    K = rbf_kernel(Xd, sig)
+    K = rbf_kernel(Xd, sig) if stored else None
     sync(dev)
     kernel_seconds = time.perf_counter() - t
     Xte = torch.from_numpy(d["Xte"]).to(dev, dtype)
     yte = torch.from_numpy(d["yte"]).to(dev, dtype)
-    unit = K.element_size() * n * n
+    unit = Xd.element_size() * n * n
     if args.grid == "q1":
         lams, kkt = np.logspace(3, -3, args.nlam), 1e-3
     else:
@@ -153,7 +167,8 @@ def main():
         if args.no_cv
         else torch.from_numpy(make_folds(d["ytr"], args.folds, args.seed))
     )
-    lmax = top_eigenvalue(K)
+    # bounds K's top eigenvalue for certifying the shipped solver's path
+    lmax = top_eigenvalue(K) if "shipped" in args.solvers else None
     print(
         f"{d['name']}: n={n} p={d['p']} n_test={d['n_test']} {args.dtype} on {dev}"
         + (f" ({torch.cuda.get_device_name()})" if dev == "cuda" else "")
@@ -164,11 +179,13 @@ def main():
     )
 
     def test_accuracy(alphas, j):
-        # the test kernel in row blocks: never resident during a fit
+        # the test kernel in row blocks of at most 2**28 entries (1 GiB in
+        # float32): never resident during a fit
+        rows = max(1, 2**28 // n)
         f = torch.cat(
             [
-                kernelMult(Xte[i : i + 4096], Xd, sig) @ alphas[1:, j]
-                for i in range(0, len(Xte), 4096)
+                kernelMult(Xte[i : i + rows], Xd, sig) @ alphas[1:, j]
+                for i in range(0, len(Xte), rows)
             ]
         )
         f = f + alphas[0, j]
@@ -205,16 +222,24 @@ def main():
                             KKTeps=kkt,
                             device=dev,
                             dtype=dtype,
+                            # factorize K in place and rebuild it, as the
+                            # estimators do (one n x n copy less at the peak)
+                            rebuild_kmat=lambda: rbf_kernel(Xd, sig),
                         )
                         with contextlib.redirect_stdout(io.StringIO()):
                             m.fit()
+                        K = m.Kmat  # the rebuilt kernel: K's old storage holds U
                     else:
                         m = SpectralSVMPath(
-                            K,
+                            (
+                                RBFKernelOperator(Xd, sig)
+                                if solver == "matrix_free"
+                                else K
+                            ),
                             y,
                             lams,
                             foldid,
-                            spectrum=solver,
+                            spectrum="full" if solver == "full" else "truncated",
                             rank=args.rank,
                             passes=args.passes,
                             gap_tol=gap_tol,
@@ -230,6 +255,10 @@ def main():
                 row.update(error=msg.split(", when calling")[0].split(". Tried")[0])
                 runs.append(row)
                 print(f"{solver} gap {gap_tol}: {msg}", flush=True)
+                if solver == "shipped":  # an in-place attempt may have overwritten K
+                    m = None
+                    del K
+                    K = rbf_kernel(Xd, sig)
                 continue
             peak = mem.result
             row.update(

@@ -13,7 +13,11 @@ from sklearn.datasets import make_classification
 from sklearn.svm import SVC
 
 from torchkm import rbf_kernel, sigest
-from torchkm.experimental import SpectralSVMPath, hinge_duality_gap
+from torchkm.experimental import (
+    RBFKernelOperator,
+    SpectralSVMPath,
+    hinge_duality_gap,
+)
 from torchkm.experimental.spectral_svm import (
     _Counter,
     _TruncatedSpectrum,
@@ -196,3 +200,96 @@ def test_bad_spectrum_is_refused():
     K, y = _problem(n=20)
     with pytest.raises(ValueError):
         SpectralSVMPath(K, y, [0.1], spectrum="nystrom")
+
+
+def test_torchkmsvc_truncated_spectrum_reaches_the_gap():
+    from torchkm.estimators import TorchKMSVC
+
+    X, y01 = make_classification(
+        n_samples=150, n_features=6, n_informative=4, flip_y=0.05, random_state=0
+    )
+    Cs = np.logspace(-2, 1, 4)  # C ascending: lambda from large to small
+    clf = TorchKMSVC(
+        kernel="rbf",
+        rbf_sigma=0.3,
+        Cs=Cs,
+        cv=3,
+        device="cpu",
+        spectrum="truncated",
+        spectrum_rank=30,
+        gap_tol=1e-3,
+        random_state=0,
+        store_path=True,
+    ).fit(X, y01)
+    assert clf.converged_.all()
+    assert clf.cv_mis_.shape == (4,) and clf.best_C_ in Cs
+    assert {"factorization", "path", "cross_validation"} <= set(clf.fit_timing_)
+    assert clf.predict(X).shape == (150,)
+    # every lambda of the path is within the gap of libsvm's optimum
+    K = rbf_kernel(torch.as_tensor(X), 0.3)
+    y = torch.as_tensor(np.where(y01 == 1, 1.0, -1.0))
+    path = clf.alpmat_path_.double()
+    for j, C in enumerate(Cs):
+        lam = 1.0 / (2 * len(y) * C)
+        a, b = _libsvm(K, y, lam)
+        pstar = _primal(K, y, a, b, lam)
+        P = _primal(K, y, path[1:, j], float(path[0, j]), lam)
+        assert pstar - 1e-9 <= P <= pstar + 1e-3 * P
+
+
+@pytest.mark.parametrize("dtype", [torch.float64, torch.float32])
+def test_kernel_operator_matches_the_stored_kernel(dtype):
+    g = torch.Generator().manual_seed(0)
+    X = torch.randn(70, 5, generator=g, dtype=torch.float64).to(dtype)
+    K = rbf_kernel(X, 0.4)
+    op = RBFKernelOperator(X, 0.4, block_bytes=70 * X.element_size() * 16)
+    assert op.block_rows == 16 and op.shape == (70, 70) and op.dtype == dtype
+    B = torch.randn(70, 3, generator=g, dtype=torch.float64).to(dtype)
+    tol = 1e-12 if dtype == torch.float64 else 1e-5
+    torch.testing.assert_close(op @ B, K @ B, rtol=tol, atol=tol)
+    torch.testing.assert_close(op @ B[:, 0], K @ B[:, 0], rtol=tol, atol=tol)
+
+
+def test_matrix_free_path_matches_the_stored_kernel():
+    X, y01 = make_classification(
+        n_samples=120, n_features=6, n_informative=4, flip_y=0.05, random_state=2
+    )
+    Xt = torch.as_tensor(X)
+    y = torch.as_tensor(np.where(y01 == 1, 1.0, -1.0))
+    lams = np.logspace(-0.5, -2.5, 3)
+    fold = torch.arange(120) % 3 + 1
+    kw = dict(spectrum="truncated", rank=30, gap_tol=1e-4)
+    K = rbf_kernel(Xt, 0.3)
+    stored = SpectralSVMPath(K, y, lams, fold, **kw).fit()
+    op = RBFKernelOperator(Xt, 0.3, block_bytes=120 * 8 * 32)  # 32 rows per block
+    free = SpectralSVMPath(op, y, lams, fold, **kw).fit()
+    assert bool(free.converged.all()) and bool(free.fold_converged.all())
+    for j, lam in enumerate(lams):
+        P = [
+            _primal(K, y, m.alphas[1:, j], float(m.alphas[0, j]), lam)
+            for m in (stored, free)
+        ]
+        assert abs(P[0] - P[1]) <= 2e-4 * max(P)
+    assert float((free.cv_error - stored.cv_error).abs().max()) <= 2.0 / 120
+
+
+def test_full_spectrum_needs_the_matrix():
+    X = torch.randn(20, 3, dtype=torch.float64)
+    with pytest.raises(ValueError):
+        SpectralSVMPath(
+            RBFKernelOperator(X, 0.5), torch.ones(20), [0.1], spectrum="full"
+        )
+
+
+def test_truncated_spectrum_option_is_checked():
+    from torchkm.estimators import TorchKMDWD, TorchKMSVC
+
+    X, y = make_classification(n_samples=40, n_features=4, random_state=0)
+    for bad in (
+        TorchKMSVC(spectrum="nystrom", device="cpu"),
+        TorchKMSVC(spectrum="truncated", low_rank=True, device="cpu"),
+        TorchKMSVC(spectrum="truncated", is_exact=1, device="cpu"),
+        TorchKMDWD(spectrum="truncated", device="cpu"),
+    ):
+        with pytest.raises(ValueError):
+            bad.fit(X, y)

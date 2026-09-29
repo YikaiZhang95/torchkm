@@ -55,7 +55,7 @@ Datasets
               data are redrawn for every repeat (seed 52 + repeat); the test set
               is n/10 rows from the same mixture. Any sim_<n>x<p> works
 
-Methods (default: all five; --methods picks a subset)
+Methods (default: all six; --methods picks a subset)
   torchkm     TorchKMSVC, hinge loss: one eigendecomposition of the kernel,
               the whole lambda path and the exact CV formula; is_exact=0 (the
               default), KKTeps from --kkt-eps, dtype from --dtype. "Exceeded maximum delta
@@ -63,7 +63,15 @@ Methods (default: all five; --methods picks a subset)
               unmet after --delta-len smoothing rounds for the i-th lambda of
               the path (small to large): the last iterate is kept and the
               table's note column shows the converged fraction. --delta-len 16
-              gives the solver more rounds
+              gives the solver more rounds. The eigendecomposition overwrites
+              the kernel and the kernel is rebuilt, so the peak is 5 n x n
+              matrices (kernel's storage, cuSOLVER's 4-matrix workspace)
+  torchkm_trunc
+              TorchKMSVC(spectrum="truncated"), experimental: the same kernel,
+              but only its top --trunc-rank eigenpairs, so no full
+              eigendecomposition (peak about 1.2 n x n matrices); every lambda
+              and every fold stops at the certified relative duality gap
+              --gap-tol. --tol, --kkt-eps and --delta-len do not apply
   cuml        cuml.svm.SVC, hinge loss, SMO on the full kernel: one fit per
               (C, fold), 5 x 50 + 1 fits
   falkon      falkon.Falkon, squared loss, M = n centres (every training row,
@@ -152,7 +160,8 @@ DATASETS = [
     "sim_20000x100",
     "sim_20000x1000",
 ]
-METHODS = ["torchkm", "cuml", "falkon", "keops", "eigenpro"]
+METHODS = ["torchkm", "torchkm_trunc", "cuml", "falkon", "keops", "eigenpro"]
+TORCHKM = ("torchkm", "torchkm_trunc")
 
 
 def parse_sim(name: str) -> Optional[tuple]:
@@ -296,7 +305,7 @@ def sweep(fit_predict, data, foldid, grid, dev, args, params, label="lambda"):
 # ---------------------------------------------------------------------------
 
 
-def run_torchkm(data, sig, lams, foldid, dev, args, seed):
+def run_torchkm(data, sig, lams, foldid, dev, args, seed, truncated=False):
     from torchkm.estimators import TorchKMSVC
 
     # The estimator takes C and forms lambda = 1/(2 n C) itself, n = training
@@ -320,6 +329,9 @@ def run_torchkm(data, sig, lams, foldid, dev, args, seed):
         dtype=args.dtype,
         random_state=seed,
         store_path=True,  # the whole-data solution at every lambda, for the objective
+        spectrum="truncated" if truncated else "full",
+        spectrum_rank=args.trunc_rank,
+        gap_tol=args.gap_tol,
     )
     # start-up: CUDA context, cuSOLVER/cuBLAS handles
     torch.linalg.eigh(torch.eye(64, dtype=getattr(torch, args.dtype), device=dev))
@@ -356,17 +368,21 @@ def run_torchkm(data, sig, lams, foldid, dev, args, seed):
         grid_size=len(lams),
         converged_frac=None if conv is None else float(np.mean(conv)),
         params=dict(
+            cell_settings("torchkm_trunc" if truncated else "torchkm", args),
             loss="hinge",
-            solver="eigendecomposition + lambda path + exact CV",
-            is_exact=0,
-            tol=args.tol,
-            max_iter=args.max_iter,
-            KKTeps=args.kkt_eps,
-            delta_len=args.delta_len,
+            solver=(
+                "top eigenpairs + lambda path + CV fits, each at a certified gap"
+                if truncated
+                else "eigendecomposition + lambda path + exact CV"
+            ),
             C="1/(2 n lambda), n = training rows",
-            dtype=args.dtype,
         ),
     )
+
+
+def run_torchkm_trunc(data, sig, lams, foldid, dev, args, seed):
+    """TorchKMSVC(spectrum="truncated"): the same kernel, no full eigendecomposition."""
+    return run_torchkm(data, sig, lams, foldid, dev, args, seed, truncated=True)
 
 
 def run_cuml(data, sig, lams, foldid, dev, args, seed):
@@ -596,6 +612,7 @@ def run_eigenpro(data, sig, lams, foldid, dev, args, seed):  # lams unused: epoc
 
 RUN = dict(
     torchkm=run_torchkm,
+    torchkm_trunc=run_torchkm_trunc,
     cuml=run_cuml,
     falkon=run_falkon,
     keops=run_keops,
@@ -639,11 +656,14 @@ def cell_settings(method: str, args: argparse.Namespace) -> Dict[str, Any]:
     """The solver settings a method's result depends on, as stored in its record."""
     if method == "torchkm":
         own = dict(
+            is_exact=0,
             tol=args.tol,
             max_iter=args.max_iter,
             KKTeps=args.kkt_eps,
             delta_len=args.delta_len,
         )
+    elif method == "torchkm_trunc":
+        own = dict(spectrum_rank=args.trunc_rank, gap_tol=args.gap_tol)
     elif method == "cuml":
         own = dict(cache_size_mb=args.svc_cache_mb)
     elif method == "falkon":
@@ -660,7 +680,7 @@ def reusable(rec: Dict[str, Any], args: argparse.Namespace) -> bool:
     if rec.get("status") not in ("ok", "capped"):
         return False
     recorded = {"objective_path", "time_profile", "fit_profile"}
-    if rec["method"] == "torchkm" and not recorded <= set(rec):
+    if rec["method"] in TORCHKM and not recorded <= set(rec):
         return False  # computed before the objective and profile were recorded
     if rec["method"] == "cuml" and "objective" not in rec:
         return False
@@ -679,7 +699,7 @@ def at_grid_edge(rec: Dict[str, Any], doc: Dict[str, Any]) -> bool:
 def shown_objective(rec: Dict[str, Any], doc: Dict[str, Any]) -> Optional[float]:
     """The SVM objective the table shows: cuML's at its lambda, TorchKM's at the
     lambda cuML selected in the same repeat (read off its path), else its own."""
-    if rec["method"] == "torchkm" and rec.get("objective_path"):
+    if rec["method"] in TORCHKM and rec.get("objective_path"):
         for c in doc["records"]:
             if (
                 c["method"] == "cuml"
@@ -929,6 +949,15 @@ def main() -> None:
     ap.add_argument("--tol", type=float, default=1e-5, help="TorchKM step tolerance")
     ap.add_argument(
         "--max-iter", type=int, default=100_000, help="TorchKM iteration cap"
+    )
+    ap.add_argument(
+        "--trunc-rank", type=int, default=400, help="torchkm_trunc: eigenpairs kept"
+    )
+    ap.add_argument(
+        "--gap-tol",
+        type=float,
+        default=1e-3,
+        help="torchkm_trunc: certified relative duality gap per lambda and fold",
     )
     ap.add_argument(
         "--svc-cache-mb", type=float, default=2000, help="cuML kernel cache"

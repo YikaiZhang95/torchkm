@@ -100,6 +100,14 @@ class cvksvm:
         smoothing round in float32 can end at the precision floor rather than
         at ``eps`` (see ``__init__``). ``is_exact=1`` needs ``torch.float64``.
 
+    rebuild_kmat : callable, optional
+        Returns ``Kmat`` again, with the same values. When given, the
+        eigendecomposition overwrites ``Kmat``'s storage with the eigenvectors
+        instead of factorizing a copy, which lowers the peak by one ``n x n``
+        matrix (from 6 to 5 on the GPU), and ``Kmat`` is rebuilt with it
+        afterwards. The fit is the same. The estimators pass their kernel
+        construction here.
+
     Attributes
     ----------
     self.alpmat : ndarray or tensor
@@ -181,7 +189,9 @@ class cvksvm:
         device=None,
         kkt_scaled=False,
         dtype=torch.float64,
+        rebuild_kmat=None,
     ):
+        self.rebuild_kmat = rebuild_kmat
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = torch.device(device)
@@ -320,7 +330,12 @@ class cvksvm:
         lambda_timing = dict(path=[0.0] * nlam, cross_validation=[0.0] * nlam)
         fold_passes = torch.zeros((nfolds, nlam), dtype=torch.int64, device=self.device)
         t = self._now()
-        eigens, Umat = kernel_eigh(Kmat)
+        # Given rebuild_kmat, the eigenvectors overwrite Kmat's storage (one
+        # n x n copy less at the peak) and Kmat is rebuilt for the rest of the fit.
+        eigens, Umat = kernel_eigh(Kmat, overwrite=self.rebuild_kmat is not None)
+        if self.rebuild_kmat is not None:
+            Kmat = self.rebuild_kmat().to(device=self.device, dtype=self.dtype)
+            self.Kmat = Kmat
         timing["eigendecomposition"] = self._now() - t
         # K is positive semi-definite, so a negative eigenvalue is rounding error.
         eigens.clamp_min_(0.0)

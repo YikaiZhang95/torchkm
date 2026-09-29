@@ -119,6 +119,44 @@ def _check_binary_y(y: np.ndarray) -> Tuple[np.ndarray, Any, Any]:
     return y_pm1, neg_label, pos_label
 
 
+class _TruncatedSVMBackend:
+    """The exact SVM backend's interface over
+    :class:`torchkm.experimental.SpectralSVMPath`, for ``spectrum="truncated"``.
+
+    The kernel is the same; the solver's curvature keeps only the top ``rank``
+    eigenpairs, so there is no full eigendecomposition (peak about 1.2 ``n x n``
+    matrices instead of 5), and every lambda and fold stops at the certified
+    relative duality gap ``gap_tol``.
+    """
+
+    def __init__(self, K, y, ulam, foldid, *, rank, gap_tol, seed):
+        self.ulam = ulam
+        self._problem = (K, y.to(K.dtype), ulam.detach().cpu().tolist(), foldid)
+        self._options = dict(
+            spectrum="truncated", rank=rank, gap_tol=gap_tol, seed=seed
+        )
+
+    def fit(self):
+        from .experimental import SpectralSVMPath
+
+        K, y, lambdas, foldid = self._problem
+        self._problem = None  # hold no reference to the kernel after the fit
+        m = SpectralSVMPath(K, y, lambdas, foldid, **self._options).fit()
+        self.alpmat, self.pred = m.alphas, m.cv_scores
+        self.converged = m.converged & m.fold_converged.all(0)
+        self.gaps, self.fold_gaps = m.gaps, m.fold_gaps
+        self.timing = dict(m.timing)
+        self.npass = torch.tensor(m.path_iterations)
+        self.cvnpass = torch.tensor(m.cv_iterations)
+        return self
+
+    @staticmethod
+    def cv(pred, y):
+        """Misclassification rate of the held-out scores per lambda, as cvksvm."""
+        pred_label = torch.where(pred > 0, 1, -1).to(device="cpu")
+        return (pred_label != y[:, None]).float().mean(dim=0)
+
+
 class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
     """
     Common sklearn wrapper for your torchkm large-margin *binary* classifiers.
@@ -160,6 +198,10 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         low_rank: bool = False,
         num_landmarks: int = 2000,
         nys_k: int = 1000,
+        # truncated spectrum (exact SVM only)
+        spectrum: str = "full",
+        spectrum_rank: int = 400,
+        gap_tol: float = 1e-3,
     ):
         self.kernel = kernel
         self.nC = nC
@@ -193,6 +235,24 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         self.low_rank = low_rank
         self.num_landmarks = num_landmarks
         self.nys_k = nys_k
+
+        self.spectrum = spectrum
+        self.spectrum_rank = spectrum_rank
+        self.gap_tol = gap_tol
+
+    def _check_spectrum(self) -> None:
+        if self.spectrum not in ("full", "truncated"):
+            raise ValueError(
+                f"spectrum must be 'full' or 'truncated', got {self.spectrum!r}."
+            )
+        if self.spectrum == "truncated":
+            if self._BACKEND != "svm" or self.low_rank:
+                raise ValueError(
+                    "spectrum='truncated' is supported by the exact SVM solver only "
+                    "(TorchKMSVC with low_rank=False)."
+                )
+            if self.is_exact != 0:
+                raise ValueError("spectrum='truncated' does not take is_exact=1.")
 
     def _apply_fit_low_rank_options(
         self,
@@ -257,13 +317,17 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             )
         return torch.float32 if self.dtype == "float32" else torch.float64
 
-    def _compute_K_train(self, X_t: torch.Tensor) -> Tuple[torch.Tensor, dict]:
+    def _compute_K_train(
+        self, X_t: torch.Tensor, sigma: Optional[float] = None
+    ) -> Tuple[torch.Tensor, dict]:
         """
         Compute training kernel matrix K(X,X).
         Returns (K_train, kernel_state) where kernel_state holds params needed for test kernel.
+        ``sigma`` rebuilds an RBF kernel with a fitted bandwidth (no new sigest draw).
         """
         if self.kernel == "rbf":
-            sigma = self.rbf_sigma
+            if sigma is None:
+                sigma = self.rbf_sigma
             if sigma is None:
                 sigma = float(sigest(X_t, frac=float(self.sigest_frac)))
             K = rbf_kernel_train(X_t, sigma)
@@ -345,6 +409,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         self.y_fit_original_ = np.asarray(y_np).copy()
         self.n_features_in_ = X_np.shape[1]
         self._validate_low_rank()
+        self._check_spectrum()
         self._work_dtype_ = self._work_dtype()
 
         dev = _pick_device_str(self.device)
@@ -384,6 +449,10 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         self.y_fit_original_ = np.asarray(y_np).copy()
 
         t_kernel = _now(dev)
+        # Given a way to build the kernel again, the exact solvers factorize it in
+        # place (one n x n copy less at the peak) and rebuild it; a precomputed
+        # kernel is the caller's array, so it is never overwritten.
+        rebuild_kmat = None
         if self.low_rank:
             self.X_fit_ = X_np
             self.kernel_state_ = {"low_rank": True}
@@ -400,11 +469,15 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             else:
                 # Build the kernel on the target device: no host-side n x n
                 # copy and no host-to-device transfer of the full matrix.
-                K_train, kernel_state = self._compute_K_train(
-                    X_train_t.to(device=dev, dtype=self._work_dtype_)
-                )
+                X_dev = X_train_t.to(device=dev, dtype=self._work_dtype_)
+                K_train, kernel_state = self._compute_K_train(X_dev)
                 self.X_fit_ = X_np
                 self.kernel_state_ = kernel_state
+
+                def rebuild():  # the same kernel again, with the fitted bandwidth
+                    return self._compute_K_train(X_dev, kernel_state.get("sigma"))[0]
+
+                rebuild_kmat = rebuild
 
             K_train = K_train.to(dev)
         kernel_s = _now(dev) - t_kernel
@@ -418,6 +491,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             nlam=nlam,
             ulam_backend=ulam_backend,
             foldid_backend=foldid_backend,
+            rebuild_kmat=rebuild_kmat,
         )
         backend.fit()
 
@@ -838,6 +912,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         nlam: int,
         ulam_backend: torch.Tensor,
         foldid_backend: torch.Tensor,
+        rebuild_kmat=None,
     ):
         if low_rank:
             backend_cls = {
@@ -870,6 +945,17 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             return backend_cls(**kwargs)
 
         # exact backends
+        if self._BACKEND == "svm" and self.spectrum == "truncated":
+            return _TruncatedSVMBackend(
+                K_train,
+                y_backend,
+                ulam_backend,
+                foldid_backend,
+                rank=int(self.spectrum_rank),
+                gap_tol=float(self.gap_tol),
+                seed=0 if self.random_state is None else int(self.random_state),
+            )
+
         if self._BACKEND == "svm":
             return cvksvm(
                 Kmat=K_train,
@@ -887,6 +973,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 kkt_scaled=bool(self.kkt_scaled),
                 device=dev,
                 dtype=self._work_dtype_,
+                rebuild_kmat=rebuild_kmat,
             )
 
         if self._BACKEND == "dwd":
@@ -902,6 +989,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 gamma=float(self.solver_gamma),
                 KKTeps=float(self.KKTeps),
                 device=dev,
+                rebuild_kmat=rebuild_kmat,
             )
 
         if self._BACKEND == "logit":
@@ -917,6 +1005,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 gamma=float(self.solver_gamma),
                 KKTeps=float(self.KKTeps),
                 device=dev,
+                rebuild_kmat=rebuild_kmat,
             )
 
         raise ValueError(f"Unknown backend {self._BACKEND}")
@@ -1002,6 +1091,20 @@ class TorchKMSVC(_TorchKMBaseBinaryClassifier):
         Number of Nyström landmarks when ``low_rank=True``.
     nys_k : int, default=1000
         Rank used by the Nyström feature map when ``low_rank=True``.
+    spectrum : {"full", "truncated"}, default="full"
+        The exact-mode solver. ``"full"`` eigendecomposes the kernel matrix
+        (:class:`torchkm.cvksvm.cvksvm`). ``"truncated"`` (experimental) keeps
+        the exact kernel but only its top ``spectrum_rank`` eigenpairs, and
+        stops every lambda and fold at the certified relative duality gap
+        ``gap_tol`` (:class:`torchkm.experimental.SpectralSVMPath`). Its peak
+        memory is about 1.2 ``n x n`` matrices instead of 5, and it is not
+        bound by the GPU eigensolver's size limit. ``tol``, ``max_iter``,
+        ``KKTeps``, ``delta_len`` and ``kkt_scaled`` do not apply to it.
+    spectrum_rank : int, default=400
+        Eigenpairs kept by ``spectrum="truncated"``.
+    gap_tol : float, default=1e-3
+        Certified relative duality gap at which ``spectrum="truncated"`` stops
+        each lambda and each fold.
 
     Attributes
     ----------
@@ -1232,9 +1335,12 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
             if hasattr(self, attr):
                 delattr(self, attr)
 
-    def _compute_K_train(self, X_t: torch.Tensor) -> Tuple[torch.Tensor, dict]:
+    def _compute_K_train(
+        self, X_t: torch.Tensor, sigma: Optional[float] = None
+    ) -> Tuple[torch.Tensor, dict]:
         if self.kernel == "rbf":
-            sigma = self.rbf_sigma
+            if sigma is None:
+                sigma = self.rbf_sigma
             if sigma is None:
                 sigma = float(sigest(X_t, frac=float(self.sigest_frac)))
             return rbf_kernel_train(X_t, sigma), {"sigma": sigma}
@@ -1282,6 +1388,7 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
         ulam_backend: torch.Tensor,
         foldid_backend: torch.Tensor,
         device: str,
+        rebuild_kmat=None,
     ):
         if self.low_rank:
             return cvknyqr(
@@ -1327,6 +1434,7 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
             KKTeps2=float(self.KKTeps2),
             kkt_scaled=bool(self.kkt_scaled),
             device=device,
+            rebuild_kmat=rebuild_kmat,
         )
 
     def fit(
@@ -1403,6 +1511,7 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
         foldid_backend = foldid_t.to(dev)
         y_backend = y_train_t.to(dev)
 
+        rebuild_kmat = None  # see the classifier path
         if self.low_rank:
             K_train = None
             self.X_fit_ = X_np
@@ -1417,9 +1526,16 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
             self.kernel_state_ = {}
         else:
             # Build the kernel on the target device (see the classifier path).
-            K_train, kernel_state = self._compute_K_train(X_train_t.to(dev))
+            X_dev = X_train_t.to(dev)
+            K_train, kernel_state = self._compute_K_train(X_dev)
             self.X_fit_ = X_np
             self.kernel_state_ = kernel_state
+
+            def rebuild():  # the same kernel again, with the fitted bandwidth
+                return self._compute_K_train(X_dev, kernel_state.get("sigma"))[0]
+
+            rebuild_kmat = rebuild
+
         if K_train is not None:
             K_train = K_train.to(dev)
 
@@ -1431,6 +1547,7 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
             ulam_backend=ulam_backend,
             foldid_backend=foldid_backend,
             device=dev,
+            rebuild_kmat=rebuild_kmat,
         )
         backend.fit()
 

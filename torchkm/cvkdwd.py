@@ -57,6 +57,13 @@ class cvkdwd:
     device : {'cuda', 'cpu'}, default='cuda'
         Device to perform computations on. Default is GPU ('cuda') for improved performance.
 
+    rebuild_kmat : callable, optional
+        Returns ``Kmat`` again, with the same values. When given, the
+        eigendecomposition overwrites ``Kmat``'s storage with the eigenvectors
+        instead of factorizing a copy, which lowers the peak by one ``n x n``
+        matrix, and ``Kmat`` is rebuilt with it afterwards. The fit is the same.
+        The estimators pass their kernel construction here.
+
     Attributes
     ----------
     self.alpmat : ndarray or tensor
@@ -133,8 +140,10 @@ class cvkdwd:
         KKTeps=1e-3,
         KKTeps2=1e-3,
         device="cuda",
+        rebuild_kmat=None,
     ):
         self.device = device
+        self.rebuild_kmat = rebuild_kmat
         self.nobs = Kmat.shape[0]
 
         # --- Check Kmat ---
@@ -233,7 +242,12 @@ class cvkdwd:
 
         # Kinv = torch.linalg.inv(Kmat)
 
-        eigens, Umat = kernel_eigh(Kmat)
+        # Given rebuild_kmat, the eigenvectors overwrite Kmat's storage (one
+        # n x n copy less at the peak) and Kmat is rebuilt for the rest of the fit.
+        eigens, Umat = kernel_eigh(Kmat, overwrite=self.rebuild_kmat is not None)
+        if self.rebuild_kmat is not None:
+            Kmat = self.rebuild_kmat().double().to(self.device)
+            self.Kmat = Kmat
         eigens = eigens.double().to(self.device)
         Umat = Umat.double().to(self.device)
         Kmat = Kmat.double().to(self.device)

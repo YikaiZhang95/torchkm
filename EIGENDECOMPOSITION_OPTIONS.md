@@ -24,12 +24,12 @@ matrix: 4n² bytes in float32, 8n² in float64.
   - The truncated spectrum calls no dense eigensolver on the n × n matrix,
     so only memory limits it.
 - **Keeping a full eigendecomposition, the cheapest cut is 6 → 5 units.**
-  Factorize in place and rebuild K afterwards. This was measured at the same
-  speed and has since been reverted. MAGMA or host LAPACK get the peak down to
-  2 units, but run 4× and 12× slower (measured). We know of no full dense
-  eigensolver that gives both lower memory and cuSOLVER's speed.
+  Factorize in place and rebuild K afterwards: the same speed and bitwise
+  identical fits. The estimators now do this. MAGMA or host LAPACK get the
+  peak down to 2 units, but run 4× and 12× slower (measured). We know of no
+  full dense eigensolver that gives both lower memory and cuSOLVER's speed.
   - Under the size ceiling, the cut no longer raises the largest n in
-    float32, and in float64 only from 30,600 to about 32,800.
+    float32; in float64 it raises it from about 30,600 to the ceiling.
 - **Proposal: don't compute the full eigendecomposition.**
   - The solver only needs a curvature matrix K̃ ⪰ K for which (K̃ + cI)⁻¹ is
     cheap for every c.
@@ -160,7 +160,7 @@ matrix. The proposal in section 4 builds on both.
 
 | option | peak | resident | speed | status | effort |
 |---|---:|---:|---|---|---|
-| a. In place: hand eigh K's own storage, rebuild K afterwards (one GEMM, 0.04 s at n = 20k) | 5 | 2 | same | measured, fits bitwise identical (commit c4c0cac; reverted in b9ca1a3) | small: restore |
+| a. In place: hand eigh K's own storage, rebuild K afterwards (one GEMM, 0.04 s at n = 20k) | 5 | 2 | same | restored: the estimators pass `rebuild_kmat` to the six exact solvers; fits bitwise identical | done |
 | b. Spectral coordinates: drop K after eigh and keep β = Uᵀα. One pass U[β, e∘β] gives α and Kα; a second gives Uᵀγ | 5–6 | 1 | 2 unit reads per iteration instead of 3, about 1.5× faster path and CV (*projected*) | *untested* | moderate |
 | c. Call cuSOLVER directly: in place with an explicit workspace, or syevdx / syevj | 5 with syevd | 1–2 | same (syevj slower) | syevd's workspace is one 4.01-unit allocation (probe A), so an in-place syevd call equals (a); syevdx / syevj *untested* | moderate |
 | d. MAGMA one-stage or host LAPACK | 2 | 2 | 4× / 12× slower | measured | in git history |
@@ -569,18 +569,20 @@ All three solve a different problem, so the results are no longer exact.
 
 ## 6. Recommendation
 
-1. **Restore the in-place factorization (3a).** It takes one unit off the
-   peak at no cost in speed and has already been tested. Under cuSOLVER's
-   size limit it no longer raises the largest float32 n on a 48 GB card.
+1. **The in-place factorization (3a): done.** The estimators factorize the
+   kernel in place and rebuild it, which takes one unit off the peak at no
+   cost in speed. Under cuSOLVER's size limit it no longer raises the largest
+   float32 n on a 48 GB card.
 2. **The truncated majorizer, prototyped** as
    `torchkm.experimental.SpectralSVMPath` (section 7.2).
    - On the L40S (section 7.3) it matches the full spectrum at the same
      certified gap, 2.8× faster and with a fifth of the memory. It is also
      the only route past cuSOLVER's size limit.
+   - Now an opt-in: `TorchKMSVC(spectrum="truncated")`, with the full
+     eigendecomposition as the default. The Q1 runner reports it as the
+     `torchkm_trunc` row.
    - Next: the same comparison on real data (the Q1 data sets).
-   - If it holds up there, give `cvksvm` an opt-in, e.g. `spectrum_rank=r`,
-     with today's full eigendecomposition as the default below the size
-     limit.
+   - With a matrix-free kernel (section 7.4) it needs no n × n matrix at all.
 3. **If the full eigendecomposition stays the default, add spectral
    coordinates (3b)** for faster iterations.
 
@@ -873,6 +875,37 @@ Each log ends with one table:
 
 The hard grid is optional (`--grid hard`). For p = 100 it is the separable
 stress case above.
+
+### 7.4 Below one copy: a matrix-free kernel (prototype)
+
+With the truncated spectrum the solver only needs products K B, so K need
+not be stored. `torchkm.experimental.RBFKernelOperator(X, sigma)` computes
+K B in blocks of rows (1 GiB each by default) with `rbf_kernel`'s arithmetic,
+and frees each block after use. `SpectralSVMPath` takes it in place of K.
+
+- **Memory.** What remains is X, a few n × (r + 20) blocks (V, K V and the
+  subspace-iteration blocks), one kernel block, and the n × L path and CV
+  scores. In float32 with r = 400 that is about 2.5 GB at n = 100,000 and
+  3.5 GB at n = 200,000 (*projected*), against 37 and 149 GiB for K alone.
+- **Time.** Every product recomputes the kernel: about 2 n² p flops for the
+  distances and n² exponentials, where a stored K is read once. At p = 100
+  one recomputed product should cost about as much as one read of a stored K
+  (*projected*). The cost grows with p.
+- **Same iterates.** On CPU (n = 400, float32) the matrix-free and
+  stored-kernel runs took the same 878 products, certified the same gaps and
+  selected the same λ. The tests check products and fitted paths against the
+  stored kernel.
+
+Run alone, `matched_accuracy.py --solvers matrix_free` builds no n × n matrix
+at all. n = 60,000 compares with the stored truncated run above (81.7 s,
+16.6 GiB); 100,000 and 200,000 are beyond any stored kernel on the card:
+
+```bash
+for n in 60000 100000 200000; do
+  python benchmarks/matched_accuracy.py --n $n --solvers matrix_free --gaps 1e-3 \
+    --out $RESULTS/matched_${n}_mf.json > $RESULTS/matched_${n}_mf.log 2>&1
+done
+```
 
 ## 8. Questions for the reviewer
 

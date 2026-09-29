@@ -54,7 +54,15 @@ All notable changes to TorchKM are documented in this file.
   - Steps are checked and fall back to a scalar majorizer when needed.
   - Iterations use FISTA momentum with restart.
   - `benchmarks/matched_accuracy.py` compares the two spectra at equal
-    certified gaps on the GPU.
+    certified gaps on the GPU, on Table 2's simulation or a Q1 data set.
+  - `TorchKMSVC(spectrum="truncated", spectrum_rank=400, gap_tol=1e-3)` runs
+    it in place of `cvksvm`: the exact kernel, a peak of about 1.2 n x n
+    matrices instead of 5, and no eigensolver size limit.
+    `benchmarks/q1_full_kernel.py` reports it as the `torchkm_trunc` row.
+  - `torchkm.experimental.RBFKernelOperator` is a matrix-free RBF kernel:
+    `K @ B` recomputes K in blocks of rows and K is never stored, so with the
+    truncated spectrum memory grows with n times the rank instead of n^2.
+    `matched_accuracy.py --solvers matrix_free` measures it.
   - Not part of the stable API.
 - `dtype` on the exact SVM solver (`cvksvm(dtype=torch.float32)`,
   `TorchKMSVC(dtype="float32")`): the kernel, its eigendecomposition and the
@@ -125,13 +133,19 @@ All notable changes to TorchKM are documented in this file.
 ### Changed
 - `max_exact_n` stops at `EXACT_MODE_MAX_N_CUDA` by default; `size_limit=None`
   counts memory only.
-- `EXACT_MODE_COPIES` is 6, the GPU measurement, instead of the CPU sweep's 4.
-  An L40S fit peaks at 6.01 copies of the n x n matrix: the kernel, cuSOLVER's
-  copy of it and a 4.01-copy workspace. Exact-mode memory estimates,
-  `max_exact_n` and the out-of-memory message had overstated the largest n on
-  a GPU by about 1.2x. The 'Operating envelope' table is recomputed: a 48 GB
-  card now reads about 30,000 in float64 (36,700 before) and 32,768 in
-  float32, where the size limit binds.
+- Exact mode factorizes the kernel in place. `torch.linalg.eigh` worked on a
+  copy of the kernel; the estimators now let it overwrite the kernel's own
+  storage with the eigenvectors and rebuild the kernel afterwards (one kernel
+  evaluation), which takes one n x n matrix off the peak at the same speed.
+  Fits are bitwise identical. The six exact solvers take `rebuild_kmat` for
+  this; a precomputed kernel is the caller's array and is still factorized as
+  a copy.
+- `EXACT_MODE_COPIES` is 5, from the GPU, instead of the CPU sweep's 4. On an
+  L40S cuSOLVER's eigendecomposition takes a 4.01-copy workspace, so a fit
+  peaks at 5.01 copies of the n x n matrix with the kernel factorized in place
+  (6.01, measured, with the copy). The 'Operating envelope' table is
+  recomputed: a 48 GB card now stops at 32,768, the size limit, in float64
+  and float32 alike.
 - Fewer waits for the GPU. The solvers' intercept search (Brent's method, one
   copy per solver) kept its state in device tensors, so each of its steps
   launched several tiny kernels and made the CPU wait for the GPU several
