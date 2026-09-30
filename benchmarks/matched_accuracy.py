@@ -38,12 +38,14 @@ torchkm.experimental.RBFKernelOperator: K is never stored, and every product
 recomputes it in blocks of rows. Alone, it builds no n x n matrix at all, so
 its peak memory is its own.
 
---solvers largen largen_fista run the external large-n proposal (the folder
+--solvers largen largen_wide run the external large-n proposal (the folder
 torchkm_final_product, given by --largen-path) on the same stored float32
-kernel, with the shipped solver's KKT tolerance. Like the shipped solver, it
-stops at its own tolerances, so its path gaps are certified afterwards.
+kernel, with the shipped solver's KKT tolerance: largen as delivered (one C
+value at a time), largen_wide with its wide scheduler (blocks of 16 C values
+and their folds share each pass over K). Like the shipped solver, it stops at
+its own tolerances, so its path gaps are certified afterwards.
   python benchmarks/matched_accuracy.py --n 20000 --gaps 1e-3 \
-      --solvers shipped truncated largen largen_fista \
+      --solvers shipped truncated largen largen_wide \
       --largen-path ~/torchkm_final_product
 
 The lambda grid follows Q1. --grid q1 (the default for the simulation, as in
@@ -133,12 +135,12 @@ def main():
             "truncated",
             "matrix_free",
             "largen",
-            "largen_fista",
+            "largen_wide",
         ],
         default=["shipped", "full", "truncated"],
         help="matrix_free: the truncated spectrum on a kernel that is never "
         "stored; run it alone to measure its memory (no n x n matrix is built). "
-        "largen, largen_fista: the external large-n proposal (--largen-path), "
+        "largen, largen_wide: the external large-n proposal (--largen-path), "
         "with the shipped solver's KKT tolerance",
     )
     ap.add_argument(
@@ -265,7 +267,9 @@ def main():
                             maxit=200_000,  # the proposal's pilot setting
                             KKTeps=kkt,
                             KKTeps2=kkt,
-                            acceleration="fista" if solver == "largen_fista" else "mul",
+                            scheduler=(
+                                "wide" if solver == "largen_wide" else "dependency"
+                            ),
                         )
                         with warnings.catch_warnings():  # its incomplete-path warning
                             warnings.simplefilter("ignore")
