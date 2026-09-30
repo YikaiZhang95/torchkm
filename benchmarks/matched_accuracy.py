@@ -38,6 +38,14 @@ torchkm.experimental.RBFKernelOperator: K is never stored, and every product
 recomputes it in blocks of rows. Alone, it builds no n x n matrix at all, so
 its peak memory is its own.
 
+--solvers largen largen_fista run the external large-n proposal (the folder
+torchkm_final_product, given by --largen-path) on the same stored float32
+kernel, with the shipped solver's KKT tolerance. Like the shipped solver, it
+stops at its own tolerances, so its path gaps are certified afterwards.
+  python benchmarks/matched_accuracy.py --n 20000 --gaps 1e-3 \
+      --solvers shipped truncated largen largen_fista \
+      --largen-path ~/torchkm_final_product
+
 The lambda grid follows Q1. --grid q1 (the default for the simulation, as in
 Q1_sim) runs over 1e3 .. 1e-3, with the shipped solver at KKTeps 1e-3.
 --grid hard (the default for a real data set, as in Q1_real) runs over
@@ -54,6 +62,7 @@ import json
 import os
 import sys
 import time
+import warnings
 
 import numpy as np
 import torch
@@ -118,16 +127,36 @@ def main():
     ap.add_argument(
         "--solvers",
         nargs="+",
-        choices=["shipped", "full", "truncated", "matrix_free"],
+        choices=[
+            "shipped",
+            "full",
+            "truncated",
+            "matrix_free",
+            "largen",
+            "largen_fista",
+        ],
         default=["shipped", "full", "truncated"],
         help="matrix_free: the truncated spectrum on a kernel that is never "
-        "stored; run it alone to measure its memory (no n x n matrix is built)",
+        "stored; run it alone to measure its memory (no n x n matrix is built). "
+        "largen, largen_fista: the external large-n proposal (--largen-path), "
+        "with the shipped solver's KKT tolerance",
+    )
+    ap.add_argument(
+        "--largen-path",
+        default=None,
+        help="folder of the large-n proposal (torchkm_final_product)",
     )
     ap.add_argument("--rank", type=int, default=400)
     ap.add_argument("--passes", type=int, default=4)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--out", default=None, help="write the results as JSON here")
     args = ap.parse_args()
+    largen = [s for s in args.solvers if s.startswith("largen")]
+    if largen and (args.largen_path is None or args.no_cv):
+        ap.error("--solvers largen needs --largen-path and cross-validation")
+    if largen:
+        sys.path.insert(0, args.largen_path)
+        from largen import DenseKernel, LargeNSVM, SolverOptions
     dev = (
         "cuda"
         if args.device.startswith("cuda") and torch.cuda.is_available()
@@ -167,8 +196,9 @@ def main():
         if args.no_cv
         else torch.from_numpy(make_folds(d["ytr"], args.folds, args.seed))
     )
-    # bounds K's top eigenvalue for certifying the shipped solver's path
-    lmax = top_eigenvalue(K) if "shipped" in args.solvers else None
+    # bounds K's top eigenvalue, for certifying the paths of the solvers that
+    # stop at their own tolerances
+    lmax = top_eigenvalue(K) if "shipped" in args.solvers or largen else None
     print(
         f"{d['name']}: n={n} p={d['p']} n_test={d['n_test']} {args.dtype} on {dev}"
         + (f" ({torch.cuda.get_device_name()})" if dev == "cuda" else "")
@@ -198,7 +228,8 @@ def main():
         print("--no-cv: the shipped solver is left out (it always runs its CV)")
     runs = []
     for solver in solvers:
-        for gap_tol in [None] if solver == "shipped" else args.gaps:
+        uncertified = solver == "shipped" or solver.startswith("largen")
+        for gap_tol in [None] if uncertified else args.gaps:
             free(dev)
             row = dict(solver=solver, gap_tol=gap_tol)
             try:
@@ -229,6 +260,22 @@ def main():
                         with contextlib.redirect_stdout(io.StringIO()):
                             m.fit()
                         K = m.Kmat  # the rebuilt kernel: K's old storage holds U
+                    elif solver.startswith("largen"):
+                        opts = SolverOptions(
+                            maxit=200_000,  # the proposal's pilot setting
+                            KKTeps=kkt,
+                            KKTeps2=kkt,
+                            acceleration="fista" if solver == "largen_fista" else "mul",
+                        )
+                        with warnings.catch_warnings():  # its incomplete-path warning
+                            warnings.simplefilter("ignore")
+                            model = LargeNSVM(
+                                DenseKernel(K, take_ownership=True), options=opts
+                            )
+                            m = model.fit(
+                                y, torch.from_numpy(1.0 / (2.0 * n * lams)), foldid
+                            )
+                        del model
                     else:
                         m = SpectralSVMPath(
                             (
@@ -305,6 +352,33 @@ def main():
                     path_gap_max=max(gaps),
                     path_gap_median=float(np.median(gaps)),
                     phases=getattr(m, "timing", None),
+                )
+            elif solver.startswith("largen"):
+                alphas = m.alpmat.to(dev, dtype)
+                # NaN marks a lambda whose folds did not all finish
+                cverr = np.nan_to_num(m.cv_error.numpy(), nan=np.inf)
+                gaps = [
+                    float(
+                        hinge_duality_gap(
+                            K,
+                            y,
+                            alphas[1:, j],
+                            float(alphas[0, j]),
+                            float(lam),
+                            refine=50,
+                            lmax=lmax,
+                        )[0]
+                    )
+                    for j, lam in enumerate(lams)
+                ]
+                kc = m.kernel_counts
+                row.update(
+                    reads=dict(total=kc["passes"]),
+                    average_width=kc["average_logical_width"],
+                    iterations=int(m.npass.sum() + m.cvnpass.sum()),
+                    complete=bool(m.complete),
+                    path_gap_max=max(gaps),
+                    path_gap_median=float(np.median(gaps)),
                 )
             else:
                 alphas = m.alphas
