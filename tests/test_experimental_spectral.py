@@ -293,3 +293,157 @@ def test_truncated_spectrum_option_is_checked():
     ):
         with pytest.raises(ValueError):
             bad.fit(X, y)
+
+
+@pytest.mark.parametrize("dtype", [torch.float64, torch.float32])
+def test_wide_blocks_certify_the_same_problems(dtype):
+    # whole-data fits and folds of several lambdas share each product with K;
+    # every fit is still certified, so objectives agree within the tolerance
+    K, y = _problem(n=300, dtype=dtype)
+    lams = np.logspace(-2, -4.5, 12)
+    foldid = torch.as_tensor(np.arange(300) % 5 + 1)
+    serial = SpectralSVMPath(K, y, lams, foldid, rank=40, block=1).fit()
+    wide = SpectralSVMPath(K, y, lams, foldid, rank=40, block=4).fit()
+    assert bool(wide.converged.all()) and bool(wide.fold_converged.all())
+    assert float(np.nanmax(wide.gaps)) <= 1e-3
+    assert float(np.nanmax(wide.fold_gaps)) <= 1e-3
+    assert wide.count.reads < serial.count.reads
+    for j, lam in enumerate(lams):
+        P_w = _primal(K, y, wide.alphas[1:, j], float(wide.alphas[0, j]), lam)
+        P_s = _primal(K, y, serial.alphas[1:, j], float(serial.alphas[0, j]), lam)
+        assert abs(P_w - P_s) <= 2e-3 * max(P_w, P_s)
+    assert wide.cv_scores.shape == serial.cv_scores.shape
+    # in float32 the serial folds can stop uncertified at the smallest lambda
+    # (fit_cap); compare CV errors where both are certified
+    both = serial.fold_converged.all(0) & wide.fold_converged.all(0)
+    assert int(both.sum()) >= len(lams) - 1
+    diff = (wide.cv_error - serial.cv_error).abs()[both]
+    assert float(diff.max()) <= 0.05
+
+
+def test_block_must_be_positive():
+    K, y = _problem(n=20)
+    with pytest.raises(ValueError):
+        SpectralSVMPath(K, y, [1e-2], block=0)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="fused path needs CUDA")
+def test_fused_kernel_operator_matches_the_stored_kernel():
+    g = torch.Generator().manual_seed(0)
+    X = torch.randn(300, 7, generator=g, dtype=torch.float64)
+    K = rbf_kernel(X, 0.4)
+    op = RBFKernelOperator(X.float().cuda(), 0.4, fused=True)
+    for w in (1, 3, 130):  # 130 > FUSED_MAX_COLUMNS: two fused chunks
+        B = torch.randn(300, w, generator=g, dtype=torch.float64)
+        got = (op @ B.float().cuda()).double().cpu()
+        torch.testing.assert_close(got, K @ B, rtol=1e-4, atol=1e-4)
+    v = torch.randn(300, generator=g, dtype=torch.float64)
+    torch.testing.assert_close(
+        (op @ v.float().cuda()).double().cpu(), K @ v, rtol=1e-4, atol=1e-4
+    )
+
+
+def test_fused_kernel_operator_needs_cuda_float32():
+    with pytest.raises(ValueError):
+        RBFKernelOperator(torch.randn(10, 3, dtype=torch.float64), 0.5, fused=True)
+
+
+def test_row_blocked_sums_give_the_same_fit(monkeypatch):
+    # the float64 objective sums run in row blocks at large n; force blocks
+    # of a few rows and compare with the unblocked fit
+    import torchkm.experimental.spectral_svm as ss
+
+    K, y = _problem(n=200)
+    lams = np.logspace(-2, -3.5, 4)
+    foldid = torch.as_tensor(np.arange(200) % 4 + 1)
+    whole = SpectralSVMPath(K, y, lams, foldid, rank=30, block=2, tile=False).fit()
+    monkeypatch.setattr(ss, "_ROW_BLOCK", 7 * 6)  # 7 rows per block at 6 columns
+    blocked = SpectralSVMPath(K, y, lams, foldid, rank=30, block=2, tile=False).fit()
+    # both certified; blocked float32 sums move the intercept search inside its
+    # flat minimum, so compare objectives, decisions and CV errors, not alpha
+    for j, lam in enumerate(lams):
+        P_b = _primal(K, y, blocked.alphas[1:, j], float(blocked.alphas[0, j]), lam)
+        P_w = _primal(K, y, whole.alphas[1:, j], float(whole.alphas[0, j]), lam)
+        assert abs(P_b - P_w) <= 1e-3 * P_w
+    f_b = K @ blocked.alphas[1:] + blocked.alphas[0]
+    f_w = K @ whole.alphas[1:] + whole.alphas[0]
+    assert float((f_b - f_w).abs().max()) <= 1e-2 * float(f_w.abs().max())
+    assert float((blocked.cv_error - whole.cv_error).abs().max()) <= 2.0 / 200
+
+
+@pytest.mark.parametrize(
+    "fused", [False, pytest.param(True, marks=pytest.mark.skipif(
+        not torch.cuda.is_available(), reason="fused path needs CUDA"))]
+)
+def test_kernel_operator_cross_product(fused):
+    g = torch.Generator().manual_seed(1)
+    X = torch.randn(120, 5, generator=g, dtype=torch.float64)
+    Xq = torch.randn(37, 5, generator=g, dtype=torch.float64)
+    B = torch.randn(120, 3, generator=g, dtype=torch.float64)
+    ref = torch.exp(-2 * 0.3 * torch.cdist(Xq, X) ** 2) @ B
+    dev, dt = ("cuda", torch.float32) if fused else ("cpu", torch.float64)
+    op = RBFKernelOperator(X.to(dev, dt), 0.3, block_bytes=120 * 8 * 10, fused=fused)
+    got = op.cross(Xq.to(dev, dt), B.to(dev, dt)).double().cpu()
+    tol = 1e-4 if fused else 1e-10
+    torch.testing.assert_close(got, ref, rtol=tol, atol=tol)
+    torch.testing.assert_close(
+        op.cross(Xq.to(dev, dt), B[:, 0].to(dev, dt)).double().cpu(), ref[:, 0],
+        rtol=tol, atol=tol,
+    )
+
+
+@pytest.mark.parametrize("dtype", [torch.float64, torch.float32])
+def test_tiled_wide_fit_matches_the_dense_one(monkeypatch, dtype):
+    # row-tiled steps and certificate (labels never stored) against the dense
+    # path; tiny tiles so that every quantity spans several tiles. Both stop at
+    # certified gaps, and rounding moves alpha along near-null directions of K,
+    # so the comparison is on what is identified: objective, gaps, decisions
+    import torchkm.experimental.spectral_svm as ss
+
+    K, y = _problem(n=240, dtype=dtype)
+    lams = np.logspace(-2, -3.5, 6)
+    foldid = torch.as_tensor(np.arange(240) % 4 + 1)
+    dense = SpectralSVMPath(K, y, lams, foldid, rank=30, block=3, tile=False).fit()
+    monkeypatch.setattr(ss, "_ROW_BLOCK", 15 * 37)  # 37 rows per tile at 15 columns
+    tiled = SpectralSVMPath(K, y, lams, foldid, rank=30, block=3, tile=True).fit()
+    assert bool(tiled.converged.all()) and bool(tiled.fold_converged.all())
+    assert float(tiled.gaps.max()) <= 1e-3 and float(np.nanmax(tiled.fold_gaps)) <= 1e-3
+    for j, lam in enumerate(lams):
+        P_t = _primal(K, y, tiled.alphas[1:, j], float(tiled.alphas[0, j]), lam)
+        P_d = _primal(K, y, dense.alphas[1:, j], float(dense.alphas[0, j]), lam)
+        assert abs(P_t - P_d) <= 1e-3 * P_d
+    f_t = K.double() @ tiled.alphas[1:].double() + tiled.alphas[0].double()
+    f_d = K.double() @ dense.alphas[1:].double() + dense.alphas[0].double()
+    assert float((f_t - f_d).abs().max()) <= 1e-2 * float(f_d.abs().max())
+    assert float((tiled.cv_error - dense.cv_error).abs().max()) <= 2.0 / 240
+
+
+def test_tiled_step_and_certificate_match_the_dense_ones(monkeypatch):
+    # one step from the same state, and the certificate (with refinement) of
+    # the same point: equal to rounding
+    import torchkm.experimental.spectral_svm as ss
+
+    K, y = _problem(n=240)
+    foldid = torch.as_tensor(np.arange(240) % 4 + 1)
+    m = SpectralSVMPath(K, y, [1e-2, 5e-3], foldid, rank=30, block=2, tile=False).fit()
+    lab = ss._Labels(y, torch.as_tensor(np.arange(240) % 4), torch.arange(-1, 4).repeat(2))
+    Yd = lab.rows(0, 240)
+    lam = torch.tensor([1e-2] * 5 + [5e-3] * 5, dtype=torch.float64)
+    A0 = torch.cat([m.alphas[1:, :1].expand(-1, 5), m.alphas[1:, 1:].expand(-1, 5)], 1)
+    b0 = torch.cat([m.alphas[0, :1].expand(5), m.alphas[0, 1:].expand(5)])
+    A0 = A0 + 1e-3 * torch.randn(A0.shape, generator=torch.Generator().manual_seed(0), dtype=A0.dtype)
+    monkeypatch.setattr(ss, "_ROW_BLOCK", 10 * 37)
+    zero = torch.zeros(10, dtype=torch.float64)
+    A, b, KA = A0.clone(), b0.clone(), K @ A0
+    A2, b2, KA2 = A0.clone(), b0.clone(), K @ A0
+    m._round(Yd, A, b, KA, lam, 0.125, zero, 3)
+    m._round_tiled(lab, A2, b2, KA2, lam, 0.125, zero, 3)
+    torch.testing.assert_close(A2, A, rtol=1e-10, atol=1e-12)
+    torch.testing.assert_close(KA2, KA, rtol=1e-10, atol=1e-12)
+    torch.testing.assert_close(b2, b, rtol=1e-10, atol=1e-12)
+    lmax = float(torch.linalg.matrix_norm(K, 2))
+    kw = dict(Ka=K @ A0, delta=1e-3, refine=20, lmax=lmax, target=4e-5)
+    g1, P1, D1 = ss.hinge_duality_gap(K, Yd, A0, b0, lam, **kw)
+    g2, P2, D2 = ss._hinge_duality_gap_tiled(K, lab, A0, b0, lam, **kw)
+    torch.testing.assert_close(g2, g1, rtol=1e-10, atol=1e-12)
+    torch.testing.assert_close(D2, D1, rtol=1e-10, atol=1e-12)

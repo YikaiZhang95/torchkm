@@ -129,11 +129,11 @@ class _TruncatedSVMBackend:
     relative duality gap ``gap_tol``.
     """
 
-    def __init__(self, K, y, ulam, foldid, *, rank, gap_tol, seed):
+    def __init__(self, K, y, ulam, foldid, *, rank, gap_tol, seed, block=1):
         self.ulam = ulam
         self._problem = (K, y.to(K.dtype), ulam.detach().cpu().tolist(), foldid)
         self._options = dict(
-            spectrum="truncated", rank=rank, gap_tol=gap_tol, seed=seed
+            spectrum="truncated", rank=rank, gap_tol=gap_tol, seed=seed, block=block
         )
 
     def fit(self):
@@ -202,6 +202,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         spectrum: str = "full",
         spectrum_rank: int = 400,
         gap_tol: float = 1e-3,
+        spectrum_block: int = 10,
     ):
         self.kernel = kernel
         self.nC = nC
@@ -239,6 +240,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         self.spectrum = spectrum
         self.spectrum_rank = spectrum_rank
         self.gap_tol = gap_tol
+        self.spectrum_block = spectrum_block
 
     def _check_spectrum(self) -> None:
         if self.spectrum not in ("full", "truncated"):
@@ -954,6 +956,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 rank=int(self.spectrum_rank),
                 gap_tol=float(self.gap_tol),
                 seed=0 if self.random_state is None else int(self.random_state),
+                block=int(self.spectrum_block),
             )
 
         if self._BACKEND == "svm":
@@ -1105,6 +1108,11 @@ class TorchKMSVC(_TorchKMBaseBinaryClassifier):
     gap_tol : float, default=1e-3
         Certified relative duality gap at which ``spectrum="truncated"`` stops
         each lambda and each fold.
+    spectrum_block : int, default=10
+        Lambdas that ``spectrum="truncated"`` fits together with all their
+        folds, sharing each product with the kernel matrix (the ``block``
+        option of :class:`torchkm.experimental.SpectralSVMPath`); 1 fits the
+        path serially. Without cross-validation folds the path is serial.
 
     Attributes
     ----------

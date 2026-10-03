@@ -34,6 +34,19 @@ All notable changes to TorchKM are documented in this file.
   `max_iter=100000` takes 7 s instead of 103 s.
 
 ### Added
+- `RBFKernelOperator(fused=True)` (CUDA, float32): each product K B runs in a
+  fused kernel, 128 columns at a time, and never writes a block of K to
+  memory. With a_i = [4 sigma x_i, -2 sigma |x_i|^2, 1] and
+  b_j = [x_j, 1, -2 sigma |x_j|^2], K B = exp(A B') B is attention without the
+  softmax normalization, which PyTorch's memory-efficient attention computes
+  in float32 together with each row's log-sum-exp. On whole covtype.binary a
+  product takes about 2 s instead of 13 s (relative error 4e-5 against
+  float64, 2e-5 for the blocks). `RBFKernelOperator.cross(Xq, B)` gives
+  K(Xq, X) B for predictions, fused or in blocks.
+- `benchmarks/covtype_full_cuml.py`, `covtype_full_trunc.py` and
+  `covtype_full_cv.py`: cuML's SVC and the truncated-spectrum TorchKM on the
+  whole covtype.binary training set, single fits and 10-fold CV over 50
+  lambdas.
 - Exact mode's size limit on the GPU. The exact solvers eigendecompose the
   kernel with cuSOLVER on CUDA, and cuSOLVER refuses n above 32,768 whatever
   the memory: in float32, 32,768 is accepted and 32,769 refused; float64
@@ -131,6 +144,54 @@ All notable changes to TorchKM are documented in this file.
   archived JSON results).
 
 ### Changed
+- `spectrum="truncated"` is 2 to 18 times faster than cuML's SVC on the Q1
+  tuning job (50 lambdas x 10 folds, L40S, float32); before, it ranged from
+  7 times slower (w7a) to 2.8 times faster. Two changes to `SpectralSVMPath`:
+  - Wide scheduling (`block`; the estimators' `spectrum_block`, default 10):
+    the whole-data fit and the 10 folds of `block` consecutive lambdas are one
+    set of columns, so each product with K serves up to 110 fits instead of 1
+    (path) or 10 (folds). A product with K costs about the same for 1 column
+    as for 110, because reading K dominates. Whole-data columns start from the
+    previous block's last whole-data fit, each fold from the same fold's last
+    fit (the `WideScheduler` of the large-n design).
+  - Certification starts at a coarser smoothing level (`bias`, default 4,
+    was 0.5 hard-coded). The old rule waited until the worst-case smoothing
+    bias was half the gap tolerance, which at small lambda meant delta = 8^-4
+    and a shift c = 4 n delta lambda about 10^4 times below the truncated
+    tail, so the steps were tiny. The duality gap is exact, so starting
+    earlier only helps; delta still shrinks when the gap stalls.
+  Every lambda and fold still stops at a certified relative gap of 1e-3; at
+  cuML's selected lambda the objective is within 0.06% of cuML's (lower on
+  w7a and MNIST 3v8). w7a: 234 s to 18 s (cuML 34 s); a9a: 62 s to 8.4 s
+  (cuML 45 s); n = 20,000 simulations: 12 s to 2.5 s (cuML 29 to 59 s). The
+  wider blocks hold about n x 110 more float32 state, so peak memory grew,
+  e.g. a9a 5.9 to 7.2 GB (measured before the memory changes below).
+- `SpectralSVMPath` needs far less GPU memory, with the same arithmetic.
+  Whole covtype.binary (464,809 rows, gamma 32, 50 lambdas x 10 folds, block
+  10, rank 400, matrix-free fused kernel): 32.9 GB to 6.6 GB, 62.3 min both
+  times, the same selected lambda, certified lambdas (28/50) and test
+  accuracy (0.9609); cuML's SVC on the same job: 243.0 min, 4.5 GB, 0.9620.
+  - The certificate scores its candidate dual points one at a time instead
+    of stacking them (n x 5m float64), and keeps labels, masks, alpha and
+    K alpha in their own dtypes.
+  - The steps store the coupling vectors s, K s, v once per distinct lambda
+    (block of them, not block x (folds + 1)), use views while every column is
+    live, select with `torch.where` instead of blending, and free
+    temporaries early. The float64 objective sums and the spectrum's residual
+    norm run in row blocks.
+  - Row tiling (`tile`, on by default when n x block x (folds + 1) exceeds
+    2^24): the label matrix is never stored (`_Labels` builds any rows from y
+    and the fold ids), and each step and certificate sweeps row tiles of
+    about 2^21 elements, rebuilding the elementwise quantities, so only
+    alpha, K alpha, their previous values and the buffers of each product
+    with K are n x m. One step and one certificate match the untiled ones to
+    rounding (tests); whole fits match in objective, gaps, decisions and CV
+    error. Problems below the threshold (all of Q1) take the untiled path.
+- `fit_cap` bounds all iterations of a lambda (or a wide block), loose
+  smoothing rounds included; before, it was checked only after certifying
+  rounds, so a fit that never reached them could run `round_cap` iterations
+  per smoothing level. A fit that reaches the cap is certified once more and
+  reported as not converged.
 - `max_exact_n` stops at `EXACT_MODE_MAX_N_CUDA` by default; `size_limit=None`
   counts memory only.
 - Exact mode factorizes the kernel in place. `torch.linalg.eigh` worked on a

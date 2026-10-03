@@ -71,7 +71,9 @@ Methods (default: all six; --methods picks a subset)
               but only its top --trunc-rank eigenpairs, so no full
               eigendecomposition (peak about 1.2 n x n matrices); every lambda
               and every fold stops at the certified relative duality gap
-              --gap-tol. --tol, --kkt-eps and --delta-len do not apply
+              --gap-tol. --trunc-block lambdas are fitted together with all
+              their folds, so each product with K serves block x (folds + 1)
+              fits. --tol, --kkt-eps and --delta-len do not apply
   cuml        cuml.svm.SVC, hinge loss, SMO on the full kernel: one fit per
               (C, fold), 5 x 50 + 1 fits
   falkon      falkon.Falkon, squared loss, M = n centres (every training row,
@@ -117,6 +119,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import inspect
 import json
 import math
 import os
@@ -332,6 +335,7 @@ def run_torchkm(data, sig, lams, foldid, dev, args, seed, truncated=False):
         spectrum="truncated" if truncated else "full",
         spectrum_rank=args.trunc_rank,
         gap_tol=args.gap_tol,
+        spectrum_block=args.trunc_block,
     )
     # start-up: CUDA context, cuSOLVER/cuBLAS handles
     torch.linalg.eigh(torch.eye(64, dtype=getattr(torch, args.dtype), device=dev))
@@ -663,7 +667,17 @@ def cell_settings(method: str, args: argparse.Namespace) -> Dict[str, Any]:
             delta_len=args.delta_len,
         )
     elif method == "torchkm_trunc":
-        own = dict(spectrum_rank=args.trunc_rank, gap_tol=args.gap_tol)
+        from torchkm.experimental import SpectralSVMPath
+
+        # bias: the solver's default, recorded so that cells computed before it
+        # changed (from 0.5 to 4) are computed again
+        bias = inspect.signature(SpectralSVMPath).parameters["bias"].default
+        own = dict(
+            spectrum_rank=args.trunc_rank,
+            gap_tol=args.gap_tol,
+            spectrum_block=args.trunc_block,
+            certify_bias=bias,
+        )
     elif method == "cuml":
         own = dict(cache_size_mb=args.svc_cache_mb)
     elif method == "falkon":
@@ -952,6 +966,12 @@ def main() -> None:
     )
     ap.add_argument(
         "--trunc-rank", type=int, default=400, help="torchkm_trunc: eigenpairs kept"
+    )
+    ap.add_argument(
+        "--trunc-block",
+        type=int,
+        default=10,
+        help="torchkm_trunc: lambdas fitted together with their folds (1 = serial)",
     )
     ap.add_argument(
         "--gap-tol",
