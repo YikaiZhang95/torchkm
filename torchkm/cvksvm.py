@@ -1312,6 +1312,44 @@ def smoothed_hinge_grad(r, delta):
     )
 
 
+# Kernel DWD (q = 1): V(u) = 1 - u for u <= 1/2, 1 / (4u) above. V is smooth
+# with V'' <= 4, the curvature of a smoothed hinge of width 1/8, so the same
+# majorization steps apply at that fixed width: no smoothing schedule.
+_DWD_DELTA = 0.125
+
+
+def dwd_loss(r):
+    """V(r) of kernel DWD with q = 1."""
+    return torch.where(r <= 0.5, 1.0 - r, 0.25 / torch.clamp(r, min=0.5))
+
+
+def dwd_loss_grad(r):
+    """V'(r), in [-1, 0)."""
+    return torch.where(r <= 0.5, -1.0, -0.25 / torch.clamp(r, min=0.5) ** 2)
+
+
+def _loss(r, delta, loss):
+    """The (smoothed, for the hinge) loss the steps minimise."""
+    return smoothed_hinge(r, delta) if loss == "hinge" else dwd_loss(r)
+
+
+def _loss_grad(r, delta, loss):
+    return smoothed_hinge_grad(r, delta) if loss == "hinge" else dwd_loss_grad(r)
+
+
+def _margin_loss(r, loss):
+    """The loss of the problem itself: the hinge, or DWD's V."""
+    return torch.clamp(1.0 - r, min=0.0) if loss == "hinge" else dwd_loss(r)
+
+
+def _dual_linear(beta, n, loss):
+    """The dual's separable part per column: sum(beta) for the hinge,
+    sum(sqrt(n beta)) / n for DWD (V*(-t) = -sqrt(t), t = n beta in [0, 1])."""
+    if loss == "hinge":
+        return beta.sum(dim=0)
+    return torch.sqrt(torch.clamp(n * beta, min=0.0)).sum(dim=0) / n
+
+
 def project_dual(beta, y, upper, iters=64):
     """Euclidean projection of each column of ``beta`` onto
     {0 <= beta <= upper, sum(beta * y) = 0}: clip(beta - theta y, 0, upper),
@@ -1329,9 +1367,15 @@ def project_dual(beta, y, upper, iters=64):
 
 
 def hinge_duality_gap(
-    K, y, alpha, b, lam, *, Ka=None, delta=None, refine=10, lmax=None, target=None
+    K, y, alpha, b, lam, *, Ka=None, delta=None, refine=10, lmax=None, target=None,
+    loss="hinge",
 ):
     """Certified relative gap of the unsmoothed kernel SVM, one column per problem.
+
+    ``loss="dwd"``: kernel DWD instead, P with V(y f) in place of the hinge and
+    D(beta) = sum_{i in T} sqrt(n beta_i) / n - (beta y)'K(beta y) / (4 lam) on
+    the same set; its candidates are 2 lam y alpha and -V'(y f) / n, and it is
+    not refined (the derivative of sqrt is unbounded at 0).
 
     Primal: P(alpha, b) = sum_{i in T} max(0, 1 - y_i (K_i alpha + b)) / n + lam alpha'K alpha,
     where T holds the rows with y_i != 0 (a cross-validation fold zeroes its
@@ -1369,7 +1413,7 @@ def hinge_duality_gap(
     y64 = y if y.dtype == torch.float64 else y.float()
     on = y != 0
     r = y64 * (Ka.double() + b)
-    P = (torch.clamp(1.0 - r, min=0.0) * on).sum(dim=0) / n + lam * _row_sums(
+    P = (_margin_loss(r, loss) * on).sum(dim=0) / n + lam * _row_sums(
         lambda a, ka: (a.double() * ka.double()).sum(dim=0), alpha, Ka
     )
     upper = on.double() / n
@@ -1377,12 +1421,15 @@ def hinge_duality_gap(
     def score(beta, yy, lam):
         by = beta * yy
         Kby = (K @ by.to(K.dtype)).double()
-        return beta.sum(dim=0) - (by * Kby).sum(dim=0) / (4.0 * lam), Kby
+        return _dual_linear(beta, n, loss) - (by * Kby).sum(dim=0) / (4.0 * lam), Kby
 
     # candidates one at a time (one n x m block each, not all c stacked); per
     # column the first best is kept
     def candidates():
         yield 2.0 * lam * y64 * alpha.double()
+        if loss == "dwd":
+            yield -dwd_loss_grad(r) * upper
+            return
         mid = torch.clamp(2.0 * lam * y64 * alpha.double(), min=0.0).minimum(upper)
         for t in (1e-2, 1e-3, 1e-4):
             yield torch.where(r < 1.0 - t, upper, torch.where(r > 1.0 + t, 0.0, mid))
@@ -1401,6 +1448,8 @@ def hinge_duality_gap(
             D = torch.where(better, Dc, D)
         del cand
 
+    if loss == "dwd":
+        refine = 0
     if target is not None:
         g0 = (P - D) / P.abs().clamp_min(1e-300)
         if not bool(((g0 > target) & (g0 <= 30.0 * target)).any()):
@@ -1468,7 +1517,8 @@ def _project_dual_tiled(src, Y, n, m, out, iters=64):
 
 
 def _hinge_duality_gap_tiled(
-    K, Y, alpha, b, lam, *, Ka, delta=None, refine=10, lmax=None, target=None
+    K, Y, alpha, b, lam, *, Ka, delta=None, refine=10, lmax=None, target=None,
+    loss="hinge",
 ):
     """``hinge_duality_gap`` for labels Y given as a _Labels: the same
     candidates, projection, scores and refinement, with the candidates and
@@ -1484,7 +1534,7 @@ def _hinge_duality_gap_tiled(
 
     def P_rows(Yt, a, ka):
         r = Yt.double() * (ka.double() + b)
-        return (torch.clamp(1.0 - r, min=0.0) * (Yt != 0)).sum(0) / n + lam * (
+        return (_margin_loss(r, loss) * (Yt != 0)).sum(0) / n + lam * (
             a.double() * ka.double()
         ).sum(0)
 
@@ -1495,7 +1545,7 @@ def _hinge_duality_gap_tiled(
         bsum = torch.zeros(m, dtype=torch.float64, device=dev)
         for i, j in tiles:
             by[i:j] = (beta[i:j] * Y.rows(i, j).double()).to(K.dtype)
-            bsum += beta[i:j].sum(0)
+            bsum += _dual_linear(beta[i:j], n, loss)
         Kby = K @ by
         quad = torch.zeros(m, dtype=torch.float64, device=dev)
         for i, j in tiles:
@@ -1513,6 +1563,8 @@ def _hinge_duality_gap_tiled(
             base = 2.0 * lam * Yt * alpha[i:j].double()
             if k == 0:
                 return base
+            if loss == "dwd":
+                return -dwd_loss_grad(r) * upper
             if k <= 3:
                 tt = (1e-2, 1e-3, 1e-4)[k - 1]
                 mid = torch.clamp(base, min=0.0).minimum(upper)
@@ -1524,7 +1576,8 @@ def _hinge_duality_gap_tiled(
     work = torch.empty(n, m, dtype=torch.float64, device=dev)
     beta = torch.empty(n, m, dtype=torch.float64, device=dev)
     D = None
-    for k in range(5 if delta is not None else 4):
+    ks = (0, 4) if loss == "dwd" else range(5 if delta is not None else 4)
+    for k in ks:
         _project_dual_tiled(cand(k), Y, n, m, work)
         Dc, _ = score(work)
         if D is None:
@@ -1536,6 +1589,8 @@ def _hinge_duality_gap_tiled(
                 beta[i:j] = torch.where(better, work[i:j], beta[i:j])
             D = torch.where(better, Dc, D)
 
+    if loss == "dwd":
+        refine = 0
     if target is not None:
         g0 = (P - D) / P.abs().clamp_min(1e-300)
         if not bool(((g0 > target) & (g0 <= 30.0 * target)).any()):
@@ -1620,21 +1675,21 @@ def _row_sums(fn, *rows):
     return total
 
 
-def _dF_rows(R, Y, KA, da, Kda, db, lam, delta, n):
+def _dF_rows(R, Y, KA, da, Kda, db, lam, delta, n, loss="hinge"):
     """Rows' share of the smoothed objective's change along a step (float64)."""
     R64 = R.double()
     dR = (Y * (db + Kda)).double()
     dloss = (
-        (smoothed_hinge(R64 + dR, delta) - smoothed_hinge(R64, delta)) * (Y != 0)
+        (_loss(R64 + dR, delta, loss) - _loss(R64, delta, loss)) * (Y != 0)
     ).sum(0)
     da64, Kda64 = da.double(), Kda.double()
     return dloss + n * lam * (2.0 * (da64 * KA.double()).sum(0) + (da64 * Kda64).sum(0))
 
 
-def _F_rows(R, Y, A, KA, lam, delta, n):
+def _F_rows(R, Y, A, KA, lam, delta, n, loss="hinge"):
     """Rows' share of the smoothed objective, without the intercept's ridge."""
-    loss = (smoothed_hinge(R.double(), delta) * (Y != 0)).sum(0)
-    return loss + n * lam * (A.double() * KA.double()).sum(0)
+    value = (_loss(R.double(), delta, loss) * (Y != 0)).sum(0)
+    return value + n * lam * (A.double() * KA.double()).sum(0)
 
 
 class _CountedK:
@@ -1875,6 +1930,12 @@ class SpectralSVMPath:
         A warm-started fit (the next lambda, or the folds) starts smoothing
         ``warm_levels`` levels above the delta at which its starting point was
         certified; None starts every fit at delta = 1 (as cvksvm).
+    loss : {"hinge", "dwd"}
+        The SVM's hinge (smoothed along the schedule above), or kernel DWD
+        with q = 1, V(u) = 1 - u for u <= 1/2 and 1 / (4u) above: smooth, so
+        its steps run at a fixed width of 1/8 (V'' <= 4) and every round
+        certifies, against DWD's dual. Same objective convention: mean loss
+        plus lam alpha'K alpha.
     tile : bool or None
         Wide blocks with the truncated spectrum: build every n x m quantity
         except the coefficients, their products with K and the buffers of
@@ -1937,6 +1998,7 @@ class SpectralSVMPath:
         block=1,
         bias=4.0,
         tile=None,
+        loss="hinge",
         seed=0,
     ):
         if spectrum not in ("truncated", "full"):
@@ -1979,6 +2041,9 @@ class SpectralSVMPath:
         self.block = int(block)
         self.bias = float(bias)
         self.tile = tile
+        if loss not in ("hinge", "dwd"):
+            raise ValueError("loss must be 'hinge' or 'dwd'")
+        self.loss = loss
         self.ridge_b = (
             1e-8  # n eps b^2 keeps the intercept step well defined (cvksvm's vareps)
         )
@@ -1995,7 +2060,7 @@ class SpectralSVMPath:
 
         def rows(Y, A, KA):
             r = Y.double() * (KA.double() + b.double())
-            return (torch.clamp(1.0 - r, min=0.0) * (Y != 0)).sum(0) / n + lam * (
+            return (_margin_loss(r, self.loss) * (Y != 0)).sum(0) / n + lam * (
                 A.double() * KA.double()
             ).sum(0)
 
@@ -2007,7 +2072,7 @@ class SpectralSVMPath:
         n = Y.shape[0]
 
         def rows(R, Y, KA, da, Kda):
-            return _dF_rows(R, Y, KA, da, Kda, db, lam, delta, n)
+            return _dF_rows(R, Y, KA, da, Kda, db, lam, delta, n, self.loss)
 
         db64 = db.double()
         return _row_sums(rows, R, Y, KA, da, Kda) + n * self.ridge_b * (
@@ -2023,7 +2088,7 @@ class SpectralSVMPath:
             bb = torch.as_tensor(points, dtype=KA.dtype, device=KA.device)
 
             def rows(Y, KA):
-                return (torch.clamp(1.0 - Y * (KA + bb), min=0.0) * (Y != 0)).sum(0)
+                return (_margin_loss(Y * (KA + bb), self.loss) * (Y != 0)).sum(0)
 
             return _row_sums(rows, Y, KA) / n + lam * aka
 
@@ -2038,7 +2103,7 @@ class SpectralSVMPath:
         n = Y.shape[0]
 
         def rows(R, Y, A, KA):
-            return _F_rows(R, Y, A, KA, lam, delta, n)
+            return _F_rows(R, Y, A, KA, lam, delta, n, self.loss)
 
         return _row_sums(rows, R, Y, A, KA) + n * self.ridge_b * b.double() ** 2
 
@@ -2047,7 +2112,7 @@ class SpectralSVMPath:
         n = Y.shape[0]
 
         def rows(Y, A, KA):
-            return _F_rows(Y * (KA + b), Y, A, KA, lam, delta, n)
+            return _F_rows(Y * (KA + b), Y, A, KA, lam, delta, n, self.loss)
 
         return _row_sums(rows, Y, A, KA) + n * self.ridge_b * b.double() ** 2
 
@@ -2114,7 +2179,7 @@ class SpectralSVMPath:
             Yb = bc + beta * (bc - Pb[cols])
             YKA = KAc + beta * (KAc - take(PKA))
             R = Yc * (YKA + Yb)
-            Z = Yc * smoothed_hinge_grad(R, delta)
+            Z = Yc * _loss_grad(R, delta, self.loss)
             l2 = (2.0 * n * lc).to(dt)
             KG = count.mm(K, Z) + l2 * YKA
             G = Z + l2 * Ya
@@ -2238,7 +2303,7 @@ class SpectralSVMPath:
                 Ya = At + beta * (At - take(PA, i, j))
                 YKA = KAt + beta * (KAt - take(PKA, i, j))
                 R = Yt * (YKA + Yb)
-                Z = Yt * smoothed_hinge_grad(R, delta)
+                Z = Yt * _loss_grad(R, delta, self.loss)
                 return Yt, At, KAt, Ya, YKA, R, Z
 
             # sweep 1: the input of the product with K
@@ -2283,9 +2348,9 @@ class SpectralSVMPath:
             for i, j in tiles:
                 Yt, _, _, Ya, YKA, R, KG, da, Kda, da_s, Kda_s = steps(i, j)
                 parts = (
-                    _dF_rows(R, Yt, YKA, da, Kda, db, lc, delta, n),
-                    _dF_rows(R, Yt, YKA, da_s, Kda_s, db_s, lc, delta, n),
-                    _F_rows(R, Yt, Ya, YKA, lc, delta, n),
+                    _dF_rows(R, Yt, YKA, da, Kda, db, lc, delta, n, self.loss),
+                    _dF_rows(R, Yt, YKA, da_s, Kda_s, db_s, lc, delta, n, self.loss),
+                    _F_rows(R, Yt, Ya, YKA, lc, delta, n, self.loss),
                 )
                 kda = kda + (KG * da).sum(0)
                 kda_s = kda_s + (KG * da_s).sum(0)
@@ -2372,6 +2437,8 @@ class SpectralSVMPath:
         gap = torch.full((m,), float("inf"), dtype=torch.float64, device=A.device)
         active = torch.ones(m, dtype=torch.bool, device=A.device)
         iters, chunk, certifying = 0, self.chunk, False
+        if self.loss == "dwd":  # smooth already: one fixed width, certify at once
+            delta, certifying = _DWD_DELTA, True
         eps_cert = self.eps * 1e-4  # early exit of certifying rounds; tightened
         for _ in range(self.max_rounds):
             cols = torch.nonzero(active).squeeze(1)
@@ -2432,6 +2499,7 @@ class SpectralSVMPath:
                 Ka=KAc,
                 delta=delta,
                 refine=self.refine,
+                loss=self.loss,
                 lmax=self.backend.lmax,
                 target=self.gap_tol,
             )
@@ -2447,7 +2515,7 @@ class SpectralSVMPath:
                 or iters >= cap
             ):
                 break
-            if stalled:
+            if stalled and self.loss == "hinge":
                 # smooth less only if the smoothing bias could be what limits
                 left = active[cols]
                 band = self._band(Yc, KAc, bc, delta)

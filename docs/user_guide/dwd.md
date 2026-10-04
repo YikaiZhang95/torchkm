@@ -66,7 +66,18 @@ predictions in the original label space. Cross-validation scores are stored in
 `cv_mis_`.
 
 Set `probability=True` to fit Platt calibration and enable `predict_proba`.
-`TorchKMDWD` runs in exact mode only; it has no large-\(n\) mode.
+`TorchKMDWD` has the SVM's two other modes:
+
+- `spectrum="truncated"` fits with the truncated-spectrum solver
+  (`torchkm.cvkdwd.SpectralDWDPath`): no full eigendecomposition, and every
+  regularization value and fold stops at a certified relative duality gap
+  `gap_tol` (DWD's loss is smooth, so there is no smoothing schedule).
+- `low_rank=True` runs the same solver without storing the kernel matrix, for
+  data too large for it (RBF kernel; fused on CUDA with `dtype="float32"`;
+  `max_iter` is the iteration budget of each value).
+
+`spectrum_rank`, `gap_tol` and `spectrum_block` apply to both, as for
+[`TorchKMSVC`](svm.md).
 
 ## When to use
 

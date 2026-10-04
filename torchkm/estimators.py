@@ -126,12 +126,14 @@ class _TruncatedSVMBackend:
     """
 
     def __init__(
-        self, K, y, ulam, foldid, *, rank, gap_tol, seed, block=1, fit_cap=None
+        self, K, y, ulam, foldid, *, rank, gap_tol, seed, block=1, fit_cap=None,
+        loss="hinge",
     ):
         self.ulam = ulam
         self._problem = (K, y.to(K.dtype), ulam.detach().cpu().tolist(), foldid)
         self._options = dict(
-            spectrum="truncated", rank=rank, gap_tol=gap_tol, seed=seed, block=block
+            spectrum="truncated", rank=rank, gap_tol=gap_tol, seed=seed, block=block,
+            loss=loss,
         )
         if fit_cap is not None:
             self._options["fit_cap"] = int(fit_cap)
@@ -244,9 +246,9 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 f"spectrum must be 'full' or 'truncated', got {self.spectrum!r}."
             )
         if self.spectrum == "truncated" or self._low_rank():
-            if self._BACKEND != "svm":
+            if self._BACKEND not in ("svm", "dwd"):
                 raise ValueError(
-                    "spectrum='truncated' is supported by TorchKMSVC only."
+                    "spectrum='truncated' is supported by TorchKMSVC and TorchKMDWD only."
                 )
             if self.is_exact != 0:
                 raise ValueError(
@@ -293,8 +295,17 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             raise ValueError(
                 f"dtype must be 'float64' or 'float32', got {self.dtype!r}."
             )
-        if self.dtype == "float32" and self._BACKEND != "svm":
-            raise ValueError("dtype='float32' is supported by TorchKMSVC only.")
+        if self.dtype == "float32" and not (
+            self._BACKEND == "svm"
+            or (
+                self._BACKEND == "dwd"
+                and (self.spectrum == "truncated" or self._low_rank())
+            )
+        ):
+            raise ValueError(
+                "dtype='float32' is supported by TorchKMSVC, and by TorchKMDWD with "
+                "spectrum='truncated' or low_rank=True."
+            )
         return torch.float32 if self.dtype == "float32" else torch.float64
 
     def _compute_K_train(
@@ -887,10 +898,11 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 seed=0 if self.random_state is None else int(self.random_state),
                 block=int(self.spectrum_block),
                 fit_cap=int(self.max_iter),
+                loss="dwd" if self._BACKEND == "dwd" else "hinge",
             )
 
         # exact backends
-        if self._BACKEND == "svm" and self.spectrum == "truncated":
+        if self._BACKEND in ("svm", "dwd") and self.spectrum == "truncated":
             return _TruncatedSVMBackend(
                 K_train,
                 y_backend,
@@ -900,6 +912,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 gap_tol=float(self.gap_tol),
                 seed=0 if self.random_state is None else int(self.random_state),
                 block=int(self.spectrum_block),
+                loss="dwd" if self._BACKEND == "dwd" else "hinge",
             )
 
         if self._BACKEND == "svm":
@@ -1236,7 +1249,13 @@ class TorchKMDWD(_TorchKMBaseBinaryClassifier):
 
     Parameters are inherited from the shared binary-classifier wrapper. The
     most common options are ``kernel``, ``Cs``/``nC``, ``cv``, ``device``,
-    and ``probability``.
+    and ``probability``. As for ``TorchKMSVC``, ``spectrum="truncated"`` fits
+    with the truncated-spectrum solver (:class:`torchkm.cvkdwd.SpectralDWDPath`,
+    every lambda and fold at a certified duality gap ``gap_tol``), and
+    ``low_rank=True`` runs it with the kernel never stored (RBF only; fused on
+    CUDA with ``dtype="float32"``; ``max_iter`` is the iteration budget of each
+    lambda); ``spectrum_rank``, ``gap_tol`` and ``spectrum_block`` apply to
+    both.
 
     Attributes include ``best_C_``, ``cv_mis_``, ``alpha_``, ``intercept_``,
     ``classes_``, and ``foldid_`` after fitting. ``predict_proba`` and
@@ -1244,6 +1263,76 @@ class TorchKMDWD(_TorchKMBaseBinaryClassifier):
     """
 
     _BACKEND: BackendName = "dwd"
+
+    def __init__(
+        self,
+        kernel: KernelName = "rbf",
+        nC: int = 50,
+        Cs: Optional[Any] = None,
+        C_max: float = 1e3,
+        C_min: float = 1e-3,
+        cv: int = 5,
+        foldid: Optional[Any] = None,
+        tol: float = 1e-5,
+        max_iter: int = 1000,
+        solver_gamma: float = 1e-8,
+        is_exact: int = 0,  # only used by cvksvm/cvkdwd
+        KKTeps: float = 1e-3,
+        delta_len: int = 8,  # only used by cvksvm
+        kkt_scaled: bool = False,
+        device: Optional[Union[str, torch.device]] = None,
+        dtype: str = "float64",  # only used by cvksvm (exact mode)
+        # RBF
+        rbf_sigma: Optional[float] = None,
+        sigest_frac: float = 0.5,
+        # Poly
+        poly_degree: int = 3,
+        poly_coef0: float = 1.0,
+        poly_gamma: float = 1.0,
+        # Probability
+        probability: bool = False,
+        platt_device: Optional[Union[str, torch.device]] = None,
+        random_state: Optional[int] = None,
+        store_path: bool = False,  # store full path (big) or keep only best
+        # truncated spectrum (SVM only)
+        spectrum: str = "full",
+        spectrum_rank: int = 400,
+        gap_tol: float = 1e-3,
+        spectrum_block: int = 10,
+        low_rank: bool = False,
+    ):
+        super().__init__(
+            kernel=kernel,
+            nC=nC,
+            Cs=Cs,
+            C_max=C_max,
+            C_min=C_min,
+            cv=cv,
+            foldid=foldid,
+            tol=tol,
+            max_iter=max_iter,
+            solver_gamma=solver_gamma,
+            is_exact=is_exact,
+            KKTeps=KKTeps,
+            delta_len=delta_len,
+            kkt_scaled=kkt_scaled,
+            device=device,
+            dtype=dtype,
+            rbf_sigma=rbf_sigma,
+            sigest_frac=sigest_frac,
+            poly_degree=poly_degree,
+            poly_coef0=poly_coef0,
+            poly_gamma=poly_gamma,
+            probability=probability,
+            platt_device=platt_device,
+            random_state=random_state,
+            store_path=store_path,
+            spectrum=spectrum,
+            spectrum_rank=spectrum_rank,
+            gap_tol=gap_tol,
+            spectrum_block=spectrum_block,
+        )
+        self.low_rank = low_rank
 
 
 class TorchKMLogit(_TorchKMBaseBinaryClassifier):

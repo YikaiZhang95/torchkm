@@ -36,7 +36,24 @@ All notable changes to TorchKM are documented in this file.
   estimators use these and no longer import `torchkm.experimental`, which
   keeps its own copy for exploring changes.
 
+### Added
+- Kernel DWD in the truncated-spectrum solver: `SpectralSVMPath(loss="dwd")`,
+  exposed as `torchkm.cvkdwd.SpectralDWDPath`, and `TorchKMDWD` with
+  `spectrum="truncated"`, `low_rank=True` (kernel never stored) and, in those
+  two modes, `dtype="float32"`. DWD's loss V (q = 1) is smooth with V'' <= 4,
+  so the steps run at a fixed width (1/8) with no smoothing schedule, and
+  every lambda and fold is certified against DWD's dual,
+  D(beta) = sum_i sqrt(n beta_i) / n - (beta y)'K(beta y) / (4 lam) on the
+  hinge dual's set. Objectives match cvkdwd solved to 1e-13 within 1e-7
+  relative, and the cross-validation scores match each fold's own solution.
+
 ### Fixed
+- The cross-validation of the exact kernel DWD solver (`cvkdwd`,
+  `TorchKMDWD`): the fold fits stopped on a hard-coded step tolerance (1e-5)
+  instead of `eps`, so no setting made them accurate; their held-out scores
+  were up to 0.4 from each fold's solution (C = 10, n = 600). They now use
+  `eps` (4.7e-5 from the solution at `eps=1e-13`). At the default `eps` the
+  folds stay loose; `spectrum="truncated"` certifies them.
 - `sigest` failed in `torch.quantile` when every sampled pair of rows was the
   same row (likely when `frac * n` is a handful of rows); it then uses every
   pair of distinct rows, and raises a `ValueError` if all rows are equal.

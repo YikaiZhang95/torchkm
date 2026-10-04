@@ -282,7 +282,7 @@ def test_full_spectrum_needs_the_matrix():
 
 
 def test_truncated_spectrum_option_is_checked():
-    from torchkm.estimators import TorchKMDWD, TorchKMSVC
+    from torchkm.estimators import TorchKMLogit, TorchKMSVC
 
     X, y = make_classification(n_samples=40, n_features=4, random_state=0)
     for bad in (
@@ -290,7 +290,7 @@ def test_truncated_spectrum_option_is_checked():
         TorchKMSVC(spectrum="truncated", is_exact=1, device="cpu"),
         TorchKMSVC(low_rank=True, is_exact=1, device="cpu"),
         TorchKMSVC(low_rank=True, kernel="linear", device="cpu"),
-        TorchKMDWD(spectrum="truncated", device="cpu"),
+        TorchKMLogit(spectrum="truncated", device="cpu"),
     ):
         with pytest.raises(ValueError):
             bad.fit(X, y)

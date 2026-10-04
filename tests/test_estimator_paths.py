@@ -23,9 +23,12 @@ def _tiny_regression_features(n=24):
     return X.astype(np.float64), y.astype(np.float64)
 
 
-@pytest.mark.parametrize("estimator_cls", [TorchKMDWD, TorchKMLogit, TorchKMKQR])
-def test_only_the_svm_has_a_low_rank_mode(estimator_cls):
-    # the Nystrom mode is gone; low_rank=True (the matrix-free SVM) is SVM-only
+@pytest.mark.parametrize("estimator_cls", [TorchKMLogit, TorchKMKQR])
+def test_only_svm_and_dwd_have_a_low_rank_mode(estimator_cls):
+    # the Nystrom mode is gone; low_rank=True (the matrix-free truncated
+    # spectrum) is TorchKMSVC's and TorchKMDWD's only
+    assert "low_rank" in TorchKMSVC().get_params()
+    assert "low_rank" in TorchKMDWD().get_params()
     assert "low_rank" not in estimator_cls().get_params()
     for name in ("low_rank", "num_landmarks", "nys_k"):
         with pytest.raises(TypeError):

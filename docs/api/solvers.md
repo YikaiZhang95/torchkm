@@ -17,6 +17,13 @@ The solver of `TorchKMSVC(spectrum="truncated")` and `TorchKMSVC(low_rank=True)`
 
 ::: torchkm.cvkdwd.cvkdwd
 
+## Kernel DWD, truncated spectrum
+
+The solver of `TorchKMDWD(spectrum="truncated")` and `TorchKMDWD(low_rank=True)`:
+`SpectralSVMPath` with `loss="dwd"`.
+
+::: torchkm.cvkdwd.SpectralDWDPath
+
 ## Kernel Logistic Regression
 
 ::: torchkm.cvklogit.cvklogit

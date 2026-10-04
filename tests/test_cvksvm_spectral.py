@@ -159,3 +159,89 @@ def test_tiled_step_and_certificate_match_the_dense_ones(monkeypatch):
     g2, _, D2 = ck._hinge_duality_gap_tiled(K, lab, A0, b0, lam, **kw)
     torch.testing.assert_close(g2, g1, rtol=1e-10, atol=1e-12)
     torch.testing.assert_close(D2, D1, rtol=1e-10, atol=1e-12)
+
+
+# --------------------------------------------------------------------------
+# Kernel DWD: SpectralSVMPath(loss="dwd") = torchkm.cvkdwd.SpectralDWDPath
+# --------------------------------------------------------------------------
+
+
+def _dwd_V(u):
+    return torch.where(u <= 0.5, 1 - u, 1 / (4 * torch.clamp(u, min=0.5)))
+
+
+@pytest.mark.parametrize("spectrum", ["truncated", "full"])
+def test_dwd_path_reaches_the_cvkdwd_optimum(spectrum):
+    from torchkm.cvkdwd import SpectralDWDPath, cvkdwd
+
+    _, K, y, _ = _problem(n=200)
+    lams = [1e-1, 1e-2, 1e-3]
+    m = SpectralDWDPath(K, y, lams, spectrum=spectrum, rank=40).fit()
+    ref = cvkdwd(Kmat=K.clone(), y=y, nlam=3, ulam=torch.tensor(lams, dtype=torch.float64),
+                 nfolds=2, foldid=torch.arange(200) % 2 + 1, eps=1e-13, maxit=10**7,
+                 gamma=1e-8, KKTeps=1e-12, device="cpu")
+    ref.fit()
+    assert bool(m.converged.all()) and float(m.gaps.max()) <= 1e-3
+    for j, lam in enumerate(lams):
+        def P(a, b):
+            Ka = K @ a
+            return float(lam * a @ Ka + _dwd_V(y * (Ka + b)).mean())
+        P_m = P(m.alphas[1:, j], float(m.alphas[0, j]))
+        P_r = P(ref.alpmat[1:, j], float(ref.alpmat[0, j]))
+        assert P_m - P_r <= float(m.gaps[j]) * P_m + 1e-12  # the certificate holds
+        assert abs(P_m - P_r) <= 1e-5 * P_r
+
+
+def test_dwd_cv_scores_are_the_fold_solutions():
+    # each fold's held-out scores against the fold problem solved on its own
+    # training rows: (1/n) sum_T V + lam a'Ka = (n_T/n) x cvkdwd's objective
+    # at lam n / n_T
+    from torchkm.cvkdwd import SpectralDWDPath, cvkdwd
+
+    _, K, y, _ = _problem(n=160)
+    n, lam = 160, 1e-3
+    foldid = torch.as_tensor(np.arange(n) % 4 + 1)
+    m = SpectralDWDPath(K, y, [lam], foldid, rank=60, gap_tol=1e-9).fit()
+    for f in (1, 3):
+        held = foldid == f
+        T = ~held
+        nT = int(T.sum())
+        sub = cvkdwd(Kmat=K[T][:, T].clone(), y=y[T], nlam=1,
+                     ulam=torch.tensor([lam * n / nT], dtype=torch.float64),
+                     nfolds=2, foldid=torch.arange(nT) % 2 + 1, eps=1e-13,
+                     maxit=10**7, gamma=1e-8, KKTeps=1e-12, device="cpu")
+        sub.fit()
+        truth = K[held][:, T] @ sub.alpmat[1:, 0] + sub.alpmat[0, 0]
+        torch.testing.assert_close(m.cv_scores[held, 0], truth, rtol=0, atol=1e-4)
+
+
+def test_cvkdwd_folds_use_eps():
+    # the folds stopped on a hard-coded 1e-5 before, whatever eps was
+    from torchkm.cvkdwd import cvkdwd
+
+    _, K, y, _ = _problem(n=120)
+    foldid = torch.as_tensor(np.arange(120) % 3 + 1)
+
+    def passes(eps):
+        m = cvkdwd(Kmat=K.clone(), y=y, nlam=1, ulam=torch.tensor([1e-3], dtype=torch.float64),
+                   foldid=foldid, nfolds=3, eps=eps, maxit=10**6, gamma=1e-8, device="cpu")
+        m.fit()
+        return int(m.cvnpass.sum())
+
+    assert passes(1e-11) > passes(1e-5)
+
+
+def test_dwd_estimator_truncated_and_low_rank_agree():
+    from torchkm import TorchKMDWD
+
+    X, _, y, _ = _problem(n=200)
+    kw = dict(rbf_sigma=0.1, Cs=np.array([3.0, 0.3]), nC=2, cv=4, device="cpu",
+              random_state=0, max_iter=20000)
+    a = TorchKMDWD(spectrum="truncated", **kw).fit(X.numpy(), y.numpy())
+    b = TorchKMDWD(low_rank=True, **kw).fit(X.numpy(), y.numpy())
+    assert a.best_C_ == b.best_C_
+    np.testing.assert_allclose(b.decision_function(X.numpy()), a.decision_function(X.numpy()),
+                               rtol=1e-10, atol=1e-10)
+    assert np.nanmax(b.fold_duality_gaps_) <= 1e-3 and bool(b.converged_.all())
+    c = TorchKMDWD(spectrum="truncated", dtype="float32", **kw).fit(X.numpy(), y.numpy())
+    assert np.isfinite(c.decision_function(X.numpy()[:3])).all()

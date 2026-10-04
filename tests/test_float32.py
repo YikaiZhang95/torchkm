@@ -84,7 +84,7 @@ def test_dtype_is_validated():
     X, y = _problem(n=60)
     with pytest.raises(ValueError, match="dtype"):
         TorchKMSVC(dtype="float16", nC=2, cv=2, device="cpu").fit(X, y)
-    with pytest.raises(ValueError, match="TorchKMSVC only"):
+    with pytest.raises(ValueError, match="TorchKMSVC"):  # exact DWD is float64
         TorchKMDWD(dtype="float32", nC=2, cv=2, device="cpu").fit(X, y)
     # the matrix-free SVM computes in float32 too (fused products on CUDA)
     clf = TorchKMSVC(dtype="float32", low_rank=True, nC=2, cv=2, device="cpu")

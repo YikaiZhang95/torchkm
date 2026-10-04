@@ -135,8 +135,9 @@ On the whole covtype.binary training set (464,809 rows), 50 lambdas with
 10-fold cross-validation took 62 minutes and 6.6 GB on an L40S. See
 [Kernel SVM](svm.md) for the call.
 
-`TorchKMDWD`, `TorchKMLogit` and `TorchKMKQR` run in exact mode only and have
-no large-\(n\) mode.
+`TorchKMDWD` has the same `spectrum="truncated"` and `low_rank=True` modes
+(see [Kernel DWD](dwd.md)); `TorchKMLogit` and `TorchKMKQR` run in exact mode
+only and have no large-\(n\) mode.
 
 ## Time
 

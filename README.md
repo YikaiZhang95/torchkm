@@ -107,7 +107,7 @@ Anywhere you have a table of rows and want an accurate, **calibrated** yes/no (o
 - A confidence gate in automated pipelines: act when `predict_proba` is high, escalate to a human when it isn't.
 - A cheap, reproducible second opinion to cross-check an LLM's structured-data judgments.
 
-> Scope note: TorchKM does **binary** classification (SVM, DWD, logistic) and kernel **quantile regression** today. For multiclass, wrap it one-vs-rest (a good first contribution — see below). It shines on small-to-mid tabular data; when the kernel matrix no longer fits in memory, `TorchKMSVC(low_rank=True)` fits the exact RBF kernel SVM without storing it (DWD, logistic and quantile regression run in exact mode only).
+> Scope note: TorchKM does **binary** classification (SVM, DWD, logistic) and kernel **quantile regression** today. For multiclass, wrap it one-vs-rest (a good first contribution — see below). It shines on small-to-mid tabular data; when the kernel matrix no longer fits in memory, `TorchKMSVC(low_rank=True)` and `TorchKMDWD(low_rank=True)` fit the exact RBF kernel model without storing it (logistic and quantile regression run in exact mode only).
 
 **The same three lines, on different jobs.** Ask in plain language, get a fast calibrated probability back:
 

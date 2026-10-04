@@ -236,7 +236,7 @@ class cvkdwd:
         pred = torch.zeros((self.nobs, self.nlam), dtype=torch.double).to(self.device)
         converged = torch.zeros(nlam, dtype=torch.bool).to(self.device)
         jerr = 0
-        eps2 = 1.0e-5
+        eps2 = self.eps  # the folds' step tolerance (was a hard-coded 1e-5)
         one = torch.ones((), dtype=torch.double, device=self.device)
         dif_step = torch.empty(nobs + 1, dtype=torch.double, device=self.device)
 
@@ -641,3 +641,28 @@ class cvkdwd:
         return brent_minimize(
             lambda b: self.objfun(b, aka, ka, y, lam, nobs), lmin, lmax
         )
+
+
+from .cvksvm import SpectralSVMPath  # noqa: E402  (after cvkdwd: no import cycle)
+
+
+class SpectralDWDPath(SpectralSVMPath):
+    """Kernel DWD (q = 1) regularization path and K-fold CV with a spectral
+    majorizer and a certified stop: :class:`torchkm.cvksvm.SpectralSVMPath`
+    with ``loss="dwd"``.
+
+    The objective is cvkdwd's, mean V(y_i f_i) + lam alpha'K alpha with
+    V(u) = 1 - u for u <= 1/2 and 1 / (4u) above. V is smooth (V'' <= 4), so
+    there is no smoothing schedule: the steps run at a fixed width and every
+    round is certified against DWD's dual,
+    D(beta) = sum_i sqrt(n beta_i) / n - (beta y)'K(beta y) / (4 lam) over
+    0 <= beta_i <= 1/n, sum(beta y) = 0. ``spectrum``, ``rank``, ``block``,
+    ``gap_tol``, ``fit_cap`` and the other options are SpectralSVMPath's; ``K``
+    may be a :class:`torchkm.functions.RBFKernelOperator` (never stored). This
+    is the solver of ``TorchKMDWD(spectrum="truncated")`` and
+    ``TorchKMDWD(low_rank=True)``.
+    """
+
+    def __init__(self, K, y, lambdas, foldid=None, **options):
+        options["loss"] = "dwd"
+        super().__init__(K, y, lambdas, foldid, **options)
