@@ -236,6 +236,28 @@ def run_xgb_qr(data, sig, lams, foldid, tau, dev, args, seed):
 # ---------------------------------------------------------------------------
 
 
+def dwd_objectives(X, y, sig, alphas, intercepts, lams, dev):
+    """The kernel DWD objective, mean V(y f) + lambda a'Ka with V(u) = 1 - u
+    for u <= 1/2 and 1 / (4u) above (cvkdwd's, the DWD package's
+    kern_dwd_obj), of each column of ``alphas`` at the matching ``lams``:
+    float64, on the training kernel exp(-2 sig d^2)."""
+    from torchkm.functions import rbf_kernel
+
+    Xt = torch.as_tensor(np.asarray(X), dtype=torch.float64, device=dev)
+    K = rbf_kernel(Xt, sig)
+    A = torch.as_tensor(np.asarray(alphas), dtype=torch.float64, device=dev).reshape(
+        Xt.shape[0], -1
+    )
+    b = torch.as_tensor(np.asarray(intercepts), dtype=torch.float64, device=dev).reshape(-1)
+    yt = torch.as_tensor(np.asarray(y), dtype=torch.float64, device=dev)[:, None]
+    KA = K @ A
+    del K
+    u = yt * (KA + b)
+    V = torch.where(u <= 0.5, 1.0 - u, 0.25 / torch.clamp(u, min=0.5))
+    lam = torch.as_tensor(np.asarray(lams, dtype=float), dtype=torch.float64, device=dev)
+    return (V.mean(0) + lam * (A * KA).sum(0)).cpu().tolist()
+
+
 def run_torchkm_dwd(data, sig, lams, foldid, tau, dev, args, seed, truncated=False):
     from torchkm.estimators import TorchKMDWD
 
@@ -256,6 +278,7 @@ def run_torchkm_dwd(data, sig, lams, foldid, tau, dev, args, seed, truncated=Fal
         spectrum_rank=args.trunc_rank,
         gap_tol=args.gap_tol,
         spectrum_block=args.trunc_block,
+        store_path=True,  # the fit at every lambda, for the objective
     )
     torch.linalg.eigh(torch.eye(64, dtype=torch.float64, device=dev))  # start-up
     with Measured(dev) as m:
@@ -275,6 +298,11 @@ def run_torchkm_dwd(data, sig, lams, foldid, tau, dev, args, seed, truncated=Fal
         cv_curve=(1.0 - np.asarray(clf.cv_mis_, dtype=float)).tolist(),
         params=cell_settings("torchkm_dwd_trunc" if truncated else "torchkm_dwd", args),
         converged_frac=None if clf.converged_ is None else float(np.mean(clf.converged_)),
+        # outside the timed region: the DWD objective along the path
+        objective_path=dwd_objectives(
+            data["Xtr"], data["ytr"], sig, clf.alpmat_path_[1:], clf.alpmat_path_[0],
+            lams, dev,
+        ),
         **classification_metrics(data["yte"], scores),
     )
 
@@ -329,8 +357,13 @@ def run_dwd_pkg(data, sig, lams, foldid, tau, dev, args, seed):
             ]
         )
     curve = [cv_acc.get(i) for i in range(len(lams))]
+    objective = dwd_objectives(  # of the final fit, outside the timed region
+        Xtr, ytr, sig, np.asarray(final.dual_coef_).reshape(-1, 1),
+        np.asarray(final.intercept_).reshape(-1), [lams[best]], dev,
+    )[0]
     return dict(
         status="capped" if len(cv_acc) < len(lams) else "ok",
+        objective=objective,
         device="CPU",  # numpy only: the package has no GPU implementation
         time_s=m.seconds,
         memory=m.memory,

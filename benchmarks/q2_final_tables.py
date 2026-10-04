@@ -10,7 +10,13 @@ seeded per repeat) as the baseline of its dataset and repeat. TorchKM rows
 are left out.
 
 Writes <out>.json (the merged records) and <out>.md (a compact accuracy / time /
-memory table, then q2_kqr_dwd's detailed DWD table).
+memory / objective table, then q2_kqr_dwd's detailed DWD table).
+
+Objective column: the DWD objective, mean V(y f) + lambda a'Ka, of each
+method's fit at the lambda the DWD package selected in the same repeat:
+TorchKM's read off its path (objective_path), the package's of its final fit
+(recorded, or from --pkg-objective for runs before that), and as a multiple
+of the certified truncated TorchKM fit's (within gap_tol of the optimum).
 
 Run:
   python benchmarks/q2_final_tables.py --baselines revision_results/q2.json \\
@@ -49,6 +55,8 @@ def main() -> None:
     ap.add_argument("--baselines", required=True)
     ap.add_argument("--torchkm", required=True)
     ap.add_argument("--out", required=True, help="output path without extension")
+    ap.add_argument("--pkg-objective", default=None,
+                    help="q2_dwd_pkg_objective.py output, for package rows without one")
     args = ap.parse_args()
 
     base, new = json.load(open(args.baselines)), json.load(open(args.torchkm))
@@ -65,7 +73,15 @@ def main() -> None:
             sys.exit(f"bandwidth differs for {r['dataset']} repeat {r['repeat']}")
 
     datasets = [d for d in new["args"]["datasets"]]
-    records = [r for r in base["records"] if r["method"] == "dwd_pkg"]
+    records = [dict(r) for r in base["records"] if r["method"] == "dwd_pkg"]
+    if args.pkg_objective:
+        refit = {(o["dataset"], o["repeat"]): o for o in json.load(open(args.pkg_objective))["records"]}
+        for r in records:
+            o = refit.get((r["dataset"], r["repeat"]))
+            if r.get("objective") is None and o is not None:
+                if not np.isclose(o["selected"], r["selected"]):
+                    sys.exit(f"refit lambda differs for {r['dataset']} repeat {r['repeat']}")
+                r["objective"], r["objective_source"] = o["objective"], "refit"
     records += [r for r in new["records"] if r["method"] in ("torchkm_dwd", "torchkm_dwd_trunc")]
     order = {m: i for i, m in enumerate(METHODS)}
     records.sort(key=lambda r: (datasets.index(r["dataset"]), order[r["method"]], r["repeat"]))
@@ -79,11 +95,29 @@ def main() -> None:
     with open(args.out + ".json", "w") as fh:
         json.dump(doc, fh, indent=1, default=float)
 
+    grid = np.log(np.asarray(new["grid_lambda"]))
+    pkg_lam = {(r["dataset"], r["repeat"]): r["selected"] for r in records
+               if r["method"] == "dwd_pkg"}
+
+    def objective_at_pkg_lambda(r):
+        lam = pkg_lam.get((r["dataset"], r["repeat"]))
+        if lam is None:
+            return None
+        if r["method"] == "dwd_pkg":
+            return r.get("objective")
+        path = r.get("objective_path")
+        return None if path is None else path[int(np.argmin(np.abs(grid - np.log(lam))))]
+
+    for r in records:
+        r["objective_at_pkg_lambda"] = objective_at_pkg_lambda(r)
+    ref = {(r["dataset"], r["repeat"]): r["objective_at_pkg_lambda"] for r in records
+           if r["method"] == "torchkm_dwd_trunc"}
     cells = {}
     for r in records:
         if r["status"] in ("ok", "capped"):
             cells.setdefault((r["dataset"], r["method"]), []).append(r)
-    head = "| dataset | n_train | method | test accuracy | AUC | time (s) | memory | note |"
+    head = ("| dataset | n_train | method | test accuracy | AUC | time (s) | memory "
+            "| DWD objective at the package's lambda (x certified) | note |")
     lines = [
         f"# Q2 final: kernel DWD ({os.path.basename(args.out)})",
         "",
@@ -99,7 +133,7 @@ def main() -> None:
         "protocol, bandwidths and folds (checked).",
         "",
         head,
-        "|---|---:|---|---:|---:|---:|---|---|",
+        "|---|---:|---|---:|---:|---:|---|---:|---|",
     ]
     for d in datasets:
         for m in METHODS:
@@ -119,10 +153,24 @@ def main() -> None:
             if m == "torchkm_dwd_trunc" and cf:
                 note.append("all lambdas certified" if min(cf) == 1.0
                             else f"certified {min(cf):.0%}-{max(cf):.0%} of lambdas")
+            objs = [r["objective_at_pkg_lambda"] for r in rs]
+            if all(o is not None for o in objs):
+                ratio = [o / ref[(r["dataset"], r["repeat"])] for o, r in zip(objs, rs)
+                         if ref.get((r["dataset"], r["repeat"]))]
+                obj_s = f"{np.mean(objs):.4f}" + (f" ({np.mean(ratio):.2f}x)" if ratio else "")
+            else:
+                obj_s = "-"
             lines.append(
                 f"| {d} | {rs[0]['n_train']:,} | {LABELS[m]} | {acc:.4f} ± {ase:.4f} | "
-                f"{auc:.4f} | {t:,.1f} | {mem:.2f} GB {where} | {'; '.join(note)} |"
+                f"{auc:.4f} | {t:,.1f} | {mem:.2f} GB {where} | {obj_s} | {'; '.join(note)} |"
             )
+    lines += [
+        "",
+        "Objective: mean V(y f) + lambda a'Ka at the lambda the DWD package selected "
+        "in each repeat (mean over repeats), and its ratio to the certified truncated "
+        "TorchKM fit's. The package's KernGDWD stops after a fixed 100 MM iterations "
+        "from a random start, short of the optimum at small lambda.",
+    ]
     detail_path = args.out + "_detail.md"
     write_markdown(doc, detail_path)
     detail = open(detail_path).read()
