@@ -20,6 +20,11 @@ reported in the target's original units; tau = 0.1, 0.5, 0.9)
 DWD (gisette 6,000 x 5,000 with its 1,000-row test file; MNIST 3-vs-8 from
 mnist.scale)
   torchkm_dwd  TorchKMDWD, exact mode, integrated 10-fold CV over the path; GPU
+  torchkm_dwd_trunc
+               TorchKMDWD(spectrum="truncated"): the truncated-spectrum solver
+               (cvkdwd.SpectralDWDPath), every lambda and fold at a certified
+               relative duality gap (--gap-tol), wide blocks of --trunc-block
+               lambdas; float64 like torchkm_dwd; GPU
   dwd_pkg      KernGDWD from the pip package ``dwd`` (Carmichael), the Python
                kernel DWD: the MM algorithm of Wang and Zou with a per-fit cap
                of 100 iterations, on the same precomputed RBF kernel. CPU only:
@@ -94,7 +99,7 @@ from bench_kqr import load_regression, standardize_split  # noqa: E402
 KQR_SETS = ["cpusmall", "cadata"]
 DWD_SETS = ["gisette", "mnist_3v8"]
 KQR_METHODS = ["torchkm_kqr", "xgb_qr"]
-DWD_METHODS = ["torchkm_dwd", "dwd_pkg"]
+DWD_METHODS = ["torchkm_dwd", "torchkm_dwd_trunc", "dwd_pkg"]
 TASK = {**{d: "kqr" for d in KQR_SETS}, **{d: "dwd" for d in DWD_SETS}}
 
 
@@ -231,7 +236,7 @@ def run_xgb_qr(data, sig, lams, foldid, tau, dev, args, seed):
 # ---------------------------------------------------------------------------
 
 
-def run_torchkm_dwd(data, sig, lams, foldid, tau, dev, args, seed):
+def run_torchkm_dwd(data, sig, lams, foldid, tau, dev, args, seed, truncated=False):
     from torchkm.estimators import TorchKMDWD
 
     n = data["Xtr"].shape[0]
@@ -247,6 +252,10 @@ def run_torchkm_dwd(data, sig, lams, foldid, tau, dev, args, seed):
         max_iter=args.max_iter,
         KKTeps=args.kkt_eps,
         random_state=seed,
+        spectrum="truncated" if truncated else "full",
+        spectrum_rank=args.trunc_rank,
+        gap_tol=args.gap_tol,
+        spectrum_block=args.trunc_block,
     )
     torch.linalg.eigh(torch.eye(64, dtype=torch.float64, device=dev))  # start-up
     with Measured(dev) as m:
@@ -264,9 +273,15 @@ def run_torchkm_dwd(data, sig, lams, foldid, tau, dev, args, seed):
         memory=m.memory,
         selected=float(1.0 / (2.0 * n * clf.best_C_)),
         cv_curve=(1.0 - np.asarray(clf.cv_mis_, dtype=float)).tolist(),
-        params=dict(tol=args.tol, max_iter=args.max_iter, KKTeps=args.kkt_eps),
+        params=cell_settings("torchkm_dwd_trunc" if truncated else "torchkm_dwd", args),
+        converged_frac=None if clf.converged_ is None else float(np.mean(clf.converged_)),
         **classification_metrics(data["yte"], scores),
     )
+
+
+def run_torchkm_dwd_trunc(data, sig, lams, foldid, tau, dev, args, seed):
+    """TorchKMDWD(spectrum="truncated"): the certified truncated-spectrum solver."""
+    return run_torchkm_dwd(data, sig, lams, foldid, tau, dev, args, seed, truncated=True)
 
 
 def run_dwd_pkg(data, sig, lams, foldid, tau, dev, args, seed):
@@ -332,6 +347,7 @@ RUN: Dict[str, Callable] = dict(
     torchkm_kqr=run_torchkm_kqr,
     xgb_qr=run_xgb_qr,
     torchkm_dwd=run_torchkm_dwd,
+    torchkm_dwd_trunc=run_torchkm_dwd_trunc,
     dwd_pkg=run_dwd_pkg,
 )
 
@@ -339,6 +355,9 @@ RUN: Dict[str, Callable] = dict(
 def cell_settings(method: str, args) -> Dict[str, Any]:
     if method in ("torchkm_kqr", "torchkm_dwd"):
         return dict(tol=args.tol, max_iter=args.max_iter, KKTeps=args.kkt_eps)
+    if method == "torchkm_dwd_trunc":
+        return dict(spectrum_rank=args.trunc_rank, gap_tol=args.gap_tol,
+                    spectrum_block=args.trunc_block)
     if method == "dwd_pkg":
         return dict(time_cap=args.time_cap)
     return {}
@@ -538,6 +557,13 @@ def main() -> None:
         type=float,
         default=7200,
         help="seconds per dwd_pkg sweep (dataset x repeat) before it stops; 0: none",
+    )
+    ap.add_argument("--trunc-rank", type=int, default=400,
+                    help="torchkm_dwd_trunc: eigenpairs kept")
+    ap.add_argument("--gap-tol", type=float, default=1e-3,
+                    help="torchkm_dwd_trunc: certified relative duality gap")
+    ap.add_argument("--trunc-block", type=int, default=10,
+                    help="torchkm_dwd_trunc: lambdas fitted together with their folds",
     )
     ap.add_argument("--out", default="benchmarks/results/q2_kqr_dwd.json")
     ap.add_argument("--smoke", action="store_true", help="tiny synthetic CPU check")
