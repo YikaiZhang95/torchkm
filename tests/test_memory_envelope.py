@@ -160,8 +160,18 @@ def test_kernel_eigh_in_place_gives_the_same_eigenpairs(dtype):
     w, U = kernel_eigh(K.clone())
     K2 = K.clone()
     w2, U2 = kernel_eigh(K2, overwrite=True)
-    assert torch.equal(w, w2) and torch.equal(U, U2)
     assert U2.data_ptr() == K2.data_ptr()  # the eigenvectors took K's storage
+    # the same factorization to rounding (LAPACK writing into its own input
+    # need not reproduce the copy's last bits): eigenvalues, and eigenvectors
+    # up to sign through the reconstruction and orthonormality
+    tol = 1e-12 if dtype == torch.float64 else 2e-5
+    scale = float(w.abs().max())
+    torch.testing.assert_close(w2, w, rtol=0, atol=tol * scale)
+    torch.testing.assert_close(
+        U2 @ torch.diag(w2) @ U2.T, U @ torch.diag(w) @ U.T, rtol=0, atol=tol * scale
+    )
+    eye = torch.eye(30, dtype=dtype)
+    torch.testing.assert_close(U2.T @ U2, eye, rtol=0, atol=50 * torch.finfo(dtype).eps)
 
 
 @pytest.mark.parametrize("name, extra", _EXACT)
@@ -170,8 +180,19 @@ def test_exact_solvers_factorize_in_place_with_the_same_fit(name, extra):
     copy.fit()
     inplace = _exact_solver(name, extra, rebuild=True)
     inplace.fit()
-    assert torch.equal(inplace.alpmat, copy.alpmat)
-    assert torch.equal(inplace.pred, copy.pred)
+    # the same fit: the in-place factorization is the copy's to rounding, not
+    # bitwise (see test_kernel_eigh_in_place_gives_the_same_eigenpairs). For the
+    # hinge, DWD and check losses the best intercept can be a whole interval, so
+    # rounding may move it inside its flat optimum; the objective is the same
+    if hasattr(copy, "obj_value"):
+        for j, lam in enumerate(copy.ulam.tolist()):
+            assert float(inplace.obj_value(inplace.alpmat[:, j], lam)) == pytest.approx(
+                float(copy.obj_value(copy.alpmat[:, j], lam)), rel=1e-5
+            )
+        torch.testing.assert_close(inplace.pred, copy.pred, rtol=0, atol=1e-3)
+    else:
+        torch.testing.assert_close(inplace.alpmat, copy.alpmat, rtol=1e-6, atol=1e-8)
+        torch.testing.assert_close(inplace.pred, copy.pred, rtol=1e-6, atol=1e-8)
 
 
 @pytest.mark.parametrize("estimator", [TorchKMSVC, TorchKMKQR])
@@ -196,8 +217,8 @@ def test_estimators_factorize_in_place_but_not_a_precomputed_kernel(
     monkeypatch.setattr(module, "kernel_eigh", lambda K, overwrite=False: real(K))
     b = estimator(kernel="rbf", rbf_sigma=0.5, **kw).fit(X, y)
     assert seen == [True]
-    np.testing.assert_array_equal(a.alpha_, b.alpha_)
-    assert a.intercept_ == b.intercept_
+    np.testing.assert_allclose(a.alpha_, b.alpha_, rtol=1e-6, atol=1e-8)
+    assert a.intercept_ == pytest.approx(b.intercept_, rel=1e-6, abs=1e-8)
     # a precomputed kernel is the caller's array: factorized as a copy
     K = functions.rbf_kernel(torch.as_tensor(X, dtype=torch.double), 0.5).numpy()
     K0 = K.copy()

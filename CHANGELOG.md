@@ -255,7 +255,8 @@ All notable changes to TorchKM are documented in this file.
   copy of the kernel; the estimators now let it overwrite the kernel's own
   storage with the eigenvectors and rebuild the kernel afterwards (one kernel
   evaluation), which takes one n x n matrix off the peak at the same speed.
-  Fits are bitwise identical. The six exact solvers take `rebuild_kmat` for
+  Fits are identical to rounding (LAPACK factorizing its own input need not
+  reproduce the copy's last bits). The six exact solvers take `rebuild_kmat` for
   this; a precomputed kernel is the caller's array and is still factorized as
   a copy.
 - `EXACT_MODE_COPIES` is 5, from the GPU, instead of the CPU sweep's 4. On an
