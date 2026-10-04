@@ -117,7 +117,7 @@ def _check_binary_y(y: np.ndarray) -> Tuple[np.ndarray, Any, Any]:
 
 class _TruncatedSVMBackend:
     """The exact SVM backend's interface over
-    :class:`torchkm.experimental.SpectralSVMPath`, for ``spectrum="truncated"``.
+    :class:`torchkm.cvksvm.SpectralSVMPath`, for ``spectrum="truncated"``.
 
     The kernel is the same; the solver's curvature keeps only the top ``rank``
     eigenpairs, so there is no full eigendecomposition (peak about 1.2 ``n x n``
@@ -137,7 +137,7 @@ class _TruncatedSVMBackend:
             self._options["fit_cap"] = int(fit_cap)
 
     def fit(self):
-        from .experimental import SpectralSVMPath
+        from .cvksvm import SpectralSVMPath
 
         K, y, lambdas, foldid = self._problem
         self._problem = None  # hold no reference to the kernel after the fit
@@ -858,7 +858,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
     def _kernel_operator(self, X_dev: torch.Tensor, sigma: float):
         """The RBF kernel of ``X_dev`` as a never-stored operator: fused
         products on CUDA in float32, blocks of rows otherwise."""
-        from .experimental import RBFKernelOperator
+        from .functions import RBFKernelOperator
 
         fused = X_dev.device.type == "cuda" and X_dev.dtype == torch.float32
         return RBFKernelOperator(X_dev, sigma, fused=fused)
@@ -1034,10 +1034,10 @@ class TorchKMSVC(_TorchKMBaseBinaryClassifier):
         Large-n mode for problems whose kernel matrix does not fit in memory
         (e.g. the whole covtype.binary, 464,809 rows). The exact RBF kernel
         model, fitted by the truncated-spectrum solver
-        (:class:`torchkm.experimental.SpectralSVMPath`, as ``spectrum=
+        (:class:`torchkm.cvksvm.SpectralSVMPath`, as ``spectrum=
         "truncated"``), but the kernel is never stored: every product with it
         is recomputed from the training rows
-        (:class:`torchkm.experimental.RBFKernelOperator`), fused into one GPU
+        (:class:`torchkm.functions.RBFKernelOperator`), fused into one GPU
         kernel on CUDA with ``dtype="float32"``. Memory grows like ``n`` times
         the columns of a block (``spectrum_block x (cv + 1)``) instead of
         ``n^2``; each product costs the kernel's arithmetic again, so a stored
@@ -1048,10 +1048,10 @@ class TorchKMSVC(_TorchKMBaseBinaryClassifier):
         ``kernel="rbf"``.
     spectrum : {"full", "truncated"}, default="full"
         The exact-mode solver. ``"full"`` eigendecomposes the kernel matrix
-        (:class:`torchkm.cvksvm.cvksvm`). ``"truncated"`` (experimental) keeps
+        (:class:`torchkm.cvksvm.cvksvm`). ``"truncated"`` keeps
         the exact kernel but only its top ``spectrum_rank`` eigenpairs, and
         stops every lambda and fold at the certified relative duality gap
-        ``gap_tol`` (:class:`torchkm.experimental.SpectralSVMPath`). Its peak
+        ``gap_tol`` (:class:`torchkm.cvksvm.SpectralSVMPath`). Its peak
         memory is about 1.2 ``n x n`` matrices instead of 5, and it is not
         bound by the GPU eigensolver's size limit. ``tol``, ``max_iter``,
         ``KKTeps``, ``delta_len`` and ``kkt_scaled`` do not apply to it.
@@ -1063,7 +1063,7 @@ class TorchKMSVC(_TorchKMBaseBinaryClassifier):
     spectrum_block : int, default=10
         Lambdas that ``spectrum="truncated"`` fits together with all their
         folds, sharing each product with the kernel matrix (the ``block``
-        option of :class:`torchkm.experimental.SpectralSVMPath`); 1 fits the
+        option of :class:`torchkm.cvksvm.SpectralSVMPath`); 1 fits the
         path serially. Without cross-validation folds the path is serial.
 
     Attributes

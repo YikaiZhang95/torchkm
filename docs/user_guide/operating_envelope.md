@@ -103,7 +103,7 @@ When an exact-mode fit does run out of memory, the `torch.cuda.OutOfMemoryError`
 TorchKM raises names the training size, the predicted requirement, the device's
 total memory, the largest \(n\) it supports, and the alternatives below.
 
-## Beyond the envelope: the truncated spectrum (experimental)
+## Beyond the envelope: the truncated spectrum
 
 `TorchKMSVC(spectrum="truncated")` keeps the exact kernel but not its full
 eigendecomposition. The solver's curvature uses only the top `spectrum_rank`

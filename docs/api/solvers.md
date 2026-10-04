@@ -6,6 +6,13 @@ This page documents low-level solvers in TorchKM. These are intended for advance
 
 ::: torchkm.cvksvm.cvksvm
 
+## Kernel SVM, truncated spectrum
+
+The solver of `TorchKMSVC(spectrum="truncated")` and `TorchKMSVC(low_rank=True)`.
+`torchkm.experimental` keeps a copy of it for exploring changes.
+
+::: torchkm.cvksvm.SpectralSVMPath
+
 ## Kernel DWD
 
 ::: torchkm.cvkdwd.cvkdwd

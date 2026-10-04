@@ -100,9 +100,9 @@ proba = clf.predict_proba(Xte)
 When the \(n \times n\) kernel matrix does not fit in memory, set
 `low_rank=True`. This is not an approximation of the model: it fits the exact
 RBF kernel SVM with the truncated-spectrum solver
-(`torchkm.experimental.SpectralSVMPath`, as `spectrum="truncated"`), but the
+(`torchkm.cvksvm.SpectralSVMPath`, as `spectrum="truncated"`), but the
 kernel matrix is never stored. Every product with it is recomputed from the
-training rows (`torchkm.experimental.RBFKernelOperator`), so memory grows like
+training rows (`torchkm.functions.RBFKernelOperator`), so memory grows like
 \(n\) times the columns of a block (`spectrum_block` \(\times\) (`cv` + 1))
 instead of \(n^2\).
 

@@ -18,6 +18,8 @@ This page documents public kernel and utility functions.
 
 ::: torchkm.functions.kernelMult
 
+::: torchkm.functions.RBFKernelOperator
+
 ## Probability calibration
 
 ::: torchkm.platt.PlattScalerTorch

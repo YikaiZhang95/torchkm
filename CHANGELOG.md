@@ -30,6 +30,11 @@ All notable changes to TorchKM are documented in this file.
   `SpectralSVMPath` call exactly.
 - `TorchKMSVC` reports `duality_gaps_` and `fold_duality_gaps_` for
   `spectrum="truncated"` and `low_rank=True`.
+- The truncated-spectrum solver is part of the package API:
+  `torchkm.cvksvm.SpectralSVMPath` (with `hinge_duality_gap`) and
+  `torchkm.functions.RBFKernelOperator`, copies of the experimental code. The
+  estimators use these and no longer import `torchkm.experimental`, which
+  keeps its own copy for exploring changes.
 
 ### Fixed
 - `sigest` failed in `torch.quantile` when every sampled pair of rows was the
