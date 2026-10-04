@@ -110,3 +110,52 @@ def test_estimators_do_not_use_the_experimental_copy(monkeypatch):
     for extra in (dict(spectrum="truncated"), dict(low_rank=True)):
         clf = TorchKMSVC(**kw, **extra).fit(X.numpy(), y.numpy())
         assert np.isfinite(clf.decision_function(X.numpy()[:5])).all()
+
+
+@pytest.mark.parametrize("dtype", [torch.float64, torch.float32])
+def test_tiled_wide_fit_matches_the_dense_one(monkeypatch, dtype):
+    # the large-n path: labels never stored, steps and certificate in row
+    # tiles (tiny tiles here so that every quantity spans several)
+    import torchkm.cvksvm as ck
+
+    _, K, y, _ = _problem(n=240, dtype=dtype)
+    lams = np.logspace(-2, -3.5, 6)
+    foldid = torch.as_tensor(np.arange(240) % 4 + 1)
+    dense = SpectralSVMPath(K, y, lams, foldid, rank=30, block=3, tile=False).fit()
+    monkeypatch.setattr(ck, "_TILE_BLOCK", 15 * 37)  # 37 rows per tile, 15 columns
+    tiled = SpectralSVMPath(K, y, lams, foldid, rank=30, block=3, tile=True).fit()
+    assert bool(tiled.converged.all()) and bool(tiled.fold_converged.all())
+    assert float(np.nanmax(tiled.fold_gaps)) <= 1e-3
+    for j, lam in enumerate(lams):
+        P_t = _primal(K, y, tiled.alphas[1:, j], float(tiled.alphas[0, j]), lam)
+        P_d = _primal(K, y, dense.alphas[1:, j], float(dense.alphas[0, j]), lam)
+        assert abs(P_t - P_d) <= 1e-3 * P_d
+    assert float((tiled.cv_error - dense.cv_error).abs().max()) <= 2.0 / 240
+
+
+def test_tiled_step_and_certificate_match_the_dense_ones(monkeypatch):
+    import torchkm.cvksvm as ck
+
+    _, K, y, _ = _problem(n=240)
+    foldid = torch.as_tensor(np.arange(240) % 4 + 1)
+    m = SpectralSVMPath(K, y, [1e-2, 5e-3], foldid, rank=30, block=2, tile=False).fit()
+    lab = ck._Labels(y, torch.as_tensor(np.arange(240) % 4), torch.arange(-1, 4).repeat(2))
+    Yd = lab.rows(0, 240)
+    lam = torch.tensor([1e-2] * 5 + [5e-3] * 5, dtype=torch.float64)
+    A0 = torch.cat([m.alphas[1:, :1].expand(-1, 5), m.alphas[1:, 1:].expand(-1, 5)], 1)
+    b0 = torch.cat([m.alphas[0, :1].expand(5), m.alphas[0, 1:].expand(5)])
+    A0 = A0 + 1e-3 * torch.randn(A0.shape, generator=torch.Generator().manual_seed(0), dtype=A0.dtype)
+    monkeypatch.setattr(ck, "_TILE_BLOCK", 10 * 37)
+    zero = torch.zeros(10, dtype=torch.float64)
+    A, b, KA = A0.clone(), b0.clone(), K @ A0
+    A2, b2, KA2 = A0.clone(), b0.clone(), K @ A0
+    m._round(Yd, A, b, KA, lam, 0.125, zero, 3)
+    m._round_tiled(lab, A2, b2, KA2, lam, 0.125, zero, 3)
+    torch.testing.assert_close(A2, A, rtol=1e-10, atol=1e-12)
+    torch.testing.assert_close(b2, b, rtol=1e-10, atol=1e-12)
+    lmax = float(torch.linalg.matrix_norm(K, 2))
+    kw = dict(Ka=K @ A0, delta=1e-3, refine=20, lmax=lmax, target=4e-5)
+    g1, _, D1 = ck.hinge_duality_gap(K, Yd, A0, b0, lam, **kw)
+    g2, _, D2 = ck._hinge_duality_gap_tiled(K, lab, A0, b0, lam, **kw)
+    torch.testing.assert_close(g2, g1, rtol=1e-10, atol=1e-12)
+    torch.testing.assert_close(D2, D1, rtol=1e-10, atol=1e-12)
