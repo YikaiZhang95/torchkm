@@ -22,7 +22,7 @@ either one without having to know which was used.
   by a fresh CUDA log bundle on the release commit.
 - **On dependency bumps.** PyTorch / CUDA bumps in `setup.cfg`.
 - **After non-trivial solver changes.** Anything touching
-  `torchkm/cvk*.py`, `torchkm/cvknys*.py`, or `torchkm/functions.py`.
+  `torchkm/cvk*.py`, `torchkm/experimental/`, or `torchkm/functions.py`.
 
 ## Required environment
 

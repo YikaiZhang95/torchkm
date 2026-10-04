@@ -190,30 +190,5 @@ class TestKqrScore(unittest.TestCase):
             est.score(X, y[:10])
 
 
-class TestLowRankFitTimeOptions(unittest.TestCase):
-    """Passing low-rank options into ``fit`` should update the estimator's
-    state in place so subsequent calls observe the new configuration.
-    """
-
-    def test_apply_fit_low_rank_options_updates(self):
-        from torchkm.estimators import TorchKMKQR
-
-        est = TorchKMKQR(
-            kernel="rbf",
-            nC=2,
-            cv=2,
-            tau=0.5,
-            device="cpu",
-            low_rank=False,
-            num_landmarks=10,
-            nys_k=5,
-            max_iter=20,
-        )
-        est._apply_fit_low_rank_options(low_rank=True, num_landmarks=33, nys_k=7)
-        self.assertTrue(est.low_rank)
-        self.assertEqual(est.num_landmarks, 33)
-        self.assertEqual(est.nys_k, 7)
-
-
 if __name__ == "__main__":
     unittest.main()

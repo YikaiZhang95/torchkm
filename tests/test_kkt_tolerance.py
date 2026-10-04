@@ -107,18 +107,14 @@ def test_kkt_scaled_is_passed_to_the_kqr_backends():
     from torchkm.estimators import TorchKMKQR
 
     Xr, yr = make_regression(n_samples=60, n_features=4, noise=0.3, random_state=0)
-    for low_rank in (False, True):
-        reg = TorchKMKQR(
-            kernel="rbf",
-            nC=2,
-            cv=2,
-            device="cpu",
-            max_iter=30,
-            kkt_scaled=True,
-            low_rank=low_rank,
-            num_landmarks=20,
-            nys_k=10,
-            random_state=0,
-        ).fit(Xr, yr)
-        assert reg.kkt_scaled is True
-        assert np.isfinite(reg.predict(Xr[:3])).all()
+    reg = TorchKMKQR(
+        kernel="rbf",
+        nC=2,
+        cv=2,
+        device="cpu",
+        max_iter=30,
+        kkt_scaled=True,
+        random_state=0,
+    ).fit(Xr, yr)
+    assert reg.kkt_scaled is True
+    assert np.isfinite(reg.predict(Xr[:3])).all()

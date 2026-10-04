@@ -4,7 +4,37 @@ All notable changes to TorchKM are documented in this file.
 
 ## [Unreleased]
 
+### Removed
+- The Nyström approximation: the solvers `cvknyssvm`, `cvknyslogit`,
+  `cvknysdwd` and `cvknyqr`; the `low_rank`, `num_landmarks` and `nys_k`
+  parameters of `TorchKMDWD`, `TorchKMLogit` and `TorchKMKQR` (exact mode
+  only now); `num_landmarks` and `nys_k` of `TorchKMSVC`; the `low_rank`,
+  `num_landmarks` and `nys_k` keywords of `fit` (now `fit(X, y)`); the
+  Nyström benchmarks (`table4_nystrom.py`, `q3_covtype.py`,
+  `bench_covtype_rank.py`), the example and the Nyström pages of the docs.
+
+### Changed
+- `TorchKMSVC(low_rank=True)` is the matrix-free large-n SVM, no longer a
+  Nyström approximation: the exact RBF kernel model, fitted by the
+  truncated-spectrum solver (as `spectrum="truncated"`), with the kernel never
+  stored. Every product is recomputed from the training rows
+  (`RBFKernelOperator`), fused on CUDA with `dtype="float32"`, so memory grows
+  like n times the columns of a block instead of n^2; predictions use fused
+  cross products. `spectrum_rank`, `gap_tol` and `spectrum_block` apply,
+  `max_iter` is the iteration budget of each lambda, and `kernel="rbf"` is
+  required. With the same bandwidth it gives the stored-kernel truncated fit
+  (bitwise in float64 on the CPU). The whole covtype.binary (464,809 rows,
+  50 lambdas x 10 folds, gamma 32, `dtype="float32"`, `max_iter=40`): 62.3
+  min, 6.6 GB, test accuracy 0.9609 (cuML's SVC: 243.0 min, 4.5 GB, 0.9620);
+  on a 60,000-row subsample the estimator reproduces the direct
+  `SpectralSVMPath` call exactly.
+- `TorchKMSVC` reports `duality_gaps_` and `fold_duality_gaps_` for
+  `spectrum="truncated"` and `low_rank=True`.
+
 ### Fixed
+- `sigest` failed in `torch.quantile` when every sampled pair of rows was the
+  same row (likely when `frac * n` is a handful of rows); it then uses every
+  pair of distinct rows, and raises a `ValueError` if all rows are equal.
 - Stopping of the exact kernel quantile regression solver (`cvkqr`,
   `TorchKMKQR`, `is_exact=0`). Each bandwidth's solve was accepted by a KKT
   test of the unsmoothed check loss that gave every row the subgradient of

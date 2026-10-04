@@ -35,8 +35,6 @@ def test_fit_timing_accounts_for_the_exact_fit():
 
 def test_fit_timing_low_rank_has_kernel_and_total():
     X, y = make_classification(n_samples=120, n_features=5, random_state=0)
-    clf = TorchKMSVC(
-        low_rank=True, num_landmarks=30, nys_k=10, nC=3, cv=3, device="cpu"
-    ).fit(X, y)
-    assert {"kernel", "total"} <= set(clf.fit_timing_)
-    assert "eigendecomposition" not in clf.fit_timing_
+    clf = TorchKMSVC(low_rank=True, nC=3, cv=3, device="cpu").fit(X, y)
+    assert {"kernel", "factorization", "path", "total"} <= set(clf.fit_timing_)
+    assert "eigendecomposition" not in clf.fit_timing_  # no full factorization

@@ -60,10 +60,8 @@ For the RBF kernel, TorchKM can estimate a kernel scale automatically when `rbf_
 | `cv` | Number of cross-validation folds |
 | `device` | Device used for computation |
 | `probability` | Whether to fit probability calibration |
-| `low_rank` | Whether to use the Nyström approximation |
-| `num_landmarks` | Number of Nyström landmark points |
-| `nys_k` | Rank used in the Nyström approximation |
-| `max_iter` | Maximum number of optimization iterations |
+| `low_rank` | Large-\(n\) mode: exact RBF kernel SVM without storing the kernel matrix |
+| `max_iter` | Maximum number of optimization iterations (per lambda when `low_rank=True`) |
 | `tol` | Numerical tolerance |
 
 ## Labels and fitted attributes
@@ -97,31 +95,46 @@ clf.fit(Xtr, ytr)
 proba = clf.predict_proba(Xte)
 ```
 
-## Low-rank SVM
+## Large-n SVM: `low_rank=True`
 
-For larger data sets, use the Nyström approximation:
+When the \(n \times n\) kernel matrix does not fit in memory, set
+`low_rank=True`. This is not an approximation of the model: it fits the exact
+RBF kernel SVM with the truncated-spectrum solver
+(`torchkm.experimental.SpectralSVMPath`, as `spectrum="truncated"`), but the
+kernel matrix is never stored. Every product with it is recomputed from the
+training rows (`torchkm.experimental.RBFKernelOperator`), so memory grows like
+\(n\) times the columns of a block (`spectrum_block` \(\times\) (`cv` + 1))
+instead of \(n^2\).
 
 ```python
 clf = TorchKMSVC(
     kernel="rbf",
     Cs=Cs,
-    cv=5,
-    device=device,
+    cv=10,
+    device="cuda",
+    dtype="float32",
     low_rank=True,
-    num_landmarks=40,
-    nys_k=20,
+    spectrum_rank=400,
+    spectrum_block=10,
     max_iter=40,
 )
 clf.fit(Xtr, ytr)
+print(clf.converged_)
 ```
 
-Constructor-based configuration is recommended, but the Nyström path can also
-be enabled at fit time:
+- It needs `kernel="rbf"` on raw features (no `"precomputed"` kernel).
+- On CUDA with `dtype="float32"` the kernel products run fused in one GPU
+  kernel.
+- `spectrum_rank`, `gap_tol` and `spectrum_block` apply; `spectrum` is ignored.
+- `max_iter` is the iteration budget of each lambda. Fits that reach it are
+  kept and reported as not converged in `converged_`.
+- Each product pays the kernel's arithmetic again, so when the kernel fits in
+  memory the stored-kernel modes (the default, or `spectrum="truncated"`) are
+  faster.
 
-```python
-clf = TorchKMSVC(kernel="rbf", Cs=Cs, cv=5, device=device, probability=True)
-clf.fit(Xtr, ytr, low_rank=True, num_landmarks=40, nys_k=20)
-```
-
-The high-level low-rank path currently supports raw-feature RBF workflows. It
-does not support `kernel="precomputed"`.
+On the whole covtype.binary training set (464,809 rows), 50 lambdas with
+10-fold cross-validation at RBF \(\gamma = 32\), the call above
+(`dtype="float32"`, `max_iter=40`, `spectrum_block=10`, `spectrum_rank=400`)
+took 62 minutes and 6.6 GB of GPU memory on an NVIDIA L40S, with test accuracy
+0.9609. cuML's SVC on the same job took 243 minutes and 4.5 GB, with test
+accuracy 0.9620.

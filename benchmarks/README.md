@@ -14,13 +14,12 @@ contributor notes (adding a library or a dataset, the JSON schema) are in
 
 | Script | Produces |
 | --- | --- |
-| `bench_memory_envelope.py` | time and peak memory versus n in exact mode until the first OOM, Nyström beyond it, and the empirical memory constant |
+| `bench_memory_envelope.py` | time and peak memory versus n in exact mode until the first OOM, and the empirical memory constant |
 | `bench_gpu_libraries.py` | TorchKM vs scikit-learn, ThunderSVM, cuML, Falkon and linear baselines on the scaling, exact, imbalanced and scale suites |
-| `bench_covtype_rank.py` | accuracy versus landmarks x rank on covtype (optionally Falkon at the same centres) |
 | `bench_kqr.py` + `r/bench_kqr.R` | kernel quantile regression vs fastkqr, kernlab::kqr and linear QR |
 | `bench_dwd.py` + `r/bench_dwd.R` | kernel DWD vs kerndwd, SVM as reference |
 | `bench_solver_quality.py` | SVM objective at fixed lambda, solver by solver, same kernel |
-| `table2_simulation.py`, `table3_benchmarks.py`, `table4_nystrom.py` | the submitted paper's Tables 2-4 with their original protocol |
+| `table2_simulation.py`, `table3_benchmarks.py` | the submitted paper's Tables 2-3 with their original protocol |
 | `make_tables.py` | Markdown / LaTeX tables from JSON results and R CSV rows |
 
 Shared code: `_common.py` (grids, folds, timing, `PeakMemory`, metrics,
@@ -30,7 +29,7 @@ library, lazy imports).
 ## Quick check
 
 ```bash
-for s in bench_memory_envelope bench_gpu_libraries bench_covtype_rank bench_kqr bench_dwd bench_solver_quality; do
+for s in bench_memory_envelope bench_gpu_libraries bench_kqr bench_dwd bench_solver_quality; do
     python benchmarks/$s.py --smoke
 done
 ```
@@ -101,7 +100,7 @@ skipped.
 Each JSON file holds an environment snapshot (GPU, driver, CUDA, PyTorch,
 library versions, TorchKM version and commit) and one record per dataset x
 library x repeat with: dataset, n_train, n_test, p, class prior, library,
-mode (exact / nystrom / linear), parameters (landmarks, rank, centres),
+mode (exact / nystrom for Falkon / linear), parameters (Falkon centres),
 status (ok / capped / failed / exceeds_envelope), end-to-end time, peak memory
 (PyTorch allocator and NVML process peak), the selected C, and the test
 metrics (accuracy, balanced accuracy, AUC; pinball loss and coverage for KQR).
@@ -113,18 +112,16 @@ system load. Do not compare a cold first run with a warmed run: the scripts
 run a warmup fit and synchronise CUDA around every timed region. Report the
 number of repeats and the standard errors, which the scripts compute.
 
-## Legacy protocol (Tables 2-4 of the submitted paper)
+## Legacy protocol (Tables 2-3 of the submitted paper)
 
-`table2_simulation.py`, `table3_benchmarks.py` and `table4_nystrom.py` follow
-the source notebooks per method: 10-fold cross-validation over a 50-point
-lambda grid transferred to LIBSVM `C` via `C = 1/(2*n*lambda)`; grids per
-table (Table 2 `lambda in [1e-3, 1e3]`, Table 3 `[1e-5, 1e-1]`, Table 4
-`[1e-3, 1e3]` except a9a `[1e-7, 1e-1]`); Table 3 times the solver only; Table
-4's covtype cell uses rank `k=30`. Keep them for reproducing the submitted
-numbers; use the `bench_*.py` scripts for the revision.
+`table2_simulation.py` and `table3_benchmarks.py` follow the source notebooks
+per method: 10-fold cross-validation over a 50-point lambda grid transferred
+to LIBSVM `C` via `C = 1/(2*n*lambda)`; grids per table (Table 2
+`lambda in [1e-3, 1e3]`, Table 3 `[1e-5, 1e-1]`); Table 3 times the solver
+only. Keep them for reproducing the submitted numbers; use the `bench_*.py`
+scripts for the revision.
 
 ```bash
 python benchmarks/table2_simulation.py --repeats 50 --device cuda --thundersvm-path /path/to/thundersvm/python
 python benchmarks/table3_benchmarks.py --data-dir DATA_DIR --repeats 10 --device cuda --thundersvm-path /path/to/thundersvm/python
-python benchmarks/table4_nystrom.py --data-dir DATA_DIR --datasets a9a w8a ijcnn1 --repeats 10 --device cuda
 ```

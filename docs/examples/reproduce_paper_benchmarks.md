@@ -57,13 +57,13 @@ One protocol applies to every library and every script:
 
 | Script | What it produces |
 | --- | --- |
-| `bench_memory_envelope.py` | Time and peak memory versus \(n\) in exact mode until the first out-of-memory error, then the Nyström path beyond it; the empirical memory constant. The scaling figure. |
+| `bench_memory_envelope.py` | Time and peak memory versus \(n\) in exact mode until the first out-of-memory error; the empirical memory constant. The scaling figure. |
 | `bench_gpu_libraries.py` | TorchKM against scikit-learn, ThunderSVM, cuML, Falkon and tuned linear baselines on the Adult scaling study, the exact-range problems (ijcnn1, MNIST pairs, covtype subsample, w7a), the imbalanced sets and the large sets. |
-| `bench_covtype_rank.py` | Accuracy versus landmarks and rank on covtype: the accounting for the Nyström configuration. |
+| `covtype_full_trunc.py` and `covtype_full_cuml.py` | One fit on the whole covtype.binary training set: `TorchKMSVC(low_rank=True)`'s never-stored-kernel solver against cuML's SVC. |
 | `bench_kqr.py` and `r/bench_kqr.R` | Kernel quantile regression at three quantile levels against `fastkqr`, `kernlab::kqr` and a linear quantile regression. |
 | `bench_dwd.py` and `r/bench_dwd.R` | Kernel DWD against `kerndwd`, with the SVM as the in-package reference. |
 | `bench_solver_quality.py` | The SVM objective at fixed \(\lambda\), solver by solver, on the same kernel: the solver-quality check. |
-| `table2_simulation.py`, `table3_benchmarks.py`, `table4_nystrom.py` | The submitted paper's Tables 2 to 4 with their original protocol (Table 2 now also reports accuracy, AUC and peak memory). |
+| `table2_simulation.py`, `table3_benchmarks.py` | The submitted paper's Tables 2 and 3 with their original protocol (Table 2 now also reports accuracy, AUC and peak memory). |
 | `make_tables.py` | Markdown or LaTeX tables from the JSON results and the R CSV rows. |
 
 ## Running
@@ -75,20 +75,19 @@ DATA=~/libsvm
 python benchmarks/bench_memory_envelope.py --device cuda --out benchmarks/results/envelope.json
 
 python benchmarks/bench_gpu_libraries.py --data-dir $DATA --suite scaling \
-    --libraries torchkm torchkm_nystrom sklearn_svc thundersvm cuml_svc linear \
+    --libraries torchkm sklearn_svc thundersvm cuml_svc linear \
     --repeats 10 --device cuda --time-cap 14400 --out benchmarks/results/scaling.json
 python benchmarks/bench_gpu_libraries.py --data-dir $DATA --suite exact \
     --libraries torchkm sklearn_svc thundersvm cuml_svc linear \
     --repeats 10 --device cuda --time-cap 14400 --out benchmarks/results/exact.json
 python benchmarks/bench_gpu_libraries.py --data-dir $DATA --suite imbalanced \
-    --libraries torchkm_nystrom falkon linear --falkon-centers 2000 10000 \
+    --libraries falkon linear --falkon-centers 2000 10000 \
     --repeats 10 --device cuda --out benchmarks/results/imbalanced.json
 python benchmarks/bench_gpu_libraries.py --data-dir $DATA --suite scale \
-    --libraries torchkm_nystrom falkon linear --falkon-centers 2000 10000 20000 \
+    --libraries falkon linear --falkon-centers 2000 10000 20000 \
     --repeats 10 --device cuda --time-cap 14400 --out benchmarks/results/scale.json
 
-python benchmarks/bench_covtype_rank.py --data-dir $DATA --device cuda --with-falkon \
-    --repeats 3 --out benchmarks/results/covtype_rank.json
+python benchmarks/covtype_full_trunc.py --data-dir $DATA --gamma 32 --C 100
 
 python benchmarks/bench_kqr.py --data-dir $DATA --datasets synthetic cadata abalone cpusmall \
     --repeats 5 --device cuda --export-splits benchmarks/results/kqr_splits \

@@ -3,14 +3,10 @@
 Reads the files ``run_campaign.sh`` writes into a results directory and draws:
 
 * ``fig1_envelope``: time and peak memory versus n, exact mode up to the first
-  out-of-memory error and the Nyström path beyond it, with the ceilings of
-  16, 24, 48 and 80 GB cards marked (``envelope.json``).
+  out-of-memory error, with the ceilings of 16, 24, 48 and 80 GB cards marked
+  (``envelope.json``).
 * ``fig2_scaling``: end-to-end time versus n on the Adult scaling study, one
   line per library (``scaling_torchkm.json`` + ``scaling_baselines.json``).
-* ``fig3_covtype_budget``: accuracy versus number of landmarks on covtype,
-  one line per Nyström rank, Falkon at the same centre counts, and the
-  exact-mode 30k reference as a horizontal line (``covtype_rank.json`` +
-  ``exact_torchkm.json``).
 * ``fig4_solver_quality``: relative objective gap to the best solver versus
   lambda for the default, tight and scaled stopping rules
   (``solver_quality_*.json``).
@@ -39,7 +35,6 @@ import numpy as np
 # Fixed categorical assignment (validated palette; one hue per library, never cycled).
 COLORS = {
     "torchkm": "#2a78d6",  # blue
-    "torchkm_nystrom": "#1baf7a",  # aqua
     "cuml_svc": "#eb6834",  # orange
     "thundersvm": "#eda100",  # yellow
     "falkon": "#4a3aa7",  # violet
@@ -49,7 +44,6 @@ COLORS = {
 }
 LABELS = {
     "torchkm": "TorchKM (exact)",
-    "torchkm_nystrom": "TorchKM (Nyström)",
     "cuml_svc": "cuML SVC",
     "thundersvm": "ThunderSVM",
     "falkon": "Falkon",
@@ -141,7 +135,6 @@ def fig_envelope(results: str, out: str, plt) -> None:
     fig, (ax_t, ax_m) = plt.subplots(1, 2, figsize=(7.2, 2.8))
     for mode, key, label in (
         ("exact", "torchkm", "exact"),
-        ("nystrom", "torchkm_nystrom", "Nyström"),
     ):
         by_n = defaultdict(list)
         for r in ok(recs):
@@ -216,63 +209,6 @@ def fig_scaling(results: str, out: str, plt) -> None:
     save(fig, out, "fig2_scaling")
 
 
-def fig_covtype(results: str, out: str, plt) -> None:
-    recs = load(results, "covtype_rank.json")
-    if not recs:
-        return
-    fig, ax = plt.subplots(figsize=(3.6, 2.8))
-    by_rank = defaultdict(lambda: defaultdict(list))
-    falkon = defaultdict(list)
-    for r in ok(recs):
-        p = r.get("params") or {}
-        if r["library"] == "torchkm_nystrom":
-            by_rank[p.get("nys_k")][p.get("num_landmarks")].append(r["accuracy"])
-        elif r["library"] == "falkon":
-            falkon[p.get("centers")].append(r["accuracy"])
-    shades = [
-        "#9ec1ec",
-        "#5f9be0",
-        "#2a78d6",
-        "#17498a",
-    ]  # one hue, light -> dark by rank
-    for shade, k in zip(shades, sorted(by_rank)):
-        ms = sorted(by_rank[k])
-        ax.plot(
-            ms,
-            [mean_se(by_rank[k][m])[0] for m in ms],
-            marker="o",
-            color=shade,
-            label=f"TorchKM rank {k}",
-        )
-    if falkon:
-        ms = sorted(falkon)
-        ax.plot(
-            ms,
-            [mean_se(falkon[m])[0] for m in ms],
-            marker="s",
-            color=COLORS["falkon"],
-            label="Falkon",
-        )
-    exact = load(results, "exact_torchkm.json") or []
-    ref = [
-        r["accuracy"]
-        for r in ok(exact)
-        if r.get("dataset") == "covtype_30k" and r["library"] == "torchkm"
-    ]
-    if ref:
-        ax.axhline(np.mean(ref), color=COLORS["torchkm"], linestyle="--", linewidth=1)
-        ax.annotate(
-            "exact mode, 30k subsample",
-            (ax.get_xlim()[0], np.mean(ref)),
-            fontsize=7,
-            color=COLORS["torchkm"],
-            va="bottom",
-        )
-    ax.set(xscale="log", xlabel="landmarks / centres", ylabel="test accuracy (covtype)")
-    ax.legend(fontsize=7)
-    save(fig, out, "fig3_covtype_budget")
-
-
 def fig_solver_quality(results: str, out: str, plt) -> None:
     runs = [
         ("solver_quality_default.json", "default KKTeps=1e-3", "#e34948"),
@@ -333,7 +269,6 @@ def main() -> None:
     style(plt)
     fig_envelope(args.results, out, plt)
     fig_scaling(args.results, out, plt)
-    fig_covtype(args.results, out, plt)
     fig_solver_quality(args.results, out, plt)
 
 

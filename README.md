@@ -107,7 +107,7 @@ Anywhere you have a table of rows and want an accurate, **calibrated** yes/no (o
 - A confidence gate in automated pipelines: act when `predict_proba` is high, escalate to a human when it isn't.
 - A cheap, reproducible second opinion to cross-check an LLM's structured-data judgments.
 
-> Scope note: TorchKM does **binary** classification (SVM, DWD, logistic) and kernel **quantile regression** today. For multiclass, wrap it one-vs-rest (a good first contribution — see below). It shines on small-to-mid tabular data; for millions of rows, use the built-in Nyström mode (`low_rank=True`).
+> Scope note: TorchKM does **binary** classification (SVM, DWD, logistic) and kernel **quantile regression** today. For multiclass, wrap it one-vs-rest (a good first contribution — see below). It shines on small-to-mid tabular data; when the kernel matrix no longer fits in memory, `TorchKMSVC(low_rank=True)` fits the exact RBF kernel SVM without storing it (DWD, logistic and quantile regression run in exact mode only).
 
 **The same three lines, on different jobs.** Ask in plain language, get a fast calibrated probability back:
 
@@ -143,7 +143,7 @@ Key benefits, in one place:
 - **Integrated train + tune** — pathwise solutions over a grid of regularization values (`Cs`) with cross-validation built in, not bolted on.
 - **Exact cross-validation** for kernel machines (including exact LOOCV for kernel SVM).
 - **GPU acceleration** via PyTorch/CUDA, with safe CPU fallback.
-- **Nyström low-rank mode** (`low_rank=True`) for large datasets.
+- **Large-n SVM mode** (`TorchKMSVC(low_rank=True)`): the exact RBF kernel SVM with the kernel matrix never stored, for problems too big for memory.
 - **Calibrated probabilities** via Platt scaling.
 
 ## How it's so fast
@@ -165,18 +165,18 @@ In every case TorchKM also reached the **best (lowest) objective**, i.e. a prova
 
 ## More examples
 
-### Larger datasets — Nyström low-rank mode
+### Larger datasets — `low_rank=True` (SVM)
 
 ```python
 clf = TorchKMSVC(
     kernel="rbf",
-    low_rank=True, num_landmarks=40, nys_k=20,
-    cv=5, device="cuda", probability=True,
+    low_rank=True, dtype="float32", max_iter=40,
+    cv=10, device="cuda",
 )
 clf.fit(X_train, y_train)
 ```
 
-You can also enable it at fit time: `clf.fit(X, y, low_rank=True, num_landmarks=40, nys_k=20)`.
+This is not an approximation: it fits the exact RBF kernel SVM with the truncated-spectrum solver, but never stores the kernel matrix, recomputing every product with it from the training rows (fused into one GPU kernel on CUDA with `float32`). Memory grows like n times a small block instead of n². `max_iter` is the iteration budget per regularization value; fits that reach it are reported in `converged_`. On the whole covtype.binary (464,809 training rows), 50 values × 10-fold CV took 62 minutes and 6.6 GB on an NVIDIA L40S (cuML's SVC: 243 minutes), with test accuracy 0.9609 (cuML 0.9620).
 
 ### Kernel quantile regression
 
@@ -188,7 +188,7 @@ qr.fit(X_train, y_train)
 qr.predict(X_new)
 ```
 
-Use `TorchKMKQR(low_rank=True)` for the Nyström approximation on large data. (There is no separate `TorchKMNysKQR` class.)
+`TorchKMKQR` runs in exact mode only (no large-n mode).
 
 ### Probabilities
 

@@ -1,4 +1,4 @@
-"""Library runners shared by ``bench_gpu_libraries.py`` and ``bench_covtype_rank.py``.
+"""Library runners shared by ``bench_gpu_libraries.py`` and ``bench_dwd.py``.
 
 Every runner has the signature ``run_x(data, sig, Cs, foldid, args, dev, seed,
 **options)`` and returns one flat record: library, mode, parameters, status,
@@ -39,7 +39,7 @@ EXTERNAL_IMPORTS = {
     "linear": ("sklearn.linear_model", "logistic regression / LinearSVC (CPU)"),
 }
 
-ALL_LIBRARIES = ["torchkm", "torchkm_nystrom"] + list(EXTERNAL_IMPORTS)
+ALL_LIBRARIES = ["torchkm"] + list(EXTERNAL_IMPORTS)
 
 
 def library_availability(names) -> Dict[str, Optional[str]]:
@@ -132,12 +132,9 @@ def run_torchkm(
     dev,
     seed,
     *,
-    low_rank: bool = False,
-    landmarks: Optional[int] = None,
-    rank: Optional[int] = None,
     estimator: str = "svm",
 ) -> Dict[str, Any]:
-    """TorchKM with integrated model selection (exact or Nyström path)."""
+    """TorchKM with integrated model selection (exact path)."""
     from torchkm.estimators import TorchKMDWD, TorchKMLogit, TorchKMSVC
 
     cls = {"svm": TorchKMSVC, "dwd": TorchKMDWD, "logit": TorchKMLogit}[estimator]
@@ -164,17 +161,14 @@ def run_torchkm(
     if getattr(args, "kkt_scaled", False):
         kwargs["kkt_scaled"] = True
         params["kkt_scaled"] = True
-    if low_rank:
-        kwargs.update(low_rank=True, num_landmarks=int(landmarks), nys_k=int(rank))
-        params.update(num_landmarks=int(landmarks), nys_k=int(rank))
     clf = cls(**kwargs)
     with PeakMemory(dev) as pm, timed(dev) as t:
         clf.fit(data["Xtr"], data["ytr"])
     scores = decision_chunked(clf, data["Xte"])
     conv = getattr(clf, "converged_", None)
     rec = dict(
-        library="torchkm_nystrom" if low_rank else "torchkm",
-        mode="nystrom" if low_rank else "exact",
+        library="torchkm",
+        mode="exact",
         device=dev,
         params=params,
         status="ok",
@@ -184,8 +178,6 @@ def run_torchkm(
         best_C=float(clf.best_C_),
         converged_frac=None if conv is None else float(np.mean(conv)),
     )
-    if low_rank:
-        rec["params"]["nys_k_effective"] = getattr(clf, "nys_k_", None)
     rec.update(classification_metrics(data["yte"], scores))
     return rec
 

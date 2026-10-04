@@ -2,8 +2,8 @@
 
 GPU-accelerated kernel DWD with exact cross-validation does not exist outside
 TorchKM; the reference implementation is the R package ``kerndwd`` (Wang and
-Zou, 2018). This script runs the Python side (TorchKMDWD on the exact and
-Nyström paths, with TorchKMSVC as the in-package reference) and exports the
+Zou, 2018). This script runs the Python side (TorchKMDWD on the exact path,
+with TorchKMSVC as the in-package reference) and exports the
 exact splits and folds so ``benchmarks/r/bench_dwd.R`` runs ``kerndwd`` on
 identical data.
 
@@ -53,9 +53,8 @@ from _common import (
 from _libraries import print_record, run_torchkm
 
 METHODS = {
-    "torchkm_dwd": dict(estimator="dwd", low_rank=False),
-    "torchkm_dwd_nystrom": dict(estimator="dwd", low_rank=True),
-    "torchkm_svm": dict(estimator="svm", low_rank=False),
+    "torchkm_dwd": dict(estimator="dwd"),
+    "torchkm_svm": dict(estimator="svm"),
 }
 
 
@@ -93,17 +92,13 @@ def main() -> None:
     ap.add_argument(
         "--methods", nargs="+", default=list(METHODS), choices=list(METHODS)
     )
-    ap.add_argument("--landmarks", type=int, default=2000)
-    ap.add_argument("--rank", type=int, default=300)
     ap.add_argument(
         "--export-splits",
         default=None,
         help="directory for the CSV splits the R script reads",
     )
     args = smoke_settings(ap.parse_args())
-    if args.smoke:
-        args.landmarks, args.rank = 40, 20
-    elif not args.data_dir:
+    if not args.smoke and not args.data_dir:
         ap.error("--data-dir is required unless --smoke")
 
     dev = get_device(args.device)
@@ -122,7 +117,6 @@ def main() -> None:
         args=args,
         protocol=protocol_dict(
             args,
-            nystrom=dict(landmarks=args.landmarks, rank=args.rank),
             r_baselines="benchmarks/r/bench_dwd.R on the exported splits (kerndwd)",
         ),
     )
@@ -165,9 +159,6 @@ def main() -> None:
                         dev,
                         seed,
                         estimator=spec["estimator"],
-                        low_rank=spec["low_rank"],
-                        landmarks=args.landmarks,
-                        rank=args.rank,
                     )
                     rec["library"] = method
                 except Exception as err:

@@ -23,37 +23,13 @@ def _tiny_regression_features(n=24):
     return X.astype(np.float64), y.astype(np.float64)
 
 
-@pytest.mark.parametrize("estimator_cls", [TorchKMDWD, TorchKMLogit])
-def test_low_rank_dwd_and_logit_public_api_cpu(estimator_cls):
-    X, y = _tiny_binary_features()
-    Cs = np.array([1.0, 0.2], dtype=np.float64)
-
-    clf = estimator_cls(
-        kernel="rbf",
-        Cs=Cs,
-        nC=len(Cs),
-        cv=2,
-        low_rank=True,
-        num_landmarks=6,
-        nys_k=3,
-        device="cpu",
-        max_iter=30,
-        solver_gamma=1e-6,
-        random_state=123,
-    )
-    clf.fit(X, y)
-
-    pred = clf.predict(X[:5])
-    score = clf.decision_function(X[:5])
-
-    assert pred.shape == (5,)
-    assert score.shape == (5,)
-    assert np.isfinite(score).all()
-    assert clf.best_C_ > 0
-    assert clf.low_rank_basis_dim_ > 0
-    assert clf.low_rank_basis_dim_ <= 3
-    assert clf.num_landmarks_ <= 6
-    assert clf.nys_k_ <= 3
+@pytest.mark.parametrize("estimator_cls", [TorchKMDWD, TorchKMLogit, TorchKMKQR])
+def test_only_the_svm_has_a_low_rank_mode(estimator_cls):
+    # the Nystrom mode is gone; low_rank=True (the matrix-free SVM) is SVM-only
+    assert "low_rank" not in estimator_cls().get_params()
+    for name in ("low_rank", "num_landmarks", "nys_k"):
+        with pytest.raises(TypeError):
+            estimator_cls(**{name: True})
 
 
 @pytest.mark.parametrize("estimator_cls", [TorchKMDWD, TorchKMLogit])
@@ -238,112 +214,39 @@ def test_low_rank_validation_errors():
             device="cpu",
         ).fit(X, y)
 
-    # An explicit bandwidth is honoured on the Nyström path, so every library in
-    # a benchmark can be given the same kernel.
+    # an explicit bandwidth is used as given (every library in a benchmark can
+    # be given the same kernel), and the fit is the stored-kernel truncated one
+    kw = dict(kernel="rbf", rbf_sigma=1.0, Cs=Cs, nC=2, cv=2, device="cpu",
+              max_iter=20000, random_state=0)
+    clf = TorchKMSVC(low_rank=True, **kw).fit(X, y)
+    ref = TorchKMSVC(spectrum="truncated", **kw).fit(X, y)
+    assert clf.kernel_state_ == {"sigma": 1.0, "low_rank": True}
+    np.testing.assert_allclose(
+        clf.decision_function(X), ref.decision_function(X), rtol=1e-12, atol=1e-12
+    )
+    assert clf.best_C_ == ref.best_C_
+
+
+def test_low_rank_svc_probability_and_budget():
+    X, y = _tiny_binary_features(n=30)
     clf = TorchKMSVC(
         kernel="rbf",
         low_rank=True,
-        rbf_sigma=1.0,
-        Cs=Cs,
-        nC=2,
-        cv=2,
-        device="cpu",
-        num_landmarks=20,
-        nys_k=10,
-        max_iter=20,
-    ).fit(X, y)
-    assert clf._low_rank_backend_.sig_w_ == pytest.approx(1.0)
-
-    with pytest.raises(ValueError, match="num_landmarks"):
-        TorchKMSVC(
-            kernel="rbf",
-            low_rank=True,
-            num_landmarks=0,
-            Cs=Cs,
-            nC=2,
-            cv=2,
-            device="cpu",
-        ).fit(X, y)
-
-    with pytest.raises(ValueError, match="nys_k"):
-        TorchKMSVC(
-            kernel="rbf",
-            low_rank=True,
-            nys_k=0,
-            Cs=Cs,
-            nC=2,
-            cv=2,
-            device="cpu",
-        ).fit(X, y)
-
-
-def test_low_rank_fit_time_options_are_applied():
-    X, y = _tiny_binary_features(n=20)
-
-    clf = TorchKMSVC(
-        kernel="rbf",
+        probability=True,
         Cs=np.array([1.0, 0.2]),
         nC=2,
         cv=2,
         device="cpu",
-        max_iter=20,
-        solver_gamma=1e-6,
-        random_state=123,
+        max_iter=3,  # the iteration budget of each lambda
+        random_state=0,
     )
-    clf.fit(X, y, low_rank=True, num_landmarks=5, nys_k=3)
-
-    assert clf.low_rank is True
-    assert clf.num_landmarks == 5
-    assert clf.nys_k == 3
-    assert clf.num_landmarks_ <= 5
-    assert clf.nys_k_ <= 3
-
-
-def test_kqr_low_rank_validation_errors():
-    X, y = _tiny_regression_features()
-    Cs = np.array([1.0, 0.2])
-
-    with pytest.raises(ValueError, match="precomputed"):
-        TorchKMKQR(
-            kernel="precomputed",
-            low_rank=True,
-            Cs=Cs,
-            nC=2,
-            cv=2,
-            device="cpu",
-        ).fit(X @ X.T, y)
-
-    with pytest.raises(ValueError, match="rbf"):
-        TorchKMKQR(
-            kernel="linear",
-            low_rank=True,
-            Cs=Cs,
-            nC=2,
-            cv=2,
-            device="cpu",
-        ).fit(X, y)
-
-    with pytest.raises(ValueError, match="num_landmarks"):
-        TorchKMKQR(
-            kernel="rbf",
-            low_rank=True,
-            num_landmarks=0,
-            Cs=Cs,
-            nC=2,
-            cv=2,
-            device="cpu",
-        ).fit(X, y)
-
-    with pytest.raises(ValueError, match="nys_k"):
-        TorchKMKQR(
-            kernel="rbf",
-            low_rank=True,
-            nys_k=0,
-            Cs=Cs,
-            nC=2,
-            cv=2,
-            device="cpu",
-        ).fit(X, y)
+    clf.fit(X, y)
+    proba = clf.predict_proba(X[:4])
+    assert proba.shape == (4, 2)
+    assert np.allclose(proba.sum(axis=1), 1.0)
+    # both lambdas share one block, whose budget is max_iter x 2 iterations
+    assert clf.n_passes_["path"] <= 3 * 2
+    assert clf.converged_.shape == (2,)
 
 
 def test_svc_platt_plot_training_data_if_matplotlib_available():

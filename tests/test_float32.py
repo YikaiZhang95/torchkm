@@ -84,12 +84,11 @@ def test_dtype_is_validated():
     X, y = _problem(n=60)
     with pytest.raises(ValueError, match="dtype"):
         TorchKMSVC(dtype="float16", nC=2, cv=2, device="cpu").fit(X, y)
-    with pytest.raises(ValueError, match="exact SVM solver only"):
+    with pytest.raises(ValueError, match="TorchKMSVC only"):
         TorchKMDWD(dtype="float32", nC=2, cv=2, device="cpu").fit(X, y)
-    with pytest.raises(ValueError, match="exact SVM solver only"):
-        TorchKMSVC(
-            dtype="float32", low_rank=True, num_landmarks=20, nys_k=10, device="cpu"
-        ).fit(X, y)
+    # the matrix-free SVM computes in float32 too (fused products on CUDA)
+    clf = TorchKMSVC(dtype="float32", low_rank=True, nC=2, cv=2, device="cpu")
+    assert np.isfinite(clf.fit(X, y).decision_function(X[:3])).all()
     K = torch.eye(4)
     with pytest.raises(ValueError, match="dtype"):
         cvksvm(K, torch.tensor([1.0, -1, 1, -1]), 1, torch.ones(1), dtype=torch.float16)

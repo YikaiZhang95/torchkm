@@ -5,7 +5,3 @@ def test_import_torchkmkqr():
     assert TorchKMKQR is not None
 
 
-def test_import_cvknyqr_backend():
-    from torchkm.cvknyqr import cvknyqr
-
-    assert cvknyqr is not None

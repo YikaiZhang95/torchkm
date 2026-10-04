@@ -88,6 +88,13 @@ def sigest(x, frac=0.5, generator=None):
 
     # Exclude zero distances (self-pairs)
     non_zero_dist = dist[dist != 0]
+    if non_zero_dist.numel() == 0:
+        # every sampled pair was a self-pair (possible when frac * m is a
+        # handful of rows): use every pair of distinct rows instead
+        all_dist = torch.cdist(x, x).pow(2).flatten()
+        non_zero_dist = all_dist[all_dist != 0]
+        if non_zero_dist.numel() == 0:
+            raise ValueError("sigest needs at least two distinct rows")
 
     # Compute quantiles (0.9, 0.5, 0.1)
     q = torch.tensor(

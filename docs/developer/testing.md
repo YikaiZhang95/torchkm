@@ -39,7 +39,7 @@ Useful test categories include:
 - input validation tests;
 - label convention tests;
 - probability calibration tests;
-- Nyström approximation tests;
+- truncated-spectrum and large-\(n\) (`low_rank=True`) SVM tests;
 - reproducibility tests with fixed random seeds.
 
 ## CUDA tests

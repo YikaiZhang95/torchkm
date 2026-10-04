@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""Memory-envelope helpers, peak-memory reporting, Nyström seeding, and the
+"""Memory-envelope helpers, peak-memory reporting, sigest seeding, and the
 solver changes that reduce exact-mode memory (no ``eU`` copy, in-place kernel)."""
 
 import importlib
@@ -243,63 +243,8 @@ def test_peak_memory_attribute_is_cleared_on_refit():
 
 
 # --------------------------------------------------------------------------
-# Nyström seeding
+# sigest seeding
 # --------------------------------------------------------------------------
-
-
-def _nys(seed, **kw):
-    return TorchKMSVC(
-        kernel="rbf",
-        low_rank=True,
-        num_landmarks=30,
-        nys_k=10,
-        nC=3,
-        cv=3,
-        device="cpu",
-        max_iter=30,
-        random_state=seed,
-        **kw,
-    )
-
-
-def test_nystrom_landmarks_follow_random_state():
-    X, y = _binary(n=120)
-    a = _nys(1).fit(X, y)
-    b = _nys(1).fit(X, y)
-    c = _nys(2).fit(X, y)
-    np.testing.assert_array_equal(
-        a.low_rank_landmark_indices_, b.low_rank_landmark_indices_
-    )
-    np.testing.assert_allclose(a.decision_function(X), b.decision_function(X))
-    assert not np.array_equal(
-        a.low_rank_landmark_indices_, c.low_rank_landmark_indices_
-    )
-
-
-def test_nystrom_fit_leaves_the_global_rng_alone():
-    X, y = _binary(n=120)
-    torch.manual_seed(7)
-    before = torch.get_rng_state()
-    _nys(3).fit(X, y)
-    after = torch.get_rng_state()
-    assert torch.equal(before, after)
-
-
-def test_nystrom_without_random_state_draws_from_the_global_rng():
-    X, y = _binary(n=120)
-    torch.manual_seed(11)
-    a = _nys(None).fit(X, y)
-    torch.manual_seed(11)
-    b = _nys(None).fit(X, y)
-    np.testing.assert_array_equal(
-        a.low_rank_landmark_indices_, b.low_rank_landmark_indices_
-    )
-
-
-def test_nystrom_honours_an_explicit_bandwidth():
-    X, y = _binary(n=120)
-    clf = _nys(0, rbf_sigma=0.7).fit(X, y)
-    assert clf._low_rank_backend_.sig_w_ == pytest.approx(0.7)
 
 
 def test_sigest_generator_is_reproducible_and_local():
@@ -370,3 +315,16 @@ def test_exact_projection_path_still_runs():
     )
     model.fit()
     assert torch.isfinite(model.alpmat).all()
+
+
+def test_sigest_survives_sampling_only_self_pairs():
+    # with 2 sampled pairs from 5 rows, both can be self-pairs: sigest then
+    # uses every pair of distinct rows instead of failing in torch.quantile
+    from torchkm import sigest
+
+    x = torch.tensor([[-1.0, 0.0], [-0.5, 0.2], [0.5, 0.4], [1.0, 0.8], [1.5, 1.0]])
+    for seed in range(200):
+        g = torch.Generator().manual_seed(seed)
+        assert np.isfinite(sigest(x, generator=g))
+    with pytest.raises(ValueError, match="distinct rows"):
+        sigest(torch.ones(5, 2), generator=torch.Generator().manual_seed(0))

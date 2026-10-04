@@ -8,8 +8,8 @@ and ``kernlab::kqr``) sees identical data.
 
 Per dataset, repeat and quantile level ``tau``:
 
-* ``torchkm_kqr`` (exact) and ``torchkm_kqr_nystrom``: integrated CV over the
-  lambda path, end-to-end time, peak memory;
+* ``torchkm_kqr`` (exact): integrated CV over the lambda path, end-to-end
+  time, peak memory;
 * ``linear_qr``: scikit-learn ``QuantileRegressor`` (linear, ``highs`` solver)
   tuned over the same lambda grid with the same folds, so the value of the
   kernel is visible;
@@ -20,7 +20,7 @@ Per dataset, repeat and quantile level ``tau``:
 Datasets (LIBSVM regression files in ``--data-dir``; ``.bz2`` accepted):
 ``cadata`` (California housing, 20,640), ``abalone`` (4,177), ``cpusmall``
 (8,192), ``space_ga`` (3,107) for exact mode; ``YearPredictionMSD`` (463,715)
-for the Nyström path. ``synthetic`` is a heteroscedastic model with known
+is beyond exact mode and runs ``linear_qr`` only. ``synthetic`` is a heteroscedastic model with known
 quantiles and needs no files. Features are standardised on the training split;
 targets are centred and scaled by the training standard deviation for the
 solvers and mapped back before scoring.
@@ -156,7 +156,7 @@ def score(data: Dict[str, Any], q_scaled: np.ndarray, tau: float) -> Dict[str, A
     return out
 
 
-def run_torchkm_kqr(data, sig, Cs, foldid, tau, args, dev, seed, *, low_rank: bool):
+def run_torchkm_kqr(data, sig, Cs, foldid, tau, args, dev, seed):
     from torchkm.estimators import TorchKMKQR
 
     kw: Dict[str, Any] = dict(
@@ -176,10 +176,6 @@ def run_torchkm_kqr(data, sig, Cs, foldid, tau, args, dev, seed, *, low_rank: bo
         kw["KKTeps"] = float(args.kkt_eps)
     if getattr(args, "kkt_scaled", False):
         kw["kkt_scaled"] = True
-    if low_rank:
-        kw.update(
-            low_rank=True, num_landmarks=int(args.landmarks), nys_k=int(args.rank)
-        )
     reg = TorchKMKQR(**kw)
     with PeakMemory(dev) as pm, timed(dev) as t:
         reg.fit(data["Xtr"], data["ytr_s"])
@@ -190,15 +186,15 @@ def run_torchkm_kqr(data, sig, Cs, foldid, tau, args, dev, seed, *, low_rank: bo
         ]
     )
     rec = dict(
-        library="torchkm_kqr_nystrom" if low_rank else "torchkm_kqr",
-        mode="nystrom" if low_rank else "exact",
+        library="torchkm_kqr",
+        mode="exact",
         device=dev,
         status="ok",
         time_s=t.dt,
         memory=pm.result,
         torch_peak_bytes=reg.peak_gpu_memory_bytes_,
         best_C=float(reg.best_C_),
-        params=dict(num_landmarks=args.landmarks, nys_k=args.rank) if low_rank else {},
+        params={},
     )
     rec.update(score(data, q, tau))
     return rec
@@ -260,11 +256,9 @@ def main() -> None:
     ap.add_argument(
         "--methods",
         nargs="+",
-        default=["torchkm_kqr", "torchkm_kqr_nystrom", "linear_qr"],
-        choices=["torchkm_kqr", "torchkm_kqr_nystrom", "linear_qr"],
+        default=["torchkm_kqr", "linear_qr"],
+        choices=["torchkm_kqr", "linear_qr"],
     )
-    ap.add_argument("--landmarks", type=int, default=2000)
-    ap.add_argument("--rank", type=int, default=300)
     ap.add_argument("--synthetic-n", type=int, default=5000)
     ap.add_argument(
         "--export-splits",
@@ -274,7 +268,6 @@ def main() -> None:
     args = smoke_settings(ap.parse_args())
     if args.smoke:
         args.datasets, args.taus, args.synthetic_n = ["synthetic"], [0.5], 300
-        args.landmarks, args.rank = 40, 20
     if any(d != "synthetic" for d in args.datasets) and not args.data_dir:
         ap.error("--data-dir is required for LIBSVM regression datasets")
 
@@ -339,19 +332,6 @@ def main() -> None:
                                 args,
                                 dev,
                                 seed,
-                                low_rank=False,
-                            )
-                        elif method == "torchkm_kqr_nystrom":
-                            rec = run_torchkm_kqr(
-                                data,
-                                sig,
-                                Cs,
-                                foldid,
-                                tau,
-                                args,
-                                dev,
-                                seed,
-                                low_rank=True,
                             )
                         else:
                             rec = run_linear_qr(data, Cs, foldid, tau, args)

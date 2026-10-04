@@ -65,9 +65,12 @@ clf.fit(Xtr, ytr)
 proba = clf.predict_proba(Xte)
 ```
 
-## Using Nyström approximation
+## Data sets too large for exact mode
 
-For larger data sets, use `low_rank=True`:
+When the \(n \times n\) kernel matrix does not fit in memory, `TorchKMSVC`
+has a large-\(n\) mode, `low_rank=True`. It fits the exact RBF kernel SVM (it
+is not an approximation) but never stores the kernel matrix: every product with
+it is recomputed from the training rows.
 
 ```python
 clf = TorchKMSVC(
@@ -75,18 +78,13 @@ clf = TorchKMSVC(
     Cs=Cs,
     cv=5,
     device=device,
+    dtype="float32",
     low_rank=True,
-    num_landmarks=40,
-    nys_k=20,
     max_iter=40,
 )
 clf.fit(Xtr, ytr)
 ```
 
-The constructor-based form is the recommended scikit-learn-style API. For
-convenience, low-rank Nyström fitting can also be enabled at fit time:
-
-```python
-clf = TorchKMSVC(kernel="rbf", Cs=Cs, cv=5, device=device, probability=True)
-clf.fit(Xtr, ytr, low_rank=True, num_landmarks=40, nys_k=20)
-```
+Here `max_iter` is the iteration budget of each regularization value. See
+[Kernel SVM](user_guide/svm.md) for details. `TorchKMDWD`, `TorchKMLogit` and
+`TorchKMKQR` run in exact mode only.

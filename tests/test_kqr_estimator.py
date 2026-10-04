@@ -37,35 +37,6 @@ def test_torchkmkqr_exact_smoke_cpu():
     assert hasattr(model, "cv_loss_")
 
 
-def test_torchkmkqr_low_rank_smoke_cpu():
-    X, y = _make_regression(n=80)
-    Cs = np.logspace(1, -1, 3)
-
-    model = TorchKMKQR(
-        kernel="rbf",
-        Cs=Cs,
-        nC=len(Cs),
-        cv=3,
-        tau=0.5,
-        low_rank=True,
-        num_landmarks=20,
-        nys_k=10,
-        device="cpu",
-        max_iter=20,
-        random_state=0,
-    )
-    clone(model)
-    model.fit(X, y)
-    pred = model.predict(X[:5])
-
-    assert pred.shape == (5,)
-    assert np.all(np.isfinite(pred))
-    assert hasattr(model, "best_C_")
-    assert hasattr(model, "cv_loss_")
-    assert hasattr(model, "_low_rank_backend_")
-    assert model._low_rank_backend_.__class__.__name__ == "cvknyqr"
-
-
 def test_torchkmkqr_rejects_invalid_tau():
     X, y = _make_regression()
     model = TorchKMKQR(tau=1.5, device="cpu", max_iter=5)

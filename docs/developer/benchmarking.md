@@ -16,7 +16,6 @@ benchmarks/
   bench_*.py             the experiments; every script has --smoke and --out
   table2_simulation.py   the submitted paper's Tables 2-4 with their original protocol
   table3_benchmarks.py
-  table4_nystrom.py
   make_tables.py         Markdown / LaTeX tables from JSON results and R CSV rows
   r/                     R baselines (fastkqr, kernlab, kerndwd) on exported splits
   environment/           pinned environments for the comparison libraries

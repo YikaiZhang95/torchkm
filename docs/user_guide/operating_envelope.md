@@ -118,20 +118,25 @@ solver (16.7 against 16.8 s) while certifying a gap of 1e-4 at every lambda and
 fold. It solves the hinge-loss SVM only, and `tol`, `max_iter`, `KKTeps`,
 `delta_len` and `kkt_scaled` do not apply to it.
 
-## Beyond the envelope: the Nyström path
+## Beyond the envelope: `TorchKMSVC(low_rank=True)`
 
-`low_rank=True` replaces the \(n \times n\) kernel with a rank-\(k\) feature
-map built from \(m\) landmark rows (`num_landmarks`, `nys_k`). Memory then grows
-with \(n \times m\) for the landmark kernel block and \(n \times k\) for the
-features, so problems in the hundreds of thousands to millions of rows fit on
-one card. The single \(m \times m\) decomposition happens once, outside the
-fold and path loops, exactly as in exact mode.
+When even the truncated spectrum's stored kernel does not fit, `low_rank=True`
+is the SVM's large-\(n\) mode. It fits the same exact RBF kernel model with the
+truncated-spectrum solver, so it is not an approximation, but the kernel matrix
+is never stored: every product with it is recomputed from the training rows,
+fused into one GPU kernel on CUDA with `dtype="float32"`. Memory then grows
+like \(n\) times the columns of a block (`spectrum_block` \(\times\)
+(`cv` + 1)) instead of \(n^2\). Each product pays the kernel's arithmetic
+again, so a stored kernel is faster when it fits. `max_iter` is the iteration
+budget of each lambda, and fits that reach it are reported as not converged in
+`converged_`. It needs `kernel="rbf"`.
 
-The trade is approximation quality: accuracy rises with \(m\) and \(k\), and a
-low rank on a problem with a slowly decaying kernel spectrum leaves accuracy
-on the table. `benchmarks/bench_covtype_rank.py` measures that curve. Start
-with the defaults, then raise `nys_k` before `num_landmarks` if held-out
-accuracy is short of the exact-mode result on a subsample.
+On the whole covtype.binary training set (464,809 rows), 50 lambdas with
+10-fold cross-validation took 62 minutes and 6.6 GB on an L40S. See
+[Kernel SVM](svm.md) for the call.
+
+`TorchKMDWD`, `TorchKMLogit` and `TorchKMKQR` run in exact mode only and have
+no large-\(n\) mode.
 
 ## Time
 

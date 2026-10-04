@@ -16,7 +16,8 @@ regression, and related model-selection routines. It provides:
 - pathwise model selection over a grid of regularization values;
 - exact cross-validation reuse for kernel machines;
 - GPU acceleration through PyTorch/CUDA, with CPU fallback;
-- Nyström approximation for larger data sets;
+- a large-\(n\) SVM mode (`TorchKMSVC(low_rank=True)`) that fits the exact RBF kernel
+  without ever storing the kernel matrix;
 - a scikit-learn-style estimator interface for common workflows.
 
 ## Why use TorchKM?
@@ -29,7 +30,7 @@ TorchKM is useful when you want to tune nonlinear kernel classifiers without rep
 - [Quickstart](quickstart.md)
 - [Model selection](user_guide/model_selection.md)
 - [Kernel SVM](user_guide/svm.md)
-- [Nyström approximation](user_guide/nystrom.md)
+- [Operating envelope](user_guide/operating_envelope.md)
 - [Probability calibration](user_guide/probability_calibration.md)
 - [API reference](api/estimators.md)
 - [Developer guide](developer/architecture.md)

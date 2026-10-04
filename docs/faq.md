@@ -20,9 +20,15 @@ and stores the selected value as `best_C_`.
 
 ## When should I use `low_rank=True`?
 
-Use the Nyström approximation when the full kernel matrix is too large or too
-slow for your workflow. The current high-level low-rank classifier path is for
-raw-feature RBF-kernel workflows.
+`low_rank=True` is `TorchKMSVC`'s large-\(n\) mode, for problems whose kernel
+matrix does not fit in memory. It fits the exact RBF kernel SVM (it is not an
+approximation) but never stores the kernel matrix, recomputing every product
+with it from the training rows. It needs `kernel="rbf"` on raw features. When
+the kernel fits in memory, the stored-kernel modes are faster; try
+`spectrum="truncated"` first if exact mode is just past its memory limit. See
+[Kernel SVM](user_guide/svm.md) and the
+[operating envelope](user_guide/operating_envelope.md). `TorchKMDWD`,
+`TorchKMLogit` and `TorchKMKQR` run in exact mode only.
 
 ## Which estimators should I start with?
 

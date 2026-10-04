@@ -49,7 +49,7 @@ Add tests for:
 - GPU behavior, skipped when CUDA is unavailable;
 - reproducibility with fixed random seeds;
 - probability prediction, if available;
-- low-rank behavior, if supported.
+- large-\(n\) (`low_rank=True`) behavior, if supported.
 
 ## Required documentation
 
@@ -70,7 +70,8 @@ Use a NumPy-style docstring with sections for parameters, attributes, notes, and
 The estimator module includes `TorchKMSVC`, `TorchKMDWD`, `TorchKMLogit`, and
 `TorchKMKQR`. The binary classifiers share a base implementation that handles
 kernel construction, label mapping, cross-validation selection, probability
-calibration, and optional Nyström backends. The quantile-regression estimator
+calibration, and (for `TorchKMSVC` only) the large-\(n\) `low_rank=True`
+backend. The quantile-regression estimator
 follows the same fit/predict and model-selection conventions for continuous
 targets.
 

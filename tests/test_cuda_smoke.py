@@ -7,7 +7,7 @@ purpose is to make sure that:
 
   * every public estimator can be ``fit`` / predicted on a GPU,
   * the alternative kernels (linear, poly, precomputed) work on GPU,
-  * the low-rank / Nyström path works on GPU,
+  * the matrix-free large-n SVM (``low_rank=True``) works on GPU,
   * probability calibration (Platt) survives a round trip through GPU,
   * the low-level ``cv*`` solver classes write their outputs to CUDA
     tensors,
@@ -26,10 +26,6 @@ from sklearn.preprocessing import StandardScaler
 
 from torchkm.cvkdwd import cvkdwd
 from torchkm.cvklogit import cvklogit
-from torchkm.cvknysdwd import cvknysdwd
-from torchkm.cvknyslogit import cvknyslogit
-from torchkm.cvknyqr import cvknyqr
-from torchkm.cvknyssvm import cvknyssvm
 from torchkm.cvkqr import cvkqr
 from torchkm.cvksvm import cvksvm
 from torchkm.estimators import TorchKMDWD, TorchKMKQR, TorchKMLogit, TorchKMSVC
@@ -218,57 +214,35 @@ def test_torchkmsvc_precomputed_kernel_cuda():
 
 
 # ----------------------------------------------------------------------
-# Low-rank / Nyström paths
+# Matrix-free large-n SVM (low_rank=True)
 # ----------------------------------------------------------------------
 
 
-def test_torchkmsvc_low_rank_cuda():
-    """The low-rank Nyström SVM path should run on CUDA."""
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
+def test_torchkmsvc_low_rank_cuda(dtype):
+    """low_rank=True (kernel never stored; fused products in float32) should
+    run on CUDA and agree with the stored-kernel truncated solver."""
     X, y = _binary_features(n=64)
-
-    clf = TorchKMSVC(
+    kw = dict(
         kernel="rbf",
+        rbf_sigma=0.5,
         Cs=np.array([1.0, 0.1]),
         nC=2,
         cv=2,
         device="cuda",
-        max_iter=20,
+        dtype=dtype,
         random_state=0,
-        low_rank=True,
-        num_landmarks=16,
-        nys_k=8,
+        max_iter=20000,
     )
-    clf.fit(X, y)
-    pred = clf.predict(X[:8])
+    clf = TorchKMSVC(low_rank=True, **kw).fit(X, y)
+    ref = TorchKMSVC(spectrum="truncated", **kw).fit(X, y)
+    pred = clf.decision_function(X[:8])
 
     assert pred.shape == (8,)
     assert np.isfinite(pred).all()
-    assert clf.low_rank is True
-
-
-def test_torchkmkqr_low_rank_cuda():
-    """The low-rank Nyström KQR path should run on CUDA."""
-    X, y = _regression_features(n=80)
-
-    reg = TorchKMKQR(
-        kernel="rbf",
-        Cs=np.array([1.0, 0.1]),
-        nC=2,
-        cv=2,
-        tau=0.5,
-        device="cuda",
-        max_iter=50,
-        random_state=0,
-        low_rank=True,
-        num_landmarks=20,
-        nys_k=10,
-    )
-    reg.fit(X, y)
-    pred = reg.predict(X[:8])
-
-    assert pred.shape == (8,)
-    assert np.isfinite(pred).all()
-    assert reg.low_rank is True
+    assert clf.kernel_state_["low_rank"] is True
+    assert clf.best_C_ == ref.best_C_
+    np.testing.assert_allclose(pred, ref.decision_function(X[:8]), rtol=0, atol=5e-2)
 
 
 # ----------------------------------------------------------------------
@@ -415,114 +389,6 @@ def test_cvkqr_cuda_solver():
 
     assert m.alpmat.device.type == "cuda"
     assert m.pred.device.type == "cuda"
-    assert torch.isfinite(m.alpmat).all()
-
-
-# ----------------------------------------------------------------------
-# Low-level Nyström solvers
-# ----------------------------------------------------------------------
-
-
-def test_cvknyssvm_cuda_solver():
-    """The Nyström SVM solver should land its outputs on CUDA."""
-    X, y = _binary_tensors(n=40)
-
-    m = cvknyssvm(
-        Xmat=X,
-        X_test=X[:8],
-        y=y,
-        nlam=2,
-        ulam=torch.tensor([1.0, 0.1], dtype=torch.float64),
-        foldid=None,
-        nfolds=3,
-        eps=1e-4,
-        maxit=80,
-        gamma=1e-6,
-        num_landmarks=10,
-        k=5,
-        device="cuda",
-    )
-    m.fit()
-
-    assert m.alpmat.device.type == "cuda"
-    assert m.pred.device.type == "cuda"
-    assert torch.isfinite(m.alpmat).all()
-
-
-def test_cvknysdwd_cuda_solver():
-    """The Nyström DWD solver should land its outputs on CUDA."""
-    X, y = _binary_tensors(n=40)
-
-    m = cvknysdwd(
-        Xmat=X,
-        X_test=X[:8],
-        y=y,
-        nlam=2,
-        ulam=torch.tensor([1.0, 0.1], dtype=torch.float64),
-        foldid=None,
-        nfolds=3,
-        eps=1e-4,
-        maxit=80,
-        gamma=1e-6,
-        num_landmarks=10,
-        k=5,
-        device="cuda",
-    )
-    m.fit()
-
-    assert m.alpmat.device.type == "cuda"
-    assert m.pred.device.type == "cuda"
-    assert torch.isfinite(m.alpmat).all()
-
-
-def test_cvknyslogit_cuda_solver():
-    """The Nyström logistic solver should land its outputs on CUDA."""
-    X, y = _binary_tensors(n=40)
-
-    m = cvknyslogit(
-        Xmat=X,
-        X_test=X[:8],
-        y=y,
-        nlam=2,
-        ulam=torch.tensor([1.0, 0.1], dtype=torch.float64),
-        foldid=None,
-        nfolds=3,
-        eps=1e-4,
-        maxit=80,
-        gamma=1e-6,
-        num_landmarks=10,
-        k=5,
-        device="cuda",
-    )
-    m.fit()
-
-    assert m.alpmat.device.type == "cuda"
-    assert m.pred.device.type == "cuda"
-    assert torch.isfinite(m.alpmat).all()
-
-
-def test_cvknyqr_cuda_solver():
-    """The Nyström quantile-regression solver should land its outputs on CUDA."""
-    X, y = _regression_tensors(n=40)
-
-    m = cvknyqr(
-        Xmat=X,
-        y=y,
-        nlam=2,
-        ulam=torch.tensor([1.0, 0.1], dtype=torch.float64),
-        tau=0.5,
-        foldid=None,
-        nfolds=3,
-        eps=1e-4,
-        maxit=200,
-        gamma=1e-6,
-        num_landmarks=10,
-        k=5,
-        device="cuda",
-    )
-    m.fit()
-
-    assert m.alpmat.device.type == "cuda"
     assert torch.isfinite(m.alpmat).all()
 
 

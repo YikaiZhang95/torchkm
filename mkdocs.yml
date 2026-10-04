@@ -44,7 +44,6 @@ nav:
       - Distance-Weighted Discrimination: user_guide/dwd.md
       - Kernel Logistic Regression: user_guide/logistic_regression.md
       - Model Selection: user_guide/model_selection.md
-      - Nyström Approximation: user_guide/nystrom.md
       - Operating Envelope: user_guide/operating_envelope.md
       - Multiclass Classification: user_guide/multiclass.md
       - Probability Calibration: user_guide/probability_calibration.md
@@ -54,7 +53,6 @@ nav:
       - SVM on make_circles: examples/svm_make_circles.md
       - DWD Classification: examples/dwd_classification.md
       - Kernel Logistic Regression: examples/logistic_regression.md
-      - Nyström Approximation: examples/nystrom_large_scale.md
       - Probability Calibration: examples/probability_calibration.md
       - Benchmark Protocol: examples/reproduce_paper_benchmarks.md
   - API Reference:

@@ -66,7 +66,7 @@ predictions in the original label space. Cross-validation scores are stored in
 `cv_mis_`.
 
 Set `probability=True` to fit Platt calibration and enable `predict_proba`.
-Set `low_rank=True` with an RBF kernel to use the Nyström backend.
+`TorchKMDWD` runs in exact mode only; it has no large-\(n\) mode.
 
 ## When to use
 

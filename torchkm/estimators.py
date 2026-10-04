@@ -14,11 +14,7 @@ from .cvksvm import cvksvm
 from .cvkdwd import cvkdwd
 from .cvklogit import cvklogit
 from .cvkqr import cvkqr
-from .cvknyqr import cvknyqr
 from .platt import PlattScalerTorch
-from .cvknyssvm import cvknyssvm
-from .cvknysdwd import cvknysdwd
-from .cvknyslogit import cvknyslogit
 
 # ---- sklearn is OPTIONAL: raise a clean error only when wrapper is imported ----
 try:
@@ -129,12 +125,16 @@ class _TruncatedSVMBackend:
     relative duality gap ``gap_tol``.
     """
 
-    def __init__(self, K, y, ulam, foldid, *, rank, gap_tol, seed, block=1):
+    def __init__(
+        self, K, y, ulam, foldid, *, rank, gap_tol, seed, block=1, fit_cap=None
+    ):
         self.ulam = ulam
         self._problem = (K, y.to(K.dtype), ulam.detach().cpu().tolist(), foldid)
         self._options = dict(
             spectrum="truncated", rank=rank, gap_tol=gap_tol, seed=seed, block=block
         )
+        if fit_cap is not None:
+            self._options["fit_cap"] = int(fit_cap)
 
     def fit(self):
         from .experimental import SpectralSVMPath
@@ -194,11 +194,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         platt_device: Optional[Union[str, torch.device]] = None,
         random_state: Optional[int] = None,
         store_path: bool = False,  # store full path (big) or keep only best
-        # Nystrom
-        low_rank: bool = False,
-        num_landmarks: int = 2000,
-        nys_k: int = 1000,
-        # truncated spectrum (exact SVM only)
+        # truncated spectrum (SVM only)
         spectrum: str = "full",
         spectrum_rank: int = 400,
         gap_tol: float = 1e-3,
@@ -233,41 +229,29 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         self.random_state = random_state
         self.store_path = store_path
 
-        self.low_rank = low_rank
-        self.num_landmarks = num_landmarks
-        self.nys_k = nys_k
-
         self.spectrum = spectrum
         self.spectrum_rank = spectrum_rank
         self.gap_tol = gap_tol
         self.spectrum_block = spectrum_block
+
+    def _low_rank(self) -> bool:
+        """TorchKMSVC(low_rank=True): the matrix-free truncated-spectrum SVM."""
+        return bool(getattr(self, "low_rank", False))
 
     def _check_spectrum(self) -> None:
         if self.spectrum not in ("full", "truncated"):
             raise ValueError(
                 f"spectrum must be 'full' or 'truncated', got {self.spectrum!r}."
             )
-        if self.spectrum == "truncated":
-            if self._BACKEND != "svm" or self.low_rank:
+        if self.spectrum == "truncated" or self._low_rank():
+            if self._BACKEND != "svm":
                 raise ValueError(
-                    "spectrum='truncated' is supported by the exact SVM solver only "
-                    "(TorchKMSVC with low_rank=False)."
+                    "spectrum='truncated' is supported by TorchKMSVC only."
                 )
             if self.is_exact != 0:
-                raise ValueError("spectrum='truncated' does not take is_exact=1.")
-
-    def _apply_fit_low_rank_options(
-        self,
-        low_rank: Optional[bool],
-        num_landmarks: Optional[int],
-        nys_k: Optional[int],
-    ) -> None:
-        if low_rank is not None:
-            self.low_rank = bool(low_rank)
-        if num_landmarks is not None:
-            self.num_landmarks = int(num_landmarks)
-        if nys_k is not None:
-            self.nys_k = int(nys_k)
+                raise ValueError(
+                    "spectrum='truncated' and low_rank=True do not take is_exact=1."
+                )
 
     def _clear_fit_state(self) -> None:
         fitted_attrs = (
@@ -284,12 +268,9 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             "best_C_",
             "cv_mis_",
             "converged_",
+            "duality_gaps_",
+            "fold_duality_gaps_",
             "n_samples_fit_",
-            "_low_rank_backend_",
-            "low_rank_basis_dim_",
-            "low_rank_landmark_indices_",
-            "num_landmarks_",
-            "nys_k_",
             "alpmat_path_",
             "pred_path_",
             "platt_",
@@ -312,11 +293,8 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             raise ValueError(
                 f"dtype must be 'float64' or 'float32', got {self.dtype!r}."
             )
-        if self.dtype == "float32" and (self._BACKEND != "svm" or self.low_rank):
-            raise ValueError(
-                "dtype='float32' is supported by the exact SVM solver only "
-                "(TorchKMSVC with low_rank=False)."
-            )
+        if self.dtype == "float32" and self._BACKEND != "svm":
+            raise ValueError("dtype='float32' is supported by TorchKMSVC only.")
         return torch.float32 if self.dtype == "float32" else torch.float64
 
     def _compute_K_train(
@@ -365,21 +343,11 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
 
         raise ValueError(f"Unsupported kernel={self.kernel} for non-precomputed mode.")
 
-    def fit(
-        self,
-        X: Any,
-        y: Any,
-        *,
-        low_rank: Optional[bool] = None,
-        num_landmarks: Optional[int] = None,
-        nys_k: Optional[int] = None,
-    ):
+    def fit(self, X: Any, y: Any):
         try:
-            return self._fit_impl(
-                X, y, low_rank=low_rank, num_landmarks=num_landmarks, nys_k=nys_k
-            )
+            return self._fit_impl(X, y)
         except torch.cuda.OutOfMemoryError as err:
-            if self.low_rank:
+            if self._low_rank():
                 raise
             n = int(_as_numpy(X).shape[0])
             raise torch.cuda.OutOfMemoryError(
@@ -390,16 +358,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 )
             ) from err
 
-    def _fit_impl(
-        self,
-        X: Any,
-        y: Any,
-        *,
-        low_rank: Optional[bool],
-        num_landmarks: Optional[int],
-        nys_k: Optional[int],
-    ):
-        self._apply_fit_low_rank_options(low_rank, num_landmarks, nys_k)
+    def _fit_impl(self, X: Any, y: Any):
         self._clear_fit_state()
 
         X_np, y_np = check_X_y(
@@ -455,10 +414,16 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         # place (one n x n copy less at the peak) and rebuild it; a precomputed
         # kernel is the caller's array, so it is never overwritten.
         rebuild_kmat = None
-        if self.low_rank:
+        if self._low_rank():
+            # the kernel is never stored: products recompute it (fused on CUDA
+            # in float32), so memory grows like n x columns, not n^2
+            X_dev = X_train_t.to(device=dev, dtype=self._work_dtype_)
+            sigma = self.rbf_sigma
+            if sigma is None:
+                sigma = float(sigest(X_dev, frac=float(self.sigest_frac)))
             self.X_fit_ = X_np
-            self.kernel_state_ = {"low_rank": True}
-            K_train = None
+            self.kernel_state_ = {"sigma": float(sigma), "low_rank": True}
+            K_train = self._kernel_operator(X_dev, float(sigma))
         else:
             if self.kernel == "precomputed":
                 K_train = torch.as_tensor(X_np, dtype=self._work_dtype_)
@@ -485,7 +450,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         kernel_s = _now(dev) - t_kernel
 
         backend = self._make_backend(
-            low_rank=self.low_rank,
+            low_rank=self._low_rank(),
             dev=dev,
             X_train_t=X_train_t,
             K_train=K_train,
@@ -500,6 +465,13 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         # Per-lambda convergence status (None for backends that do not track it)
         conv = getattr(backend, "converged", None)
         self.converged_ = None if conv is None else conv.detach().cpu().numpy().copy()
+        # certified relative duality gaps (truncated spectrum and low_rank=True)
+        gaps = getattr(backend, "gaps", None)
+        fold_gaps = getattr(backend, "fold_gaps", None)
+        self.duality_gaps_ = None if gaps is None else np.asarray(gaps, dtype=float)
+        self.fold_duality_gaps_ = (
+            None if fold_gaps is None else np.asarray(fold_gaps, dtype=float)
+        )
 
         # CV selection: backend.cv expects y on CPU shape (n,)
         cv_mis_t = backend.cv(backend.pred, y_train_t)  # returns tensor length nlam
@@ -518,23 +490,12 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
 
         self.n_samples_fit_ = int(X_np.shape[0])
 
-        if self.low_rank:
-            self._low_rank_backend_ = backend
-            self.low_rank_basis_dim_ = int(self.alpha_.shape[0])
-
-            if hasattr(backend, "indices"):
-                self.low_rank_landmark_indices_ = backend.indices.detach().cpu().numpy()
-            if hasattr(backend, "landmarks_"):
-                self.num_landmarks_ = int(backend.landmarks_.shape[0])
-            if hasattr(backend, "k_eff_"):
-                self.nys_k_ = int(backend.k_eff_)
+        if self.store_path:
+            self.alpmat_path_ = backend.alpmat.detach().cpu()
+            self.pred_path_ = backend.pred.detach().cpu()
         else:
-            if self.store_path:
-                self.alpmat_path_ = backend.alpmat.detach().cpu()
-                self.pred_path_ = backend.pred.detach().cpu()
-            else:
-                self.alpmat_path_ = None
-                self.pred_path_ = None
+            self.alpmat_path_ = None
+            self.pred_path_ = None
 
         self.platt_ = None
         self.platt_scores_ = None
@@ -605,18 +566,18 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         alpha_t = torch.as_tensor(self.alpha_, dtype=torch.double, device=dev)
         b = float(self.intercept_)
 
-        if self.low_rank:
-            check_is_fitted(self, ["_low_rank_backend_"])
-
-            X_test_t = torch.as_tensor(X_np, dtype=torch.double)
-
-            with torch.no_grad():
-                Z_test = self._low_rank_backend_.transform(X_test_t)
-                scores = torch.mv(Z_test, alpha_t) + b
-
-            return scores.detach().cpu().numpy()
-
         wdt = getattr(self, "_work_dtype_", torch.float64)
+        if self._low_rank():
+            # K(X, X_fit) alpha without forming the test kernel
+            op = self._kernel_operator(
+                torch.as_tensor(self.X_fit_, dtype=wdt, device=dev),
+                float(self.kernel_state_["sigma"]),
+            )
+            X_test_t = torch.as_tensor(X_np, dtype=wdt, device=dev)
+            with torch.no_grad():
+                scores = op.cross(X_test_t, alpha_t.to(wdt)) + b
+            return scores.detach().cpu().double().numpy()
+
         if self.kernel == "precomputed":
             # X is K_test: (n_test, n_train)
             K_test = torch.as_tensor(X_np, dtype=wdt, device=dev)
@@ -885,23 +846,22 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         return ax, stats
 
     def _validate_low_rank(self):
-        if not self.low_rank:
+        if not self._low_rank():
             return
-
-        if self.kernel == "precomputed":
-            raise ValueError(
-                "low_rank=True requires raw feature input; kernel='precomputed' is not supported."
-            )
-
         if self.kernel != "rbf":
             raise ValueError(
-                "low_rank=True currently supports only kernel='rbf', because cvknyssvm "
-                "internally uses an RBF Nyström map."
+                "low_rank=True needs kernel='rbf' and raw features: the kernel is "
+                "recomputed from the training rows on every product, never stored "
+                f"(got kernel={self.kernel!r})."
             )
-        if int(self.num_landmarks) < 1:
-            raise ValueError("num_landmarks must be positive.")
-        if int(self.nys_k) < 1:
-            raise ValueError("nys_k must be positive.")
+
+    def _kernel_operator(self, X_dev: torch.Tensor, sigma: float):
+        """The RBF kernel of ``X_dev`` as a never-stored operator: fused
+        products on CUDA in float32, blocks of rows otherwise."""
+        from .experimental import RBFKernelOperator
+
+        fused = X_dev.device.type == "cuda" and X_dev.dtype == torch.float32
+        return RBFKernelOperator(X_dev, sigma, fused=fused)
 
     def _make_backend(
         self,
@@ -916,35 +876,18 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
         foldid_backend: torch.Tensor,
         rebuild_kmat=None,
     ):
-        if low_rank:
-            backend_cls = {
-                "svm": cvknyssvm,
-                "dwd": cvknysdwd,
-                "logit": cvknyslogit,
-            }[self._BACKEND]
-
-            kwargs = dict(
-                Xmat=X_train_t,
-                X_test=X_train_t,  # placeholder unless your nys classes make X_test optional
-                y=y_backend,
-                nlam=nlam,
-                ulam=ulam_backend,
-                foldid=foldid_backend,
-                nfolds=int(self.cv),
-                eps=float(self.tol),
-                maxit=int(self.max_iter),
-                gamma=float(self.solver_gamma),
-                # delta_len=int(self.delta_len),
-                # KKTeps=float(self.KKTeps),
-                # KKTeps2=float(self.KKTeps2),
-                num_landmarks=int(self.num_landmarks),
-                k=int(self.nys_k),
-                device=dev,
-                random_state=self.random_state,
-                sigma=self.rbf_sigma,
+        if low_rank:  # K_train is the never-stored kernel operator
+            return _TruncatedSVMBackend(
+                K_train,
+                y_backend,
+                ulam_backend,
+                foldid_backend,
+                rank=int(self.spectrum_rank),
+                gap_tol=float(self.gap_tol),
+                seed=0 if self.random_state is None else int(self.random_state),
+                block=int(self.spectrum_block),
+                fit_cap=int(self.max_iter),
             )
-
-            return backend_cls(**kwargs)
 
         # exact backends
         if self._BACKEND == "svm" and self.spectrum == "truncated":
@@ -1067,8 +1010,9 @@ class TorchKMSVC(_TorchKMBaseBinaryClassifier):
         unavailable.
     dtype : {"float64", "float32"}, default="float64"
         Precision of the kernel matrix, its eigendecomposition and the solution
-        path in exact mode (``low_rank=False``). ``"float32"`` halves the memory
-        of every ``n x n`` matrix. See :class:`torchkm.cvksvm.cvksvm`.
+        path. ``"float32"`` halves the memory of every ``n x n`` matrix (see
+        :class:`torchkm.cvksvm.cvksvm`); with ``low_rank=True`` on CUDA it runs
+        the kernel products fused.
     rbf_sigma : float, optional
         RBF kernel scale. If omitted, ``sigest`` estimates a scale from the
         training data.
@@ -1082,18 +1026,26 @@ class TorchKMSVC(_TorchKMBaseBinaryClassifier):
     platt_device : {"cpu", "cuda"} or torch.device, optional
         Device used for Platt calibration. Defaults to the estimator device.
     random_state : int, optional
-        Seed used for deterministic fold construction and, when
-        ``low_rank=True``, for Nyström landmark sampling. ``None`` draws both
-        from the global torch RNG.
+        Seed used for deterministic fold construction and for the truncated
+        spectrum's random start. ``None`` draws folds from the global torch RNG.
     store_path : bool, default=False
         If ``True``, keep the full coefficient and out-of-fold prediction path.
     low_rank : bool, default=False
-        If ``True``, use the Nyström SVM backend. The low-rank path currently
-        supports raw-feature RBF-kernel workflows, not ``kernel="precomputed"``.
-    num_landmarks : int, default=2000
-        Number of Nyström landmarks when ``low_rank=True``.
-    nys_k : int, default=1000
-        Rank used by the Nyström feature map when ``low_rank=True``.
+        Large-n mode for problems whose kernel matrix does not fit in memory
+        (e.g. the whole covtype.binary, 464,809 rows). The exact RBF kernel
+        model, fitted by the truncated-spectrum solver
+        (:class:`torchkm.experimental.SpectralSVMPath`, as ``spectrum=
+        "truncated"``), but the kernel is never stored: every product with it
+        is recomputed from the training rows
+        (:class:`torchkm.experimental.RBFKernelOperator`), fused into one GPU
+        kernel on CUDA with ``dtype="float32"``. Memory grows like ``n`` times
+        the columns of a block (``spectrum_block x (cv + 1)``) instead of
+        ``n^2``; each product costs the kernel's arithmetic again, so a stored
+        kernel is faster when it fits. ``spectrum_rank``, ``gap_tol`` and
+        ``spectrum_block`` apply, ``spectrum`` is ignored, and ``max_iter`` is
+        the iteration budget of each lambda (``fit_cap``): fits that reach it
+        are kept and reported as not converged (``converged_``). Needs
+        ``kernel="rbf"``.
     spectrum : {"full", "truncated"}, default="full"
         The exact-mode solver. ``"full"`` eigendecomposes the kernel matrix
         (:class:`torchkm.cvksvm.cvksvm`). ``"truncated"`` (experimental) keeps
@@ -1136,14 +1088,14 @@ class TorchKMSVC(_TorchKMBaseBinaryClassifier):
         Number of training samples.
     kernel_state_ : dict
         Kernel parameters needed for prediction, such as the fitted RBF scale.
-    low_rank_basis_dim_ : int
-        Effective low-rank feature dimension when ``low_rank=True``.
-    low_rank_landmark_indices_ : ndarray
-        Landmark indices when exposed by the Nyström backend.
-    num_landmarks_ : int
-        Number of landmarks used by the fitted Nyström backend, when available.
-    nys_k_ : int
-        Effective Nyström rank, when available.
+    converged_ : ndarray of bool or None
+        Per candidate value, whether the whole-data fit and every fold fit
+        converged (for ``spectrum="truncated"`` and ``low_rank=True``: reached
+        the certified gap ``gap_tol``).
+    duality_gaps_, fold_duality_gaps_ : ndarray or None
+        ``spectrum="truncated"`` and ``low_rank=True``: the certified relative
+        duality gap of each whole-data fit (``nC``) and fold fit (``cv x nC``);
+        ``None`` otherwise.
     peak_gpu_memory_bytes_ : int or None
         Peak CUDA memory (bytes, as tracked by the PyTorch allocator) used by
         the whole ``fit`` call: kernel construction, the solver, and Platt
@@ -1202,6 +1154,76 @@ class TorchKMSVC(_TorchKMBaseBinaryClassifier):
 
     _BACKEND: BackendName = "svm"
 
+    def __init__(
+        self,
+        kernel: KernelName = "rbf",
+        nC: int = 50,
+        Cs: Optional[Any] = None,
+        C_max: float = 1e3,
+        C_min: float = 1e-3,
+        cv: int = 5,
+        foldid: Optional[Any] = None,
+        tol: float = 1e-5,
+        max_iter: int = 1000,
+        solver_gamma: float = 1e-8,
+        is_exact: int = 0,  # only used by cvksvm/cvkdwd
+        KKTeps: float = 1e-3,
+        delta_len: int = 8,  # only used by cvksvm
+        kkt_scaled: bool = False,
+        device: Optional[Union[str, torch.device]] = None,
+        dtype: str = "float64",  # only used by cvksvm (exact mode)
+        # RBF
+        rbf_sigma: Optional[float] = None,
+        sigest_frac: float = 0.5,
+        # Poly
+        poly_degree: int = 3,
+        poly_coef0: float = 1.0,
+        poly_gamma: float = 1.0,
+        # Probability
+        probability: bool = False,
+        platt_device: Optional[Union[str, torch.device]] = None,
+        random_state: Optional[int] = None,
+        store_path: bool = False,  # store full path (big) or keep only best
+        # truncated spectrum (SVM only)
+        spectrum: str = "full",
+        spectrum_rank: int = 400,
+        gap_tol: float = 1e-3,
+        spectrum_block: int = 10,
+        low_rank: bool = False,
+    ):
+        super().__init__(
+            kernel=kernel,
+            nC=nC,
+            Cs=Cs,
+            C_max=C_max,
+            C_min=C_min,
+            cv=cv,
+            foldid=foldid,
+            tol=tol,
+            max_iter=max_iter,
+            solver_gamma=solver_gamma,
+            is_exact=is_exact,
+            KKTeps=KKTeps,
+            delta_len=delta_len,
+            kkt_scaled=kkt_scaled,
+            device=device,
+            dtype=dtype,
+            rbf_sigma=rbf_sigma,
+            sigest_frac=sigest_frac,
+            poly_degree=poly_degree,
+            poly_coef0=poly_coef0,
+            poly_gamma=poly_gamma,
+            probability=probability,
+            platt_device=platt_device,
+            random_state=random_state,
+            store_path=store_path,
+            spectrum=spectrum,
+            spectrum_rank=spectrum_rank,
+            gap_tol=gap_tol,
+            spectrum_block=spectrum_block,
+        )
+        self.low_rank = low_rank
+
 
 class TorchKMDWD(_TorchKMBaseBinaryClassifier):
     """Kernel distance-weighted discrimination classifier.
@@ -1214,7 +1236,7 @@ class TorchKMDWD(_TorchKMBaseBinaryClassifier):
 
     Parameters are inherited from the shared binary-classifier wrapper. The
     most common options are ``kernel``, ``Cs``/``nC``, ``cv``, ``device``,
-    ``probability``, ``low_rank``, ``num_landmarks``, and ``nys_k``.
+    and ``probability``.
 
     Attributes include ``best_C_``, ``cv_mis_``, ``alpha_``, ``intercept_``,
     ``classes_``, and ``foldid_`` after fitting. ``predict_proba`` and
@@ -1271,9 +1293,6 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
         poly_gamma: float = 1.0,
         random_state: Optional[int] = None,
         store_path: bool = False,
-        low_rank: bool = False,
-        num_landmarks: int = 2000,
-        nys_k: int = 1000,
         gap_tol: float = 1e-3,
         max_tighten: int = 0,
     ):
@@ -1304,22 +1323,6 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
         self.poly_gamma = poly_gamma
         self.random_state = random_state
         self.store_path = store_path
-        self.low_rank = low_rank
-        self.num_landmarks = num_landmarks
-        self.nys_k = nys_k
-
-    def _apply_fit_low_rank_options(
-        self,
-        low_rank: Optional[bool],
-        num_landmarks: Optional[int],
-        nys_k: Optional[int],
-    ) -> None:
-        if low_rank is not None:
-            self.low_rank = bool(low_rank)
-        if num_landmarks is not None:
-            self.num_landmarks = int(num_landmarks)
-        if nys_k is not None:
-            self.nys_k = int(nys_k)
 
     def _clear_fit_state(self) -> None:
         fitted_attrs = (
@@ -1335,10 +1338,6 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
             "best_ind_",
             "best_C_",
             "cv_loss_",
-            "_low_rank_backend_",
-            "low_rank_landmark_indices_",
-            "num_landmarks_",
-            "nys_k_",
             "alpmat_path_",
             "pred_path_",
             "peak_gpu_memory_bytes_",
@@ -1376,20 +1375,6 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
             ) ** self.poly_degree
         raise ValueError(f"Unsupported kernel={self.kernel} for non-precomputed mode.")
 
-    def _validate_low_rank(self):
-        if not self.low_rank:
-            return
-        if self.kernel == "precomputed":
-            raise ValueError("low_rank=True does not support kernel='precomputed'.")
-        if self.kernel != "rbf":
-            raise ValueError(
-                "low_rank=True is currently supported only for kernel='rbf'."
-            )
-        if int(self.num_landmarks) < 1:
-            raise ValueError("num_landmarks must be positive.")
-        if int(self.nys_k) < 1:
-            raise ValueError("nys_k must be positive.")
-
     def _make_backend(
         self,
         *,
@@ -1402,32 +1387,6 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
         device: str,
         rebuild_kmat=None,
     ):
-        if self.low_rank:
-            return cvknyqr(
-                Xmat=X_train_t,
-                X_test=X_train_t,
-                y=y_backend,
-                nlam=nlam,
-                ulam=ulam_backend,
-                tau=float(self.tau),
-                foldid=foldid_backend,
-                nfolds=int(self.cv),
-                eps=float(self.tol),
-                maxit=int(self.max_iter),
-                gamma=float(self.solver_gamma),
-                is_exact=int(self.is_exact),
-                delta_len=int(self.delta_len),
-                mproj=int(self.mproj),
-                KKTeps=float(self.KKTeps),
-                KKTeps2=float(self.KKTeps2),
-                kkt_scaled=bool(self.kkt_scaled),
-                num_landmarks=int(self.num_landmarks),
-                k=int(self.nys_k),
-                sigma=self.rbf_sigma,
-                random_state=self.random_state,
-                device=device,
-            )
-
         return cvkqr(
             Kmat=K_train,
             y=y_backend,
@@ -1451,43 +1410,21 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
             max_tighten=int(self.max_tighten),
         )
 
-    def fit(
-        self,
-        X: Any,
-        y: Any,
-        *,
-        low_rank: Optional[bool] = None,
-        num_landmarks: Optional[int] = None,
-        nys_k: Optional[int] = None,
-    ):
+    def fit(self, X: Any, y: Any):
         try:
-            return self._fit_impl(
-                X, y, low_rank=low_rank, num_landmarks=num_landmarks, nys_k=nys_k
-            )
+            return self._fit_impl(X, y)
         except torch.cuda.OutOfMemoryError as err:
-            if self.low_rank:
-                raise
             n = int(_as_numpy(X).shape[0])
             raise torch.cuda.OutOfMemoryError(
                 exact_mode_oom_message(n, getattr(self, "_device_str_", "cuda"))
             ) from err
 
-    def _fit_impl(
-        self,
-        X: Any,
-        y: Any,
-        *,
-        low_rank: Optional[bool],
-        num_landmarks: Optional[int],
-        nys_k: Optional[int],
-    ):
-        self._apply_fit_low_rank_options(low_rank, num_landmarks, nys_k)
+    def _fit_impl(self, X: Any, y: Any):
         self._clear_fit_state()
 
         tau = float(self.tau)
         if not 0.0 < tau < 1.0:
             raise ValueError("tau must be in (0, 1).")
-        self._validate_low_rank()
 
         X_np, y_np = check_X_y(
             _as_numpy(X),
@@ -1526,11 +1463,7 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
         y_backend = y_train_t.to(dev)
 
         rebuild_kmat = None  # see the classifier path
-        if self.low_rank:
-            K_train = None
-            self.X_fit_ = X_np
-            self.kernel_state_ = {}
-        elif self.kernel == "precomputed":
+        if self.kernel == "precomputed":
             K_train = torch.as_tensor(X_np, dtype=torch.double)
             if K_train.ndim != 2 or K_train.shape[0] != K_train.shape[1]:
                 raise ValueError(
@@ -1578,15 +1511,6 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
         )
         self.cv_loss_ = cv_loss
 
-        if self.low_rank:
-            self._low_rank_backend_ = backend
-            if getattr(backend, "indices", None) is not None:
-                self.low_rank_landmark_indices_ = backend.indices
-            if getattr(backend, "indices", None) is not None:
-                self.num_landmarks_ = int(len(backend.indices))
-            if getattr(backend, "k_eff_", None) is not None:
-                self.nys_k_ = int(backend.k_eff_)
-
         if self.store_path:
             self.alpmat_path_ = backend.alpmat.detach().cpu()
             self.pred_path_ = backend.pred.detach().cpu()
@@ -1598,23 +1522,13 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
             int(torch.cuda.max_memory_allocated(dev)) if dev == "cuda" else None
         )
 
-        if not self.low_rank:
-            del backend
+        del backend
         return self
 
     def predict(self, X: Any) -> np.ndarray:
         check_is_fitted(self, ["alpha_", "intercept_"])
         X_np = check_array(_as_numpy(X), accept_sparse=False, ensure_2d=True)
         dev = getattr(self, "_device_str_", "cpu")
-
-        if self.low_rank:
-            check_is_fitted(self, ["_low_rank_backend_"])
-            alp_b = np.concatenate(([self.intercept_], np.asarray(self.alpha_)))
-            alp_t = torch.as_tensor(alp_b, dtype=torch.double, device=dev)
-            X_test_t = torch.as_tensor(X_np, dtype=torch.double)
-            with torch.no_grad():
-                scores = self._low_rank_backend_.predict(X_test_t, alp_t)
-            return scores.detach().cpu().numpy()
 
         alpha_t = torch.as_tensor(self.alpha_, dtype=torch.double, device=dev)
         b = float(self.intercept_)
@@ -1663,10 +1577,9 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
 class TorchKMKQR(_TorchKMBaseKernelQuantileRegressor):
     """Kernel quantile regressor with integrated model selection.
 
-    ``TorchKMKQR`` uses :class:`torchkm.cvkqr.cvkqr` when ``low_rank=False``
-    and :class:`torchkm.cvknyqr.cvknyqr` when ``low_rank=True``.
+    ``TorchKMKQR`` uses :class:`torchkm.cvkqr.cvkqr` (exact mode).
 
-    With ``low_rank=False`` and ``is_exact=0`` (the default), each lambda and
+    With ``is_exact=0`` (the default), each lambda and
     each fold stops early once its certified relative duality gap is at most
     ``gap_tol``; fits that end above it are reported in one
     ``ConvergenceWarning`` (``cvkqr``'s ``gaps`` and ``fold_gaps``).

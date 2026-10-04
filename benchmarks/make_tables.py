@@ -1,8 +1,8 @@
 """Render benchmark JSON results (and R CSV rows) as Markdown or LaTeX tables.
 
 Reads the ``records`` of one or more ``bench_*.py`` output files, groups them
-by dataset and method (library plus its budget parameters: landmarks, rank,
-centres, tau), and prints mean and standard error over repeats of the metrics
+by dataset and method (library plus its budget parameters: Falkon centres,
+tau), and prints mean and standard error over repeats of the metrics
 present in the records: accuracy, balanced accuracy, AUC, pinball loss,
 coverage, end-to-end time, and peak memory (PyTorch allocator peak when
 available, otherwise the NVML process peak).
@@ -49,10 +49,6 @@ def method_key(rec: Dict[str, Any]) -> str:
     name = rec.get("library") or rec.get("solver") or rec.get("estimator") or "?"
     params = rec.get("params") or {}
     bits = []
-    if "num_landmarks" in params:
-        bits.append(f"m={params['num_landmarks']}")
-    if "nys_k" in params:
-        bits.append(f"k={params['nys_k']}")
     if "centers" in params:
         bits.append(f"M={params['centers']}")
     if rec.get("tau") is not None:

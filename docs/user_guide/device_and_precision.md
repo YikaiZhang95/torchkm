@@ -34,7 +34,8 @@ GPU execution is useful for:
 - larger kernel matrices;
 - repeated matrix-vector operations;
 - pathwise model selection;
-- Nyström approximation workflows.
+- the large-\(n\) SVM mode (`TorchKMSVC(low_rank=True)`), whose kernel
+  products run fused in one GPU kernel with `dtype="float32"`.
 
 ## Practical tips
 

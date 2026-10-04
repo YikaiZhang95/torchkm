@@ -28,9 +28,9 @@ step() {  # step <name> <script> <args...>
     [[ -s "$RESULTS/$name.json" ]] && python "$B/make_tables.py" "$RESULTS/$name.json" > "$RESULTS/$name.md"
 }
 
-# memory envelope: exact mode 5k..25k (stops at the first OOM), Nystrom to 250k
+# memory envelope: exact mode 5k..25k (stops at the first OOM)
 step envelope       bench_memory_envelope.py --kkt-eps 1e-6 --repeats 1 \
-                    --sizes 5000 10000 15000 20000 25000 --nystrom-sizes 50000 100000 250000
+                    --sizes 5000 10000 15000 20000 25000
 
 # solver quality at fixed lambda, the paper's 10k cells: default vs converged tolerances
 step solver_quality bench_solver_quality.py --sizes 10000,10 10000,100 \
@@ -44,17 +44,9 @@ step exact          bench_gpu_libraries.py --data-dir "$DATA" --suite exact --li
 step exact_tight    bench_gpu_libraries.py --data-dir "$DATA" --suite exact --libraries torchkm \
                     --kkt-eps 1e-6 --tol 1e-8 --repeats "$REPEATS" --max-train "$MAX_TRAIN"
 
-# Adult and Web at the paper's sizes (a7a, a8a, a9a, w7a, w8a): exact while it fits, Nystrom always
+# Adult and Web at the paper's sizes (a7a, a8a, a9a, w7a, w8a): exact while it fits
 step paper_sets     bench_gpu_libraries.py --data-dir "$DATA" --datasets a7a a8a a9a w7a w8a \
-                    --libraries torchkm torchkm_nystrom linear --kkt-eps 1e-6 --repeats "$REPEATS"
-
-# covtype budget curve on the Nystrom path
-step covtype_rank   bench_covtype_rank.py --data-dir "$DATA" --kkt-eps 1e-6 --repeats 2 \
-                    --landmarks 2000 5000 --ranks 30 300 1000
-
-# large sets on the Nystrom path (ijcnn1 full, covtype, MNIST8m 4v6)
-step nystrom_large  bench_gpu_libraries.py --data-dir "$DATA" --datasets ijcnn1 covtype mnist8m_4v6 \
-                    --libraries torchkm_nystrom --kkt-eps 1e-6 --repeats 2 --landmarks 2000
+                    --libraries torchkm linear --kkt-eps 1e-6 --repeats "$REPEATS"
 
 # Table 2's 10k cells with accuracy, AUC and peak memory
 step table2         table2_simulation.py --repeats 5 --matched-kernel --skip-sklearn \

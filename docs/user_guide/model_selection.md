@@ -113,7 +113,7 @@ above `lambda = 1e-4`, that is `C_max` of about `1 / (2 n 1e-4)`.
 `n * sum(KKT**2)` with `KKTeps`, so a given tolerance means the same relative
 accuracy at every `n`: with the default `KKTeps=1e-3` each residual entry is
 within about 3% of its natural unit `1/n`. It is available on the SVM and
-quantile-regression solvers (`cvksvm`, `cvkqr`, `cvknyqr`) and the
+quantile-regression solvers (`cvksvm`, `cvkqr`) and the
 corresponding estimators; `benchmarks/bench_solver_quality.py --kkt-scaled`
 measures it against the absolute rule.
 

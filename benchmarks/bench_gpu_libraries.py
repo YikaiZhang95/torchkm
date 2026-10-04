@@ -11,7 +11,6 @@ Libraries (``--libraries``):
 
 ================  ============================================================
 torchkm           TorchKM exact path (integrated CV along the lambda path)
-torchkm_nystrom   TorchKM Nyström path (``--landmarks``, ``--rank``)
 sklearn_svc       scikit-learn ``SVC`` on CPU, the reference libsvm solver
 thundersvm        ThunderSVM 0.3.4 (GPU SMO); ``cd thundersvm/python`` or
                   ``--thundersvm-path``
@@ -28,8 +27,8 @@ scaling     Adult at a1a, a3a, a5a, a7a, a8a, a9a: one scaling study, not six
 exact       Problems where the kernel matters, sized for exact mode:
             ijcnn1 (30k stratified subsample), MNIST 3-vs-8 and 4-vs-9,
             covtype (30k subsample), and w7a (imbalanced, report AUC).
-imbalanced  w8a and ijcnn1 at full size on the Nyström path.
-scale       covtype (581k) and MNIST8m 4-vs-6 (1.27M) on the Nyström path.
+imbalanced  w8a and ijcnn1 at full size.
+scale       covtype (581k) and MNIST8m 4-vs-6 (1.27M).
 
 Exact-mode libraries are skipped automatically on a dataset whose predicted
 exact-mode memory exceeds the device (``--force-exact`` overrides). Libraries
@@ -45,7 +44,7 @@ Examples
         --repeats 10 --device cuda --time-cap 14400 --out benchmarks/results/exact.json
 
     python benchmarks/bench_gpu_libraries.py --data-dir ~/libsvm --suite scale \\
-        --libraries torchkm_nystrom falkon linear --falkon-centers 2000 10000 20000 \\
+        --libraries falkon linear --falkon-centers 2000 10000 20000 \\
         --repeats 10 --device cuda --out benchmarks/results/scale.json
 
     python benchmarks/bench_gpu_libraries.py --smoke     # CPU check
@@ -115,22 +114,6 @@ def run_library(
 ) -> List[Dict[str, Any]]:
     if lib == "torchkm":
         return [run_torchkm(data, sig, Cs, foldid, args, dev, seed)]
-    if lib == "torchkm_nystrom":
-        return [
-            run_torchkm(
-                data,
-                sig,
-                Cs,
-                foldid,
-                args,
-                dev,
-                seed,
-                low_rank=True,
-                landmarks=m,
-                rank=args.rank,
-            )
-            for m in args.landmarks
-        ]
     if lib == "sklearn_svc":
         return [run_sklearn_svc(data, sig, Cs, foldid, args, dev, seed)]
     if lib == "thundersvm":
@@ -161,14 +144,6 @@ def main() -> None:
     ap.add_argument(
         "--libraries", nargs="+", choices=ALL_LIBRARIES, default=["torchkm", "linear"]
     )
-    ap.add_argument(
-        "--landmarks",
-        type=int,
-        nargs="+",
-        default=[2000],
-        help="TorchKM Nyström landmarks",
-    )
-    ap.add_argument("--rank", type=int, default=300, help="TorchKM Nyström rank")
     ap.add_argument("--falkon-centers", type=int, nargs="+", default=[2000])
     ap.add_argument("--falkon-maxiter", type=int, default=20)
     ap.add_argument("--svc-cache-mb", type=float, default=2000)
@@ -226,7 +201,6 @@ def main() -> None:
         args=args,
         protocol=protocol_dict(
             args,
-            nystrom=dict(landmarks=args.landmarks, rank=args.rank),
             falkon_centers=args.falkon_centers,
         ),
     )

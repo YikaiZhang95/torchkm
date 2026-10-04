@@ -10,7 +10,8 @@ truncated-spectrum TorchKM (matrix-free kernel) against cuML SVC.
            training rows and C* = --c-star (100, cuML's best single fit), so
            that value is the last grid point. Both methods use
            C = 1 / (2 n lambda) with n the rows of each fit
-  torchkm  SpectralSVMPath(spectrum="truncated") on RBFKernelOperator(fused=True)
+  torchkm  TorchKMSVC(low_rank=True, dtype="float32"): SpectralSVMPath(spectrum=
+           "truncated") on RBFKernelOperator(fused=True)
            (the 864 GB kernel is never stored), wide blocks of --block lambdas
            x (10 folds + whole data), at most --fit-cap iterations per lambda
            of a block (fit_cap x block per block); the whole-data fit at the
@@ -49,7 +50,7 @@ from _common import (  # noqa: E402
     load_dataset,
     make_folds,
 )
-from covtype_full_trunc import LoggedOperator, test_scores  # noqa: E402
+
 
 
 def peak(pm):
@@ -57,53 +58,56 @@ def peak(pm):
 
 
 def run_torchkm(args, data, Xtr, Xte, ytr, foldid, lams):
-    from torchkm.experimental import RBFKernelOperator, SpectralSVMPath
+    from torchkm import TorchKMSVC
 
-    sigma = args.gamma / 2.0  # exp(-2 sigma d^2) = exp(-gamma d^2)
-    dev = Xtr.device
-    with PeakMemory(str(dev)) as pm:
+    n = data["Xtr"].shape[0]
+    clf = TorchKMSVC(
+        kernel="rbf",
+        rbf_sigma=args.gamma / 2.0,  # exp(-2 sigma d^2) = exp(-gamma d^2)
+        Cs=1.0 / (2.0 * n * np.asarray(lams)),  # lambda large to small
+        nC=len(lams),
+        cv=args.folds,
+        foldid=foldid,
+        device="cuda",
+        dtype="float32",
+        low_rank=True,  # the kernel is never stored; fused products
+        spectrum_rank=args.rank,
+        gap_tol=args.gap_tol,
+        spectrum_block=args.block,
+        max_iter=args.fit_cap,  # iteration budget of each lambda
+        random_state=args.seed,
+    )
+    with PeakMemory("cuda") as pm:
         t0 = time.perf_counter()
-        K = LoggedOperator(RBFKernelOperator(Xtr, sigma, fused=True), args.log_every, t0)
-        m = SpectralSVMPath(
-            K,
-            ytr,
-            lams,
-            torch.as_tensor(foldid, device=dev),
-            spectrum="truncated",
-            rank=args.rank,
-            gap_tol=args.gap_tol,
-            fit_cap=args.fit_cap,
-            block=args.block,
-            seed=args.seed,
-        ).fit()
+        clf.fit(data["Xtr"], data["ytr"])
         torch.cuda.synchronize()
         t_fit = time.perf_counter() - t0
-        cv_acc = 1.0 - m.cv_error.numpy()
-        best = int(np.argmax(cv_acc))
-        b, alpha = m.alphas[0, best], m.alphas[1:, best]
-        scores = test_scores(K.K, Xte, alpha, b).cpu().numpy()
+        scores = clf.decision_function(data["Xte"])
         torch.cuda.synchronize()
         dt = time.perf_counter() - t0
+    cv_acc = 1.0 - np.asarray(clf.cv_mis_, dtype=float)
+    best = int(clf.best_ind_)
+    fold_gaps = clf.fold_duality_gaps_
     rec = classification_metrics(data["yte"], scores)
     rec.update(
         method="torchkm_trunc",
         time_s=dt,
         fit_s=t_fit,
         predict_s=dt - t_fit,
-        timing=dict(m.timing),
-        products=K.products,
+        timing=dict(clf.fit_timing_),
+        passes=clf.n_passes_,
         cv_curve=cv_acc.tolist(),
         selected=float(lams[best]),
         best_index=best,
         cv_accuracy=float(cv_acc[best]),
-        gaps=m.gaps.tolist(),
-        converged=m.converged.tolist(),
-        fold_converged_frac=m.fold_converged.double().mean(0).tolist(),
-        fold_gap_max=np.nanmax(m.fold_gaps.numpy(), axis=0).tolist(),
-        selected_certified=bool(m.converged[best] and m.fold_converged[:, best].all()),
-        spectrum_info=m.spectrum_info,
+        gaps=clf.duality_gaps_.tolist(),
+        converged=(clf.duality_gaps_ <= args.gap_tol).tolist(),
+        fold_converged_frac=(fold_gaps <= args.gap_tol).mean(0).tolist(),
+        fold_gap_max=np.nanmax(fold_gaps, axis=0).tolist(),
+        selected_certified=bool(clf.converged_[best]),
         params=dict(rank=args.rank, gap_tol=args.gap_tol, fit_cap=args.fit_cap,
-                    block=args.block, fused=True),
+                    block=args.block, fused=True,
+                    api="TorchKMSVC(low_rank=True, dtype='float32')"),
         gpu_bytes=peak(pm),
     )
     return rec

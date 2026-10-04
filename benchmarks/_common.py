@@ -19,8 +19,8 @@ page and the archived results cannot drift apart:
   dataset x library x repeat, written after every record so a long run that
   dies still leaves its results on disk.
 
-The legacy ``table2_simulation.py`` / ``table3_benchmarks.py`` /
-``table4_nystrom.py`` scripts reproduce the submitted paper's protocol and keep
+The legacy ``table2_simulation.py`` / ``table3_benchmarks.py`` scripts
+reproduce the submitted paper's protocol and keep
 using the small helpers at the top of this module (``timed``, ``warmup``,
 ``svm_objective``, ...).
 """
@@ -602,7 +602,7 @@ DATASETS: Dict[str, Dict[str, Any]] = {
         subsample_test=20_000,
         group="exact",
     ),
-    # Full-size problems for the Nyström path.
+    # Full-size problems, beyond exact mode on most devices.
     "ijcnn1": dict(train="ijcnn1", test="ijcnn1.t", group="imbalanced"),
     "covtype": dict(train="covtype.libsvm.binary.scale", test=None, group="scale"),
     "mnist8m_4v6": dict(
@@ -717,7 +717,7 @@ def synthetic_dataset(
     ``ro=3``) and the training rows; the test rows (``n_test``, default
     ``max(n // 5, 200)``) are then drawn from the *same* centres so that test
     accuracy measures generalisation within one mixture. The mixture has fast
-    kernel-spectrum decay, which favours spectral and Nyström methods; it is a
+    kernel-spectrum decay, which favours spectral and low-rank methods; it is a
     mechanism illustration, not a neutral benchmark.
     """
     from torchkm import data_gen, standardize

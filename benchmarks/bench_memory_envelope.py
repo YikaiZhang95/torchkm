@@ -1,4 +1,4 @@
-"""Memory envelope of TorchKM's exact mode, and where Nyström takes over.
+"""Memory envelope of TorchKM's exact mode.
 
 Exact mode eigendecomposes the full n x n kernel matrix, so its peak device
 memory grows with n^2 and is the binding constraint on the largest problem a
@@ -9,8 +9,6 @@ card can handle. This script measures that envelope directly:
   the PyTorch allocator peak, the NVML process peak, host RSS, and the
   prediction from :func:`torchkm.memory.exact_mode_memory_estimate`. The sweep
   stops at the first CUDA out-of-memory error (recorded as its own row).
-* It then fits the Nyström path (``low_rank=True``) at every ``n`` in
-  ``--nystrom-sizes``, which continues past the exact-mode ceiling.
 * At the end it reports the empirical number of n x n float64 matrices
   resident at the peak, ``(peak - path) / (8 n^2)``, so
   ``torchkm.memory.EXACT_MODE_COPIES`` can be checked against the hardware.
@@ -24,7 +22,6 @@ Paper-scale sweep on a GPU (stops when exact mode runs out of memory)::
 
     python benchmarks/bench_memory_envelope.py --device cuda \\
         --sizes 5000 10000 15000 20000 25000 30000 35000 40000 50000 \\
-        --nystrom-sizes 10000 50000 100000 250000 500000 1000000 \\
         --out benchmarks/results/envelope.json
 
 CPU smoke test::
@@ -61,10 +58,9 @@ from _common import (
 )
 
 DEFAULT_SIZES = [2000, 5000, 10000, 15000, 20000, 25000, 30000, 35000, 40000, 50000]
-DEFAULT_NYSTROM_SIZES = [10000, 50000, 100000, 250000, 500000, 1000000]
 
 
-def make_estimator(name: str, Cs, args, dev, seed, *, low_rank: bool):
+def make_estimator(name: str, Cs, args, dev, seed):
     from torchkm.estimators import TorchKMDWD, TorchKMKQR, TorchKMLogit, TorchKMSVC
 
     common: Dict[str, Any] = dict(
@@ -81,16 +77,12 @@ def make_estimator(name: str, Cs, args, dev, seed, *, low_rank: bool):
         common["KKTeps"] = float(args.kkt_eps)
     if getattr(args, "kkt_scaled", False):
         common["kkt_scaled"] = True
-    if low_rank:
-        common.update(
-            low_rank=True, num_landmarks=int(args.landmarks), nys_k=int(args.rank)
-        )
     if name == "kqr":
         return TorchKMKQR(tau=0.5, **common)
     return {"svm": TorchKMSVC, "dwd": TorchKMDWD, "logit": TorchKMLogit}[name](**common)
 
 
-def one_fit(name: str, n: int, args, dev, seed, *, low_rank: bool) -> Dict[str, Any]:
+def one_fit(name: str, n: int, args, dev, seed) -> Dict[str, Any]:
     from torchkm.memory import exact_mode_memory_estimate
 
     Cs = c_grid(args.grid_size, args.c_max, args.c_min)
@@ -98,19 +90,15 @@ def one_fit(name: str, n: int, args, dev, seed, *, low_rank: bool) -> Dict[str, 
         data = synthetic_regression(n, args.p, seed)
     else:
         data = synthetic_dataset(n, args.p, seed)
-    est = make_estimator(name, Cs, args, dev, seed, low_rank=low_rank)
+    est = make_estimator(name, Cs, args, dev, seed)
     rec: Dict[str, Any] = dict(
         estimator=name,
-        mode="nystrom" if low_rank else "exact",
+        mode="exact",
         n=int(n),
         p=int(args.p),
         seed=int(seed),
         predicted_exact_bytes=int(exact_mode_memory_estimate(n, nlam=len(Cs))),
-        params=(
-            dict(num_landmarks=int(args.landmarks), nys_k=int(args.rank))
-            if low_rank
-            else {}
-        ),
+        params={},
     )
     free_cuda(dev)
     try:
@@ -153,13 +141,6 @@ def main() -> None:
         default=DEFAULT_SIZES,
         help="exact-mode n values",
     )
-    ap.add_argument(
-        "--nystrom-sizes",
-        type=int,
-        nargs="+",
-        default=DEFAULT_NYSTROM_SIZES,
-        help="Nyström n values",
-    )
     ap.add_argument("--p", type=int, default=100, help="number of features")
     ap.add_argument(
         "--estimators",
@@ -167,26 +148,21 @@ def main() -> None:
         default=["svm"],
         choices=["svm", "dwd", "logit", "kqr"],
     )
-    ap.add_argument("--landmarks", type=int, default=2000)
-    ap.add_argument("--rank", type=int, default=300)
     ap.add_argument(
         "--continue-after-oom",
         action="store_true",
         help="keep trying larger exact-mode sizes after the first OOM",
     )
-    ap.add_argument("--skip-nystrom", action="store_true")
     args = smoke_settings(ap.parse_args())
     if args.smoke:
         args.sizes = [200, 400]
-        args.nystrom_sizes = [400, 800]
-        args.landmarks, args.rank, args.p = 50, 20, 10
+        args.p = 10
 
     dev = get_device(args.device)
     banner(
         "TorchKM memory envelope",
         device=dev,
         exact_sizes=args.sizes,
-        nystrom_sizes=[] if args.skip_nystrom else args.nystrom_sizes,
         estimators=args.estimators,
         grid=f"{args.grid_size} C values in [{args.c_min}, {args.c_max}]",
         folds=args.folds,
@@ -221,18 +197,11 @@ def main() -> None:
                     writer.add(rec)
                     print(f"{name:>5} {'exact':>8} {n:>8} {'skip':>7}")
                     continue
-                rec = one_fit(name, n, args, dev, seed, low_rank=False)
+                rec = one_fit(name, n, args, dev, seed)
                 writer.add(rec)
                 _print(rec)
                 if rec["status"] == "oom":
                     oom_seen = True
-        if args.skip_nystrom:
-            continue
-        for n in args.nystrom_sizes:
-            for r in range(args.repeats):
-                rec = one_fit(name, n, args, dev, args.seed + r, low_rank=True)
-                writer.add(rec)
-                _print(rec)
 
     # Summary: the empirical copies constant and the envelope per estimator.
     from torchkm.memory import EXACT_MODE_COPIES

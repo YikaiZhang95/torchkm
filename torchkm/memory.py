@@ -150,8 +150,8 @@ def exact_mode_oom_message(
             f"exact mode up to roughly n={max_exact_n(total, dtype=dtype):,}"
         )
     msg += (
-        ". Use low_rank=True (Nyström approximation, memory grows with "
-        "n x num_landmarks instead of n^2), reduce the training size, or fit on "
+        ". For TorchKMSVC use low_rank=True (the kernel is never stored: memory "
+        "grows like n instead of n^2), or reduce the training size, or fit on "
         "a device with more memory. See the 'Operating envelope' page of the "
         "user guide."
     )
@@ -164,9 +164,10 @@ def exact_mode_size_message(n_samples: int) -> str:
         f"TorchKM exact mode cannot eigendecompose the kernel matrix at "
         f"n_samples={int(n_samples):,}: cuSOLVER's eigendecomposition refuses "
         f"n above {EXACT_MODE_MAX_N_CUDA:,} (measured with PyTorch 2.6 and CUDA "
-        f"12.4), whatever the GPU's memory. Use low_rank=True (Nyström "
-        f"approximation) or reduce the training size. See the 'Operating "
-        f"envelope' page of the user guide."
+        f"12.4), whatever the GPU's memory. For TorchKMSVC use low_rank=True "
+        f"(no eigendecomposition, no stored kernel) or spectrum='truncated', or "
+        f"reduce the training size. See the 'Operating envelope' page of the "
+        f"user guide."
     )
 
 
