@@ -1274,6 +1274,8 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
         low_rank: bool = False,
         num_landmarks: int = 2000,
         nys_k: int = 1000,
+        gap_tol: float = 1e-3,
+        max_tighten: int = 0,
     ):
         self.kernel = kernel
         self.nC = nC
@@ -1283,6 +1285,8 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
         self.cv = cv
         self.foldid = foldid
         self.tau = tau
+        self.gap_tol = gap_tol
+        self.max_tighten = max_tighten
         self.tol = tol
         self.max_iter = max_iter
         self.solver_gamma = solver_gamma
@@ -1443,6 +1447,8 @@ class _TorchKMBaseKernelQuantileRegressor(BaseEstimator, RegressorMixin):
             kkt_scaled=bool(self.kkt_scaled),
             device=device,
             rebuild_kmat=rebuild_kmat,
+            gap_tol=float(self.gap_tol),
+            max_tighten=int(self.max_tighten),
         )
 
     def fit(
@@ -1659,4 +1665,11 @@ class TorchKMKQR(_TorchKMBaseKernelQuantileRegressor):
 
     ``TorchKMKQR`` uses :class:`torchkm.cvkqr.cvkqr` when ``low_rank=False``
     and :class:`torchkm.cvknyqr.cvknyqr` when ``low_rank=True``.
+
+    With ``low_rank=False`` and ``is_exact=0`` (the default), each lambda and
+    each fold stops early once its certified relative duality gap is at most
+    ``gap_tol``; fits that end above it are reported in one
+    ``ConvergenceWarning`` (``cvkqr``'s ``gaps`` and ``fold_gaps``).
+    ``max_tighten`` lets the solver re-solve with a smaller ``eps`` to reach
+    ``gap_tol`` (slower; see :class:`torchkm.cvkqr.cvkqr`).
     """

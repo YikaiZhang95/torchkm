@@ -106,3 +106,46 @@ def test_cv_loss_matches_direct_fold_fits(tau):
     np.testing.assert_allclose(
         _pinball(yv - model.pred.numpy(), tau), _pinball(yv - direct, tau), rtol=0.1
     )
+
+
+def _primal(K, y, alp, lam, tau):
+    a, b = alp[1:], alp[0]
+    r = y - K @ a - b
+    return float((lam / 2) * a @ (K @ a) + torch.maximum(tau * r, (tau - 1) * r).mean())
+
+
+def test_gap_stop_prints_nothing_and_reports_gaps(capsys):
+    # the old KKT test could not be met (rows the fit interpolates keep a
+    # nonzero subgradient residual), so every lambda printed a message
+    K, y = _problem(n=120)
+    foldid = torch.as_tensor(np.arange(120) % 3 + 1)
+    model = _fit(K, y, [1e-1, 1e-2], 0.3, foldid, eps=1e-5, maxit=20000)
+    assert capsys.readouterr().out == ""
+    assert model.gaps.shape == (2,) and model.fold_gaps.shape == (3, 2)
+    assert bool(torch.isfinite(model.gaps).all())
+
+
+def test_reported_gap_bounds_the_suboptimality():
+    # the gap of a default fit bounds its distance to a much tighter solve
+    K, y = _problem(n=80)
+    foldid = torch.as_tensor(np.arange(80) % 2 + 1)
+    lams = [1e-1, 1e-2]
+    loose = _fit(K, y, lams, 0.3, foldid, eps=1e-5, maxit=20000)
+    tight = _fit(
+        K, y, lams, 0.3, foldid, eps=1e-5, maxit=50000, max_tighten=4, gap_tol=1e-6,
+        delta_len=6,
+    )
+    for j, lam in enumerate(lams):
+        P = _primal(K, y, loose.alpmat[:, j], lam, 0.3)
+        P_ref = _primal(K, y, tight.alpmat[:, j], lam, 0.3)
+        assert P_ref <= P + 1e-12  # the tighter solve is at least as good
+        assert P - P_ref <= float(loose.gaps[j]) * P + 1e-12
+
+
+def test_cross_validation_uses_eps():
+    # the folds stopped on a hard-coded 1e-5 before, whatever eps was
+    K, y = _problem(n=120)
+    foldid = torch.as_tensor(np.arange(120) % 3 + 1)
+    coarse = _fit(K, y, [1e-2], 0.3, foldid, eps=1e-3, maxit=20000)
+    fine = _fit(K, y, [1e-2], 0.3, foldid, eps=1e-9, maxit=20000)
+    assert int(fine.cvnpass.sum()) > int(coarse.cvnpass.sum())

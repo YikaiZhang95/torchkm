@@ -5,6 +5,28 @@ All notable changes to TorchKM are documented in this file.
 ## [Unreleased]
 
 ### Fixed
+- Stopping of the exact kernel quantile regression solver (`cvkqr`,
+  `TorchKMKQR`, `is_exact=0`). Each bandwidth's solve was accepted by a KKT
+  test of the unsmoothed check loss that gave every row the subgradient of
+  its residual's sign; the rows the fit interpolates keep a nonzero residual
+  there at the optimum, so the test was never met. Every lambda and fold ran
+  all `delta_len` bandwidths and printed "Exceeded maximum delta iterations"
+  (once or twice per lambda in the Q2 run). The folds also stopped on a
+  hard-coded step tolerance (1e-5) instead of `eps`. Now each lambda and fold
+  stops once its certified relative duality gap is at most `gap_tol`
+  (default 1e-3; the dual of the check loss, from the iterate's smoothed
+  derivative, `lam * a` and its residual signs), the folds use `eps`, and one
+  `ConvergenceWarning` names the fits that end above `gap_tol`; `gaps`,
+  `fold_gaps`, `converged` and `fold_converged` record them. `max_tighten`
+  (default 0) re-solves with a 100 times smaller `eps` to reach `gap_tol`.
+  On cpusmall (n = 1,000, tau 0.1, 5 lambdas) the fits, objectives and time
+  (19.6 s) are those of the previous version; the previous fits were within
+  0.1% of the optimum except at lambda = 1e-7 (0.7%). With `max_tighten=6`
+  every fit certifies, at about 20 times the time and with the same
+  held-out quantiles to three decimals. The coverage gap in Q2 (0.156 for
+  tau = 0.1 on cpusmall) is the estimator's, not the solver's: test coverage
+  moves from 0.09 to 0.46 along the lambda grid identically for loose and
+  certified fits.
 - Intercept of the exact kernel DWD (`cvkdwd`, `TorchKMDWD`), logistic
   (`cvklogit`, `TorchKMLogit`) and squared-hinge (`cvksqsvm`) solvers. Each
   refines the intercept with a golden-section search over its objective
