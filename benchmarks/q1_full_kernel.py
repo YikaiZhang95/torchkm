@@ -74,6 +74,11 @@ Methods (default: all six; --methods picks a subset)
               --gap-tol. --trunc-block lambdas are fitted together with all
               their folds, so each product with K serves block x (folds + 1)
               fits. --tol, --kkt-eps and --delta-len do not apply
+  torchkm_lowrank
+              TorchKMSVC(low_rank=True): torchkm_trunc's solver with the kernel
+              never stored, every product recomputed from the training rows
+              (fused on CUDA in float32); max_iter is the iteration budget of
+              each lambda
   cuml        cuml.svm.SVC, hinge loss, SMO on the full kernel: one fit per
               (C, fold), 5 x 50 + 1 fits
   falkon      falkon.Falkon, squared loss, M = n centres (every training row,
@@ -163,16 +168,21 @@ DATASETS = [
     "sim_20000x100",
     "sim_20000x1000",
 ]
-METHODS = ["torchkm", "torchkm_trunc", "cuml", "falkon", "keops", "eigenpro"]
-TORCHKM = ("torchkm", "torchkm_trunc")
+METHODS = [
+    "torchkm", "torchkm_trunc", "torchkm_lowrank", "cuml", "falkon", "keops", "eigenpro"
+]
+TORCHKM = ("torchkm", "torchkm_trunc", "torchkm_lowrank")
 
 
 def parse_sim(name: str) -> Optional[tuple]:
-    """``sim_<n>x<p>`` -> (n, p); None for a real dataset."""
+    """``sim_<n>x<p>`` -> (n, p, None) and ``sim_<n>x<p>_pos<percent>`` (an
+    imbalanced mixture, that share of positive rows) -> (n, p, share); None for
+    a real dataset."""
     if not name.startswith("sim_"):
         return None
-    n, p = name[4:].split("x")
-    return int(n), int(p)
+    body, _, pos = name[4:].partition("_pos")
+    n, p = body.split("x")
+    return int(n), int(p), (float(pos) / 100.0 if pos else None)
 
 
 # ---------------------------------------------------------------------------
@@ -308,7 +318,7 @@ def sweep(fit_predict, data, foldid, grid, dev, args, params, label="lambda"):
 # ---------------------------------------------------------------------------
 
 
-def run_torchkm(data, sig, lams, foldid, dev, args, seed, truncated=False):
+def run_torchkm(data, sig, lams, foldid, dev, args, seed, truncated=False, low_rank=False):
     from torchkm.estimators import TorchKMSVC
 
     # The estimator takes C and forms lambda = 1/(2 n C) itself, n = training
@@ -336,6 +346,7 @@ def run_torchkm(data, sig, lams, foldid, dev, args, seed, truncated=False):
         spectrum_rank=args.trunc_rank,
         gap_tol=args.gap_tol,
         spectrum_block=args.trunc_block,
+        low_rank=low_rank,  # the kernel never stored; max_iter is per lambda
     )
     # start-up: CUDA context, cuSOLVER/cuBLAS handles
     torch.linalg.eigh(torch.eye(64, dtype=getattr(torch, args.dtype), device=dev))
@@ -372,11 +383,15 @@ def run_torchkm(data, sig, lams, foldid, dev, args, seed, truncated=False):
         grid_size=len(lams),
         converged_frac=None if conv is None else float(np.mean(conv)),
         params=dict(
-            cell_settings("torchkm_trunc" if truncated else "torchkm", args),
+            cell_settings(
+                "torchkm_lowrank" if low_rank else
+                "torchkm_trunc" if truncated else "torchkm", args
+            ),
             loss="hinge",
             solver=(
                 "top eigenpairs + lambda path + CV fits, each at a certified gap"
-                if truncated
+                + (", kernel never stored (fused products)" if low_rank else "")
+                if truncated or low_rank
                 else "eigendecomposition + lambda path + exact CV"
             ),
             C="1/(2 n lambda), n = training rows",
@@ -614,9 +629,15 @@ def run_eigenpro(data, sig, lams, foldid, dev, args, seed):  # lams unused: epoc
     )
 
 
+def run_torchkm_lowrank(data, sig, lams, foldid, dev, args, seed):
+    """TorchKMSVC(low_rank=True): the truncated spectrum on a never-stored kernel."""
+    return run_torchkm(data, sig, lams, foldid, dev, args, seed, low_rank=True)
+
+
 RUN = dict(
     torchkm=run_torchkm,
     torchkm_trunc=run_torchkm_trunc,
+    torchkm_lowrank=run_torchkm_lowrank,
     cuml=run_cuml,
     falkon=run_falkon,
     keops=run_keops,
@@ -666,8 +687,8 @@ def cell_settings(method: str, args: argparse.Namespace) -> Dict[str, Any]:
             KKTeps=args.kkt_eps,
             delta_len=args.delta_len,
         )
-    elif method == "torchkm_trunc":
-        from torchkm.experimental import SpectralSVMPath
+    elif method in ("torchkm_trunc", "torchkm_lowrank"):
+        from torchkm.cvksvm import SpectralSVMPath
 
         # bias: the solver's default, recorded so that cells computed before it
         # changed (from 0.5 to 4) are computed again
@@ -678,6 +699,13 @@ def cell_settings(method: str, args: argparse.Namespace) -> Dict[str, Any]:
             spectrum_block=args.trunc_block,
             certify_bias=bias,
         )
+        # the kernel of the unique rows (stored for the truncated spectrum; for
+        # low_rank, stored when it fits the default cache, else recomputed),
+        # recorded so that cells computed before it are computed again
+        own.update(kernel_rows="unique")
+        if method == "torchkm_lowrank":
+            own.update(low_rank=True, max_iter=args.max_iter, chunk_growth=2,
+                       kernel_cache_gb=2.0)
     elif method == "cuml":
         own = dict(cache_size_mb=args.svc_cache_mb)
     elif method == "falkon":
@@ -1074,7 +1102,14 @@ def main() -> None:
             if sim:  # Table 2 protocol: fresh data for every repeat
                 data = cast(
                     synthetic_dataset(
-                        sim[0], sim[1], seed, name=ds, n_test=sim[0] // 10
+                        sim[0],
+                        sim[1],
+                        seed,
+                        name=ds,
+                        # imbalanced: a test set of n rows, so that the
+                        # minority class has enough rows for AUC
+                        n_test=sim[0] if sim[2] else sim[0] // 10,
+                        pos_frac=sim[2],
                     ),
                     args.dtype,
                 )

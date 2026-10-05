@@ -331,6 +331,12 @@ class RBFKernelOperator:
     formula, block by block, so the entries agree to rounding). ``B`` may be a
     vector or a matrix in ``X``'s dtype and on its device.
 
+    Duplicate rows of ``X`` have identical kernel rows and columns, so
+    K B = P K_u (P' B) with K_u the kernel of the unique rows and P the n x u
+    indicator of each row's copy: the products then cost u^2 instead of n^2
+    (binary or categorical features often repeat rows; w8a: u = 0.70 n, half
+    the work), with the same kernel entries.
+
     Parameters
     ----------
     X : tensor (n, p)
@@ -344,9 +350,19 @@ class RBFKernelOperator:
         float32 only) instead of blocks of K. Entries agree
         with the block path to float32 rounding (relative error about 4e-5
         against float64, 2e-5 for the blocks), not bitwise.
+    dedup : bool or "auto", default "auto"
+        Work on the unique rows of ``X`` (above). ``"auto"``: when at least
+        ``DEDUP_MIN_SHARE`` of the rows are duplicates. The result is the same
+        to rounding (duplicates' coefficients are summed before the product).
+    cache_bytes : int, optional
+        Memory for storing kernel rows (of the unique rows), read in every
+        product instead of recomputed: the first ``cached_rows`` rows that fit,
+        all u when u x u fits (``stored``). A product then recomputes only the
+        other rows, so its cost falls in proportion.
     """
 
     FUSED_MAX_COLUMNS = 128
+    DEDUP_MIN_SHARE = 0.05
 
     def __init__(
         self,
@@ -354,13 +370,23 @@ class RBFKernelOperator:
         sigma: float,
         block_bytes: int = 2**30,
         fused: bool = False,
+        dedup="auto",
+        cache_bytes=None,
     ):
         n = X.shape[0]
-        self.X, self.sigma = X, float(sigma)
+        self.sigma = float(sigma)
         self.shape = (n, n)
         self.dtype, self.device = X.dtype, X.device
+        self._inv = None  # row -> its unique row, when deduplicated
+        if dedup:
+            U, inv = torch.unique(X, dim=0, return_inverse=True)
+            if dedup is True or n - U.shape[0] >= self.DEDUP_MIN_SHARE * n:
+                X, self._inv = U, inv
+        self.X = X  # the rows the kernel is computed on (unique when deduplicated)
+        self.n_unique = X.shape[0]
         self.x_norm = (X * X).sum(dim=1)
-        self.block_rows = max(1, min(n, int(block_bytes) // (n * X.element_size())))
+        u = X.shape[0]
+        self.block_rows = max(1, min(u, int(block_bytes) // (u * X.element_size())))
         self.fused = bool(fused)
         if self.fused:
             if X.device.type != "cuda" or X.dtype != torch.float32:
@@ -369,6 +395,30 @@ class RBFKernelOperator:
             one = torch.ones_like(nx)
             self._q = _pad8(torch.cat([4.0 * s * X, -2.0 * s * nx, one], dim=1))
             self._k = _pad8(torch.cat([X, one, -2.0 * s * nx], dim=1))
+        # stored kernel rows 0 .. cached_rows - 1 (against every row), as many
+        # as fit cache_bytes; the rest are recomputed in each product
+        c = 0 if cache_bytes is None else min(u, int(cache_bytes) // (u * X.element_size()))
+        self.cached_rows = c
+        self._K = None
+        if c > 0:
+            self._K = torch.empty(c, u, dtype=X.dtype, device=X.device)
+            # filled in small blocks (64 MiB) so that building it adds little
+            # to the peak beyond the cache itself
+            step = max(1, min(self.block_rows, 2**26 // (u * X.element_size())))
+            for i in range(0, c, step):
+                j = min(c, i + step)
+                D = self.x_norm[i:j, None] + self.x_norm[None, :]
+                D.addmm_(X[i:j], X.T, beta=1.0, alpha=-2.0)
+                self._K[i:j] = D.clamp_min_(0.0).mul_(-2.0 * self.sigma).exp_()
+                del D
+        self.stored = c == u
+
+    def _collapse(self, B2: torch.Tensor) -> torch.Tensor:
+        """P' B: the rows of B summed per unique row."""
+        if self._inv is None:
+            return B2
+        out = torch.zeros(self.n_unique, B2.shape[1], dtype=B2.dtype, device=B2.device)
+        return out.index_add_(0, self._inv, B2)
 
     def _fused(self, B: torch.Tensor, q: torch.Tensor = None) -> torch.Tensor:
         q = self._q if q is None else q
@@ -385,51 +435,82 @@ class RBFKernelOperator:
         )[:2]
         return out[0, 0, :, :w] * lse[0, 0, :n, None].exp()
 
+    def _rows_times(self, Xq: torch.Tensor, q, Bu: torch.Tensor) -> torch.Tensor:
+        """K(Xq, X) Bu over the operator's (unique) rows X; ``q`` the fused
+        query rows of Xq (None for the block path)."""
+        s = self.sigma
+        if self.fused:
+            w = self.FUSED_MAX_COLUMNS
+            return torch.cat(
+                [self._fused(Bu[:, j : j + w], q) for j in range(0, Bu.shape[1], w)],
+                dim=1,
+            )
+        rows = self.block_rows
+        out = torch.empty(Xq.shape[0], Bu.shape[1], dtype=Bu.dtype, device=Bu.device)
+        for i in range(0, Xq.shape[0], rows):
+            # rbf_kernel's arithmetic on rows i .. i + rows
+            Xb = Xq[i : i + rows]
+            D = (Xb * Xb).sum(dim=1)[:, None] + self.x_norm[None, :]
+            D.addmm_(Xb, self.X.T, beta=1.0, alpha=-2.0)
+            D.clamp_min_(0.0)
+            out[i : i + rows] = D.mul_(-2.0 * s).exp_() @ Bu
+        return out
+
     def cross(self, Xq: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
         """K(Xq, X) @ B for other rows ``Xq`` (prediction), in blocks of query
         rows, or fused (no block of the kernel is formed) with ``fused``."""
         vector = B.dim() == 1
         B2 = B.unsqueeze(1) if vector else B
-        s = self.sigma
+        q = None
         if self.fused:
+            s = self.sigma
             nq = (Xq * Xq).sum(dim=1, keepdim=True)
             q = _pad8(torch.cat([4.0 * s * Xq, -2.0 * s * nq, torch.ones_like(nq)], 1))
-            w = self.FUSED_MAX_COLUMNS
-            out = torch.cat(
-                [self._fused(B2[:, j : j + w], q) for j in range(0, B2.shape[1], w)],
-                dim=1,
-            )
-            return out.squeeze(1) if vector else out
-        rows = self.block_rows
-        out = torch.empty(Xq.shape[0], B2.shape[1], dtype=B2.dtype, device=B2.device)
-        for i in range(0, Xq.shape[0], rows):
-            Xb = Xq[i : i + rows]
-            D = (Xb * Xb).sum(dim=1)[:, None] + self.x_norm[None, :]
-            D.addmm_(Xb, self.X.T, beta=1.0, alpha=-2.0)
-            D.clamp_min_(0.0)
-            out[i : i + rows] = D.mul_(-2.0 * s).exp_() @ B2
+        out = self._rows_times(Xq, q, self._collapse(B2))
         return out.squeeze(1) if vector else out
 
     def __matmul__(self, B: torch.Tensor) -> torch.Tensor:
         vector = B.dim() == 1
         B2 = B.unsqueeze(1) if vector else B
-        if self.fused:
-            w = self.FUSED_MAX_COLUMNS
+        Bu = self._collapse(B2)
+        c = self.cached_rows
+        if c == self.n_unique:
+            out = self._K @ Bu
+        elif c > 0:  # stored rows read, the others recomputed
             out = torch.cat(
-                [self._fused(B2[:, j : j + w]) for j in range(0, B2.shape[1], w)], dim=1
+                [self._K @ Bu,
+                 self._rows_times(self.X[c:], self._q[c:] if self.fused else None, Bu)]
             )
-            return out.squeeze(1) if vector else out
-        n, rows = self.shape[0], self.block_rows
-        out = torch.empty(n, B2.shape[1], dtype=B2.dtype, device=B2.device)
-        for i in range(0, n, rows):
-            # rbf_kernel's arithmetic on rows i .. i + rows
-            D = self.x_norm[i : i + rows, None] + self.x_norm[None, :]
-            D.addmm_(self.X[i : i + rows], self.X.T, beta=1.0, alpha=-2.0)
-            D.clamp_min_(0.0)
-            out[i : i + rows] = D.mul_(-2.0 * self.sigma).exp_() @ B2
+        else:
+            out = self._rows_times(self.X, self._q if self.fused else None, Bu)
+        if self._inv is not None:
+            out = out[self._inv]  # P (K_u P'B): each row its unique row's
         return out.squeeze(1) if vector else out
 
 
 def _pad8(M: torch.Tensor) -> torch.Tensor:
     """Columns zero-padded to a multiple of 8 (the fused kernel's alignment)."""
     return torch.nn.functional.pad(M, (0, (-M.shape[1]) % 8)).contiguous()
+
+
+class UniqueRowsKernel:
+    """K = P K_u P' as an operator: ``K_u`` the stored kernel of the unique
+    rows, ``inverse`` each row's unique row (``torch.unique(..., dim=0,
+    return_inverse=True)``). Duplicate rows have identical kernel rows and
+    columns, so the products are exact and cost a read of K_u (u^2) instead
+    of K (n^2)."""
+
+    def __init__(self, K_unique: torch.Tensor, inverse: torch.Tensor):
+        self.K_unique, self.inverse = K_unique, inverse
+        n = inverse.shape[0]
+        self.shape = (n, n)
+        self.dtype, self.device = K_unique.dtype, K_unique.device
+
+    def __matmul__(self, B: torch.Tensor) -> torch.Tensor:
+        vector = B.dim() == 1
+        B2 = B.unsqueeze(1) if vector else B
+        Bu = torch.zeros(
+            self.K_unique.shape[0], B2.shape[1], dtype=B2.dtype, device=B2.device
+        ).index_add_(0, self.inverse, B2)
+        out = (self.K_unique @ Bu)[self.inverse]
+        return out.squeeze(1) if vector else out

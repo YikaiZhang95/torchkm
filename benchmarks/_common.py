@@ -709,7 +709,13 @@ def load_dataset(
 
 
 def synthetic_dataset(
-    n: int, p: int, seed: int, *, name: str = "synthetic", n_test: Optional[int] = None
+    n: int,
+    p: int,
+    seed: int,
+    *,
+    name: str = "synthetic",
+    n_test: Optional[int] = None,
+    pos_frac: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Gaussian-mixture classification data from ``torchkm.data_gen`` (paper Table 2).
 
@@ -719,15 +725,35 @@ def synthetic_dataset(
     accuracy measures generalisation within one mixture. The mixture has fast
     kernel-spectrum decay, which favours spectral and low-rank methods; it is a
     mechanism illustration, not a neutral benchmark.
+
+    ``pos_frac`` (imbalanced classes): the share of positive rows in the
+    training and the test set. The mixture is drawn with balanced classes,
+    enough rows for the negatives, and a random subset of its positive rows
+    is kept (seeded by ``seed``); the class-conditional distributions are the
+    balanced mixture's.
     """
     from torchkm import data_gen, standardize
 
     nm, mu, ro = 5, 2.0, 3.0
-    Xtr, ytr, means = data_gen(n, nm, p, p // 2, p // 2, mu, ro, seed)
+    m_test = n_test or max(n // 5, 200)
+
+    def draw(rows, **kw):
+        if pos_frac is None:
+            return data_gen(rows, nm, p, p // 2, p // 2, mu, ro, **kw)
+        n_pos = int(round(pos_frac * rows))
+        # classes are drawn at random: 10% spare rows so both counts are met
+        X, y, means = data_gen(
+            int(2.2 * (rows - n_pos)), nm, p, p // 2, p // 2, mu, ro, **kw
+        )
+        neg = np.flatnonzero(y.numpy() <= 0)[: rows - n_pos]
+        pos = rng.choice(np.flatnonzero(y.numpy() > 0), n_pos, replace=False)
+        keep = np.sort(np.concatenate([neg, pos]))
+        return X[keep], y[keep], means
+
+    rng = np.random.default_rng(seed)
+    Xtr, ytr, means = draw(n, sdn=seed)
     # means given: no reseeding, the generator continues past the training rows
-    Xte, yte, _ = data_gen(
-        n_test or max(n // 5, 200), nm, p, p // 2, p // 2, mu, ro, means=means
-    )
+    Xte, yte, _ = draw(m_test, means=means)
     Xtr, Xte = standardize(Xtr).numpy().astype(np.float64), standardize(
         Xte
     ).numpy().astype(np.float64)
@@ -737,7 +763,7 @@ def synthetic_dataset(
         ytr=ytr.numpy().astype(np.float64),
         Xte=Xte,
         yte=yte.numpy().astype(np.float64),
-        n_train=int(n),
+        n_train=int(Xtr.shape[0]),
         n_test=int(Xte.shape[0]),
         p=int(p),
         pos_frac=float(np.mean(ytr.numpy() > 0)),

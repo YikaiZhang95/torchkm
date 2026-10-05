@@ -7,7 +7,13 @@ from typing import Any, Literal, Optional, Tuple, Union
 import numpy as np
 import torch
 
-from .functions import sigest, rbf_kernel as rbf_kernel_train, kernelMult
+from .functions import (
+    RBFKernelOperator,
+    UniqueRowsKernel,
+    kernelMult,
+    rbf_kernel as rbf_kernel_train,
+    sigest,
+)
 from .memory import exact_mode_oom_message
 
 from .cvksvm import cvksvm
@@ -127,7 +133,7 @@ class _TruncatedSVMBackend:
 
     def __init__(
         self, K, y, ulam, foldid, *, rank, gap_tol, seed, block=1, fit_cap=None,
-        loss="hinge",
+        loss="hinge", chunk_growth=None,
     ):
         self.ulam = ulam
         self._problem = (K, y.to(K.dtype), ulam.detach().cpu().tolist(), foldid)
@@ -137,6 +143,8 @@ class _TruncatedSVMBackend:
         )
         if fit_cap is not None:
             self._options["fit_cap"] = int(fit_cap)
+        if chunk_growth is not None:
+            self._options["chunk_growth"] = int(chunk_growth)
 
     def fit(self):
         from .cvksvm import SpectralSVMPath
@@ -272,6 +280,9 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             "converged_",
             "duality_gaps_",
             "fold_duality_gaps_",
+            "kernel_stored_",
+            "kernel_cached_rows_",
+            "kernel_unique_rows_",
             "n_samples_fit_",
             "alpmat_path_",
             "pred_path_",
@@ -448,16 +459,30 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 # Build the kernel on the target device: no host-side n x n
                 # copy and no host-to-device transfer of the full matrix.
                 X_dev = X_train_t.to(device=dev, dtype=self._work_dtype_)
-                K_train, kernel_state = self._compute_K_train(X_dev)
+                unique = self._unique_rows(X_dev)
+                if unique is not None:
+                    # truncated spectrum, rows repeated: store the kernel of the
+                    # unique rows only (same entries; products read u^2, not n^2).
+                    # The bandwidth is estimated on all rows, as otherwise.
+                    U, inverse = unique
+                    sigma = self.rbf_sigma
+                    if self.kernel == "rbf" and sigma is None:
+                        sigma = float(sigest(X_dev, frac=float(self.sigest_frac)))
+                    K_u, kernel_state = self._compute_K_train(U, sigma)
+                    K_train = UniqueRowsKernel(K_u.to(dev), inverse)
+                    self.kernel_unique_rows_ = int(U.shape[0])
+                else:
+                    K_train, kernel_state = self._compute_K_train(X_dev)
+
+                    def rebuild():  # the same kernel again, with the fitted bandwidth
+                        return self._compute_K_train(X_dev, kernel_state.get("sigma"))[0]
+
+                    rebuild_kmat = rebuild
                 self.X_fit_ = X_np
                 self.kernel_state_ = kernel_state
 
-                def rebuild():  # the same kernel again, with the fitted bandwidth
-                    return self._compute_K_train(X_dev, kernel_state.get("sigma"))[0]
-
-                rebuild_kmat = rebuild
-
-            K_train = K_train.to(dev)
+            if torch.is_tensor(K_train):
+                K_train = K_train.to(dev)
         kernel_s = _now(dev) - t_kernel
 
         backend = self._make_backend(
@@ -583,6 +608,7 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
             op = self._kernel_operator(
                 torch.as_tensor(self.X_fit_, dtype=wdt, device=dev),
                 float(self.kernel_state_["sigma"]),
+                cache=False,  # predictions use the cross products only
             )
             X_test_t = torch.as_tensor(X_np, dtype=wdt, device=dev)
             with torch.no_grad():
@@ -866,13 +892,32 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 f"(got kernel={self.kernel!r})."
             )
 
-    def _kernel_operator(self, X_dev: torch.Tensor, sigma: float):
-        """The RBF kernel of ``X_dev`` as a never-stored operator: fused
-        products on CUDA in float32, blocks of rows otherwise."""
-        from .functions import RBFKernelOperator
+    def _unique_rows(self, X_dev: torch.Tensor):
+        """(unique rows, inverse) for spectrum="truncated" (stored kernel) when
+        at least 5% of the rows are duplicates; None otherwise."""
+        if self.spectrum != "truncated" or self._BACKEND not in ("svm", "dwd"):
+            return None
+        U, inverse = torch.unique(X_dev, dim=0, return_inverse=True)
+        n = X_dev.shape[0]
+        if n - U.shape[0] < RBFKernelOperator.DEDUP_MIN_SHARE * n:
+            return None
+        return U, inverse
 
+    def _kernel_operator(self, X_dev: torch.Tensor, sigma: float, cache: bool = True):
+        """The RBF kernel of ``X_dev`` as an operator (low_rank=True): on its
+        unique rows; stored when that kernel fits ``kernel_cache_gb``,
+        recomputed in every product otherwise (fused on CUDA in float32,
+        blocks of rows otherwise)."""
         fused = X_dev.device.type == "cuda" and X_dev.dtype == torch.float32
-        return RBFKernelOperator(X_dev, sigma, fused=fused)
+        cache_bytes = None
+        if cache:
+            cache_bytes = int(float(getattr(self, "kernel_cache_gb", 2.0)) * 2**30)
+        op = RBFKernelOperator(X_dev, sigma, fused=fused, cache_bytes=cache_bytes)
+        if cache:
+            self.kernel_stored_ = bool(op.stored)
+            self.kernel_cached_rows_ = int(op.cached_rows)
+            self.kernel_unique_rows_ = int(op.n_unique)
+        return op
 
     def _make_backend(
         self,
@@ -899,6 +944,9 @@ class _TorchKMBaseBinaryClassifier(BaseEstimator, ClassifierMixin):
                 block=int(self.spectrum_block),
                 fit_cap=int(self.max_iter),
                 loss="dwd" if self._BACKEND == "dwd" else "hinge",
+                # every iteration costs a whole product here: certify often, so
+                # that the few slow fits of a block stop as soon as they can
+                chunk_growth=2,
             )
 
         # exact backends
@@ -1058,7 +1106,15 @@ class TorchKMSVC(_TorchKMBaseBinaryClassifier):
         ``spectrum_block`` apply, ``spectrum`` is ignored, and ``max_iter`` is
         the iteration budget of each lambda (``fit_cap``): fits that reach it
         are kept and reported as not converged (``converged_``). Needs
-        ``kernel="rbf"``.
+        ``kernel="rbf"``. Duplicate training rows are merged first (identical
+        kernel rows), and as many kernel rows as fit ``kernel_cache_gb`` are
+        stored and read instead of recomputed.
+    kernel_cache_gb : float, default=2.0
+        ``low_rank=True``: memory (GiB) for kernel rows stored instead of
+        recomputed in every product, like cuML's ``cache_size``: as many rows
+        of the unique-row kernel as fit (all of it when it fits, then the
+        products only read it); each product recomputes the rest, so its cost
+        falls in proportion. 0: always recompute.
     spectrum : {"full", "truncated"}, default="full"
         The exact-mode solver. ``"full"`` eigendecomposes the kernel matrix
         (:class:`torchkm.cvksvm.cvksvm`). ``"truncated"`` keeps
@@ -1078,6 +1134,9 @@ class TorchKMSVC(_TorchKMBaseBinaryClassifier):
         folds, sharing each product with the kernel matrix (the ``block``
         option of :class:`torchkm.cvksvm.SpectralSVMPath`); 1 fits the
         path serially. Without cross-validation folds the path is serial.
+        When at least 5% of the training rows are duplicates,
+        ``spectrum="truncated"`` stores only the kernel of the unique rows
+        (the same entries; ``kernel_unique_rows_``).
 
     Attributes
     ----------
@@ -1203,6 +1262,7 @@ class TorchKMSVC(_TorchKMBaseBinaryClassifier):
         gap_tol: float = 1e-3,
         spectrum_block: int = 10,
         low_rank: bool = False,
+        kernel_cache_gb: float = 2.0,
     ):
         super().__init__(
             kernel=kernel,
@@ -1236,6 +1296,7 @@ class TorchKMSVC(_TorchKMBaseBinaryClassifier):
             spectrum_block=spectrum_block,
         )
         self.low_rank = low_rank
+        self.kernel_cache_gb = kernel_cache_gb
 
 
 class TorchKMDWD(_TorchKMBaseBinaryClassifier):
@@ -1300,6 +1361,7 @@ class TorchKMDWD(_TorchKMBaseBinaryClassifier):
         gap_tol: float = 1e-3,
         spectrum_block: int = 10,
         low_rank: bool = False,
+        kernel_cache_gb: float = 2.0,
     ):
         super().__init__(
             kernel=kernel,
@@ -1333,6 +1395,7 @@ class TorchKMDWD(_TorchKMBaseBinaryClassifier):
             spectrum_block=spectrum_block,
         )
         self.low_rank = low_rank
+        self.kernel_cache_gb = kernel_cache_gb
 
 
 class TorchKMLogit(_TorchKMBaseBinaryClassifier):

@@ -245,3 +245,71 @@ def test_dwd_estimator_truncated_and_low_rank_agree():
     assert np.nanmax(b.fold_duality_gaps_) <= 1e-3 and bool(b.converged_.all())
     c = TorchKMDWD(spectrum="truncated", dtype="float32", **kw).fit(X.numpy(), y.numpy())
     assert np.isfinite(c.decision_function(X.numpy()[:3])).all()
+
+
+# --------------------------------------------------------------------------
+# RBFKernelOperator on duplicate rows: products on the unique rows
+# --------------------------------------------------------------------------
+
+
+def _binary_rows(seed=0):
+    g = torch.Generator().manual_seed(seed)
+    base = (torch.rand(150, 6, generator=g) > 0.7).double()
+    return torch.cat([base, base[:60], base[:20]]), g  # 230 rows, many repeated
+
+
+@pytest.mark.parametrize("fused", [False, pytest.param(True, marks=pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="fused path needs CUDA"))])
+def test_dedup_gives_the_full_kernel_products(fused):
+    X, g = _binary_rows()
+    K = rbf_kernel(X, 0.4)
+    B = torch.randn(len(X), 3, generator=g, dtype=torch.float64)
+    Xq = torch.randn(17, 6, generator=g, dtype=torch.float64)
+    ref_cross = torch.exp(-0.8 * torch.cdist(Xq, X) ** 2) @ B
+    dev, dt, tol = ("cuda", torch.float32, 1e-4) if fused else ("cpu", torch.float64, 1e-12)
+    op = RBFKernelOperator(X.to(dev, dt), 0.4, fused=fused, dedup=True,
+                           block_bytes=len(X) * 8 * 16)
+    assert op.n_unique < len(X) and op.shape == (len(X), len(X))
+    torch.testing.assert_close((op @ B.to(dev, dt)).double().cpu(), K @ B, rtol=tol, atol=tol)
+    torch.testing.assert_close((op @ B[:, 0].to(dev, dt)).double().cpu(), K @ B[:, 0],
+                               rtol=tol, atol=tol)
+    torch.testing.assert_close(op.cross(Xq.to(dev, dt), B.to(dev, dt)).double().cpu(),
+                               ref_cross, rtol=tol, atol=tol)
+
+
+def test_dedup_auto_leaves_distinct_rows_alone():
+    X = torch.randn(100, 4, dtype=torch.float64)
+    assert RBFKernelOperator(X, 0.5).n_unique == 100  # "auto": no duplicates
+    Xd, _ = _binary_rows()
+    assert RBFKernelOperator(Xd, 0.5).n_unique < len(Xd)
+    assert RBFKernelOperator(Xd, 0.5, dedup=False).n_unique == len(Xd)
+
+
+def test_low_rank_fit_on_duplicate_rows_is_the_stored_fit():
+    from torchkm import TorchKMSVC
+
+    X, g = _binary_rows(1)
+    y = np.where(X.numpy()[:, 0] + X.numpy()[:, 1] + 0.3 * torch.randn(len(X), generator=g).numpy() > 0.6, 1, -1)
+    kw = dict(rbf_sigma=0.3, Cs=np.array([3.0, 0.3]), nC=2, cv=3, device="cpu",
+              random_state=0, max_iter=20000)
+    a = TorchKMSVC(spectrum="truncated", **kw).fit(X.numpy(), y)
+    b = TorchKMSVC(low_rank=True, **kw).fit(X.numpy(), y)
+    assert a.best_C_ == b.best_C_
+    np.testing.assert_allclose(b.decision_function(X.numpy()), a.decision_function(X.numpy()),
+                               rtol=0, atol=1e-6)
+
+
+@pytest.mark.parametrize("fused", [False, pytest.param(True, marks=pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="fused path needs CUDA"))])
+def test_partial_kernel_cache_gives_the_full_products(fused):
+    # some kernel rows stored (cache_bytes), the rest recomputed per product
+    X, g = _binary_rows(2)
+    K = rbf_kernel(X, 0.4)
+    B = torch.randn(len(X), 4, generator=g, dtype=torch.float64)
+    dev, dt, tol = ("cuda", torch.float32, 1e-4) if fused else ("cpu", torch.float64, 1e-12)
+    u = RBFKernelOperator(X, 0.4).n_unique
+    for rows in (0, u // 3, u):
+        op = RBFKernelOperator(X.to(dev, dt), 0.4, fused=fused,
+                               cache_bytes=rows * u * (4 if fused else 8))
+        assert op.cached_rows == rows and op.stored == (rows == u)
+        torch.testing.assert_close((op @ B.to(dev, dt)).double().cpu(), K @ B, rtol=tol, atol=tol)

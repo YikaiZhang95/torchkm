@@ -1999,6 +1999,7 @@ class SpectralSVMPath:
         bias=4.0,
         tile=None,
         loss="hinge",
+        chunk_growth=64,
         seed=0,
     ):
         if spectrum not in ("truncated", "full"):
@@ -2044,6 +2045,7 @@ class SpectralSVMPath:
         if loss not in ("hinge", "dwd"):
             raise ValueError("loss must be 'hinge' or 'dwd'")
         self.loss = loss
+        self.chunk_growth = int(chunk_growth)
         self.ridge_b = (
             1e-8  # n eps b^2 keeps the intercept step well defined (cvksvm's vareps)
         )
@@ -2524,7 +2526,7 @@ class SpectralSVMPath:
                 if bool((bias & left).any()) and delta / 8.0 >= self.min_delta:
                     delta, chunk = delta / 8.0, self.chunk
                     continue
-            chunk = min(2 * chunk, 64 * self.chunk)
+            chunk = min(2 * chunk, self.chunk_growth * self.chunk)
         return gap, ~active, iters, delta
 
     def _start(self, certified):
